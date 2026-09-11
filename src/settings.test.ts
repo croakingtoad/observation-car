@@ -17,6 +17,21 @@ function readSourceFile(name: string): string {
   return readFileSync(join(srcRoot, name), "utf8");
 }
 
+/** Recursively list .ts files under src/ as paths relative to src/. */
+function listSourceFiles(directory: string): string[] {
+  const names: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      for (const nested of listSourceFiles(join(directory, entry.name))) {
+        names.push(`${entry.name}/${nested}`);
+      }
+    } else if (entry.name.endsWith(".ts")) {
+      names.push(entry.name);
+    }
+  }
+  return names;
+}
+
 describe("F1.4 settings defaults", () => {
   it("defaults the folders to Books/ and Reading/", () => {
     expect(DEFAULT_SETTINGS.booksFolder).toBe("Books");
@@ -135,10 +150,10 @@ describe("F1.4 normalization helpers", () => {
 describe("F1.4 secret hygiene", () => {
   const credentialTerms = ["opdsPassword", "opdsUsername"];
 
-  it("never passes credentials to console logging", () => {
-    const files = readdirSync(srcRoot).filter((name) => name.endsWith(".ts"));
+  it("never passes credentials to console logging (all of src/)", () => {
+    const files = listSourceFiles(srcRoot);
     for (const name of files) {
-      if (name === "settings.test.ts") {
+      if (name.endsWith(".test.ts")) {
         continue;
       }
       const lines = readSourceFile(name).split("\n");

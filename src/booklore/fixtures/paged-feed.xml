@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Fixture: paged-feed — feed with rel="first"/"prev"/"self"/"next"
+  pagination links (and no feed-level updated, to cover a missing
+  optional element at the feed level).
+  SPEC-DERIVED: hand-authored from OPDS 1.2 (catalog module) and Atom
+  (RFC 4287). NOT captured from a live Booklore instance. Live-captured,
+  redacted fixtures replace this whole set in LOCO-101 (F5.1c).
+-->
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>urn:uuid:77aa88bb-paged-all</id>
+  <title>All Books — page 2</title>
+  <link rel="first" type="application/atom+xml" href="/api/v1/opds/all"/>
+  <link rel="prev" type="application/atom+xml" href="/api/v1/opds/all?page=1"/>
+  <link rel="self" type="application/atom+xml" href="/api/v1/opds/all?page=2"/>
+  <link rel="next" type="application/atom+xml" href="/api/v1/opds/all?page=3"/>
+  <entry>
+    <id>urn:uuid:paged-item-1</id>
+    <title>Paged Item One</title>
+    <link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="/api/v1/opds/download/301.epub"/>
+  </entry>
+  <entry>
+    <id>urn:uuid:paged-item-2</id>
+    <title>Paged Item Two</title>
+    <link rel="http://opds-spec.org/acquisition" type="application/pdf" href="/api/v1/opds/download/302.pdf"/>
+  </entry>
+</feed>
