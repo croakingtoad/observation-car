@@ -233,7 +233,7 @@ interface Reader {
 interface Location { fragment: string; chapter: ChapterId; label: string; }
 ```
 
-**Dependencies:** `obsidian`, `epubjs`, `jszip`, `@codemirror/view`, `@codemirror/state` (externalized; Obsidian provides them). No React.
+**Dependencies:** `obsidian`, `@codemirror/view`, `@codemirror/state` (externalized; Obsidian provides them). `epubjs` and `jszip` are bundled into `main.js` — an Obsidian plugin ships no `node_modules`, so externalizing them can never resolve at load (DP-003). No React.
 
 ## 9. Milestones
 

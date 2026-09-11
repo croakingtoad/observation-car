@@ -18,9 +18,6 @@ const context = await esbuild.context({
     // Provided by the Obsidian runtime.
     "obsidian",
     "electron",
-    // EPUB tooling, externalized per PRD §8.
-    "epubjs",
-    "jszip",
     // CodeMirror 6 is vendored by Obsidian's editor.
     "@codemirror/autocomplete",
     "@codemirror/collab",
