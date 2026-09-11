@@ -65,8 +65,13 @@ export class BookNoteStore {
     if (this.timer === null) {
       this.timer = setTimeout(() => {
         this.timer = null;
-        this.runPending().catch(() => {
-          // A parse bug must not take the app down; the next event retries.
+        this.runPending().catch((error) => {
+          // Per-path read/parse failures are contained and logged inside
+          // the loop; only a bug in the store itself escapes here.
+          console.error(
+            "[observation-car] book-note re-parse pass failed",
+            error,
+          );
         });
       }, this.deps.debounceMs ?? DEFAULT_REPARSE_DEBOUNCE_MS);
     }
@@ -111,28 +116,61 @@ export class BookNoteStore {
         const paths = [...this.pending];
         this.pending.clear();
         for (const path of paths) {
-          let text: string | null;
-          try {
-            text = await this.deps.readText(path);
-          } catch {
-            text = null; // Read failed (deleted mid-flight?) — treat as gone.
-          }
-          if (text === null) {
-            this.notes.delete(path);
-            continue;
-          }
-          const note = parseBookNote(text, {
-            anchorHeadingLevel: this.deps.anchorHeadingLevel(),
-          });
-          if (isBookNote(note)) {
-            this.notes.set(path, note);
-          } else {
-            this.notes.delete(path);
-          }
+          // Per-path containment: a read or parse failure logs and moves
+          // on, so one bad note can never drop its batch siblings.
+          await this.reparsePath(path);
         }
       } while (this.rerunRequested);
     } finally {
       this.running = false;
+    }
+  }
+
+  /**
+   * Re-parse a single path. Never throws: every failure mode is logged to
+   * the dev console and the cache keeps the last-good parse, so a failing
+   * note degrades to stale-but-usable data instead of corrupting the
+   * batch or silently discarding state.
+   */
+  private async reparsePath(path: string): Promise<void> {
+    let text: string | null;
+    try {
+      text = await this.deps.readText(path);
+    } catch (error) {
+      // A thrown read is a failure, not a deletion: the file may still
+      // exist (iCloud sync eviction on iPad is the realistic case). Log
+      // and keep the previous entry; a `null` return — the read
+      // contract's "file gone", expected in the post-delete race — is
+      // the only signal that evicts without logging.
+      console.error(
+        `[observation-car] read failed for book note ${path}`,
+        error,
+      );
+      return;
+    }
+    if (text === null) {
+      this.notes.delete(path);
+      return;
+    }
+    try {
+      const note = parseBookNote(text, {
+        anchorHeadingLevel: this.deps.anchorHeadingLevel(),
+      });
+      if (isBookNote(note)) {
+        this.notes.set(path, note);
+      } else {
+        this.notes.delete(path);
+      }
+    } catch (error) {
+      // parseBookNote rethrows anything that is not an AnchorError
+      // (malformed fragments are diagnostics, not throws). Documented
+      // choice: keep the last-good cache entry until a future parse
+      // succeeds and replaces it — discarding known-good data on a parse
+      // failure would repeat the data-loss the store is meant to avoid.
+      console.error(
+        `[observation-car] parse failed for book note ${path}`,
+        error,
+      );
     }
   }
 }

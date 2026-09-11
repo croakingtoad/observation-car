@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as bookNoteModule from "./bookNote";
 import {
   DEFAULT_REPARSE_DEBOUNCE_MS,
   BookNoteStore,
@@ -19,6 +20,9 @@ const NOTE_TEXT = [
 ].join("\n");
 
 const NOT_A_BOOK_NOTE = ["no frontmatter at all", "just prose"].join("\n");
+
+/** Distinct text the parse spy treats as unparseable (see parse-failure test). */
+const BROKEN_TEXT = NOTE_TEXT + "\nBROKEN";
 
 interface Rig {
   store: BookNoteStore;
@@ -44,6 +48,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -205,5 +210,83 @@ describe("BookNoteStore", () => {
     expect(reads).toEqual(["a.md", "b.md"]);
     expect(store.has("a.md")).toBe(true);
     expect(store.has("b.md")).toBe(true);
+  });
+
+  it("a parse failure keeps batch siblings cached and surfaces the error", async () => {
+    // The store's seam with the parser is this import; spy there so the
+    // throw is deterministic. The parser's own throw contract (rethrow
+    // non-AnchorError) is proven in bookNote.test.ts.
+    const originalParse = bookNoteModule.parseBookNote;
+    const parseSpy = vi.spyOn(bookNoteModule, "parseBookNote");
+    parseSpy.mockImplementation((text, options) => {
+      if (text === BROKEN_TEXT) throw new Error("synthetic parse failure");
+      return originalParse(text, options);
+    });
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    let serveBroken = false;
+    const { store } = makeStore({
+      readText: async (path) =>
+        serveBroken && path === "broken.md" ? BROKEN_TEXT : NOTE_TEXT,
+    });
+
+    // Baseline pass: all three paths parse and cache.
+    store.scheduleReparse("a.md");
+    store.scheduleReparse("broken.md");
+    store.scheduleReparse("c.md");
+    await elapse();
+    expect(store.has("a.md")).toBe(true);
+    expect(store.has("broken.md")).toBe(true);
+    expect(store.has("c.md")).toBe(true);
+
+    // Second batch: broken.md now reads text that makes parse throw.
+    serveBroken = true;
+    store.scheduleReparse("a.md");
+    store.scheduleReparse("broken.md");
+    store.scheduleReparse("c.md");
+    await elapse();
+
+    // Siblings are untouched: one bad note must not drop the batch.
+    expect(store.has("a.md")).toBe(true);
+    expect(store.has("c.md")).toBe(true);
+    expect(store.get("a.md")?.sections.map((s) => s.fragment)).toEqual([
+      "epubcfi(/6/8!/4/2/1:0)",
+    ]);
+    // The failure is surfaced with the path, not swallowed.
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("broken.md"),
+      expect.any(Error),
+    );
+    // Documented choice: the throwing path keeps its last-good parse.
+    expect(store.has("broken.md")).toBe(true);
+    expect(store.get("broken.md")?.frontmatter.source).toBe(SOURCE);
+  });
+
+  it("a thrown read keeps the last-good parse instead of evicting the entry", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    let readShouldThrow = false;
+    const { store } = makeStore({
+      readText: async () => {
+        if (readShouldThrow) throw new Error("ENOTSYNC: transient read failure");
+        return NOTE_TEXT;
+      },
+    });
+    store.scheduleReparse("Book.md");
+    await elapse();
+    expect(store.has("Book.md")).toBe(true);
+
+    readShouldThrow = true;
+    store.scheduleReparse("Book.md");
+    await elapse();
+    // Read failure is not deletion: the previous entry survives and the
+    // error is logged (null reads still evict — see the vanished-file test).
+    expect(store.has("Book.md")).toBe(true);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("Book.md"),
+      expect.any(Error),
+    );
   });
 });
