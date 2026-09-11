@@ -17,6 +17,19 @@ function readSourceFile(name: string): string {
   return readFileSync(join(srcRoot, name), "utf8");
 }
 
+function listSourceFiles(root: string, prefix = ""): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const relativeName = prefix + entry.name;
+    if (entry.isDirectory()) {
+      files.push(...listSourceFiles(join(root, entry.name), relativeName + "/"));
+    } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+      files.push(relativeName);
+    }
+  }
+  return files;
+}
+
 describe("F1.4 settings defaults", () => {
   it("defaults the folders to Books/ and Reading/", () => {
     expect(DEFAULT_SETTINGS.booksFolder).toBe("Books");
@@ -136,11 +149,8 @@ describe("F1.4 secret hygiene", () => {
   const credentialTerms = ["opdsPassword", "opdsUsername"];
 
   it("never passes credentials to console logging", () => {
-    const files = readdirSync(srcRoot).filter((name) => name.endsWith(".ts"));
+    const files = listSourceFiles(srcRoot);
     for (const name of files) {
-      if (name === "settings.test.ts") {
-        continue;
-      }
       const lines = readSourceFile(name).split("\n");
       lines.forEach((line, index) => {
         if (!/\bconsole\.(log|info|warn|error|debug|table)\b/.test(line)) {
