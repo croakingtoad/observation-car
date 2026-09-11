@@ -17,19 +17,17 @@ function readSourceFile(name: string): string {
   return readFileSync(join(srcRoot, name), "utf8");
 }
 
-/** Recursively list .ts files under src/ as paths relative to src/. */
-function listSourceFiles(directory: string): string[] {
-  const names: string[] = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+function listSourceFiles(root: string, prefix = ""): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const relativeName = prefix + entry.name;
     if (entry.isDirectory()) {
-      for (const nested of listSourceFiles(join(directory, entry.name))) {
-        names.push(`${entry.name}/${nested}`);
-      }
-    } else if (entry.name.endsWith(".ts")) {
-      names.push(entry.name);
+      files.push(...listSourceFiles(join(root, entry.name), relativeName + "/"));
+    } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+      files.push(relativeName);
     }
   }
-  return names;
+  return files;
 }
 
 describe("F1.4 settings defaults", () => {
@@ -150,12 +148,9 @@ describe("F1.4 normalization helpers", () => {
 describe("F1.4 secret hygiene", () => {
   const credentialTerms = ["opdsPassword", "opdsUsername"];
 
-  it("never passes credentials to console logging (all of src/)", () => {
+  it("never passes credentials to console logging", () => {
     const files = listSourceFiles(srcRoot);
     for (const name of files) {
-      if (name.endsWith(".test.ts")) {
-        continue;
-      }
       const lines = readSourceFile(name).split("\n");
       lines.forEach((line, index) => {
         if (!/\bconsole\.(log|info|warn|error|debug|table)\b/.test(line)) {
