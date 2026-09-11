@@ -1,25 +1,80 @@
-import { Plugin } from "obsidian";
+import { Plugin, TFile } from "obsidian";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
   type ObservationCarSettings,
 } from "./settings";
 import { ObservationCarSettingTab } from "./settingsTab";
+import {
+  isBookNoteCandidate,
+  type BookNote,
+} from "./model/bookNote";
+import { BookNoteStore } from "./model/bookNoteStore";
 
 /**
  * Observation Car — plugin entry point.
  *
- * F1.1 scaffold + F1.4 settings: on load the settings are merged from
- * `data.json` and the settings tab is registered. Readers, the book-note
- * model, scroll-sync, and Booklore are added by the follow-up issues
- * (LOCO-22/23/25 and the E002+ issues) and read `this.settings`.
+ * F1.1 scaffold + F1.4 settings + F1.2 book-note model: on load the settings
+ * are merged from `data.json`, the settings tab is registered, and a
+ * debounced `metadataCache` listener keeps the book-note cache up to date so
+ * the sync layer (E004) always reads a fresh parse.
+ *
+ * `anchorHeadingLevel` is read from `this.settings` at parse time — never
+ * snapshot the settings object: `updateSettings` replaces it wholesale, and
+ * there is no settings-change event, so on-demand parsing is the
+ * live-reload path for mid-session heading-level changes.
  */
 export default class ObservationCarPlugin extends Plugin {
   settings: ObservationCarSettings = DEFAULT_SETTINGS;
 
+  /** Parsed book notes, keyed by vault path (PRD §5.2 storage model). */
+  private bookNoteStore!: BookNoteStore;
+
   async onload(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
     this.addSettingTab(new ObservationCarSettingTab(this.app, this));
+
+    this.bookNoteStore = new BookNoteStore({
+      readText: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile === false) return null;
+        return this.app.vault.read(file);
+      },
+      anchorHeadingLevel: () => this.settings.anchorHeadingLevel,
+    });
+
+    // `changed` also fires when a file's cache entry is first built, which
+    // covers notes created after load; `resolved` covers the initial load
+    // and full vault rescans.
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        this.scheduleReparse(file);
+      }),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("deleted", (file) => {
+        this.bookNoteStore.remove(file.path);
+      }),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("resolved", () => {
+        this.reparseBookNotes().catch(() => {
+          // A failed initial-load parse is non-fatal; the next change
+          // event retries the affected note.
+        });
+      }),
+    );
+
+    // `resolved` can fire before community plugins finish loading (first
+    // launch with a trust prompt: the cache indexes while the modal is up),
+    // in which case the listener above misses it and the store would stay
+    // empty until the first edit. An immediate pass is safe in either
+    // ordering: while the metadata cache is not built, every cache lookup
+    // returns null so nothing is parsed, and the `resolved` pass picks the
+    // notes up later.
+    this.reparseBookNotes().catch(() => {
+      // Non-fatal; the next change event retries the affected note.
+    });
   }
 
   /**
@@ -32,5 +87,45 @@ export default class ObservationCarPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  onunload(): void {}
+  /** The cached parse of a book note, or undefined if the store holds none. */
+  getBookNote(path: string): BookNote | undefined {
+    return this.bookNoteStore.get(path);
+  }
+
+  /** Vault paths of every cached book note. */
+  getBookNotePaths(): string[] {
+    return this.bookNoteStore.paths();
+  }
+
+  onunload(): void {
+    this.bookNoteStore.clear();
+  }
+
+  /**
+   * Debounce-reparse one note after a metadata change. The cache has
+   * already been updated when these events fire, so the frontmatter sniff
+   * is current; the parser's own `source` check stays authoritative for
+   * what actually gets stored.
+   */
+  private scheduleReparse(file: TFile): void {
+    if (file.extension !== "md") return;
+    if (isBookNoteCandidate(this.app.metadataCache.getFileCache(file)?.frontmatter) !== true) {
+      return;
+    }
+    this.bookNoteStore.scheduleReparse(file.path);
+  }
+
+  /**
+   * (Re)parse every markdown file that looks like a book note. Runs once
+   * when the metadata cache resolves (initial load and vault rescans).
+   */
+  private async reparseBookNotes(): Promise<void> {
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (isBookNoteCandidate(this.app.metadataCache.getFileCache(file)?.frontmatter) !== true) {
+        continue;
+      }
+      this.bookNoteStore.scheduleReparse(file.path);
+    }
+    await this.bookNoteStore.flush();
+  }
 }
