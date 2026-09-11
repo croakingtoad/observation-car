@@ -4,6 +4,21 @@ import {
   BookNoteStore,
   type BookNoteStoreDeps,
 } from "./bookNoteStore";
+import {
+  parseBookNote,
+  type BookNote,
+  type ParseBookNoteOptions,
+} from "./bookNote";
+
+vi.mock("./bookNote", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bookNote")>();
+  return {
+    ...actual,
+    // Pass-through by default; the failure-handling tests override it to
+    // simulate a parser bug.
+    parseBookNote: vi.fn(actual.parseBookNote),
+  };
+});
 
 const SOURCE = "Books/Surprised by Grace.epub";
 
@@ -19,6 +34,18 @@ const NOTE_TEXT = [
 ].join("\n");
 
 const NOT_A_BOOK_NOTE = ["no frontmatter at all", "just prose"].join("\n");
+
+// A valid book note whose parse the mock is told to treat as a parser bug.
+const BUG_NOTE_TEXT = [
+  "---",
+  "type: book-note",
+  `source: "[[${SOURCE}]]"`,
+  "format: epub",
+  "---",
+  "",
+  `## [[${SOURCE}#epubcfi(/6/10!/4/2/1:0)|Ch. 2]]`,
+  "body the parser will choke on",
+].join("\n");
 
 interface Rig {
   store: BookNoteStore;
@@ -100,20 +127,11 @@ describe("BookNoteStore", () => {
     expect(store.size).toBe(0);
   });
 
-  it("treats a vanished file as gone (null read and failed read)", async () => {
-    const vanished = makeStore({ readText: async () => null });
-    vanished.store.scheduleReparse("gone.md");
+  it("treats a null read as a vanished file", async () => {
+    const { store } = makeStore({ readText: async () => null });
+    store.scheduleReparse("gone.md");
     await elapse();
-    expect(vanished.store.has("gone.md")).toBe(false);
-
-    const failing = makeStore({
-      readText: async () => {
-        throw new Error("ENOENT");
-      },
-    });
-    failing.store.scheduleReparse("broken.md");
-    await elapse();
-    expect(failing.store.has("broken.md")).toBe(false);
+    expect(store.has("gone.md")).toBe(false);
   });
 
   it("drops a cached note when a re-parse finds the file gone", async () => {
@@ -205,5 +223,95 @@ describe("BookNoteStore", () => {
     expect(reads).toEqual(["a.md", "b.md"]);
     expect(store.has("a.md")).toBe(true);
     expect(store.has("b.md")).toBe(true);
+  });
+
+  describe("failure handling (LOCO-105)", () => {
+    // The module mock above wraps parseBookNote in a pass-through vi.fn so
+    // a parser bug can be simulated; capture the real implementation
+    // before each test and restore it after, so no override leaks.
+    let realParse: (text: string, options?: ParseBookNoteOptions) => BookNote;
+
+    beforeEach(() => {
+      realParse = vi.mocked(parseBookNote).getMockImplementation()!;
+    });
+
+    afterEach(() => {
+      vi.mocked(parseBookNote).mockImplementation(realParse);
+      vi.restoreAllMocks();
+    });
+
+    it("isolates a throwing parse: siblings still parse, the error is surfaced, the last-good entry stays", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const bug = new Error("simulated parser bug");
+      let buggy = false;
+      vi.mocked(parseBookNote).mockImplementation((text, options) => {
+        if (buggy && text === BUG_NOTE_TEXT) throw bug;
+        return realParse(text, options);
+      });
+      const { store } = makeStore({
+        readText: async (path) => (path === "bad.md" ? BUG_NOTE_TEXT : NOTE_TEXT),
+      });
+
+      // bad.md first parses fine, establishing its last-good entry.
+      store.scheduleReparse("bad.md");
+      await elapse();
+      const lastGood = store.get("bad.md");
+      expect(lastGood).toBeDefined();
+
+      // The parser bug trips on bad.md while healthy siblings are in the
+      // same batch.
+      buggy = true;
+      store.scheduleReparse("a.md");
+      store.scheduleReparse("bad.md");
+      store.scheduleReparse("c.md");
+      await elapse();
+
+      // The remaining paths are still parsed and cached.
+      expect(store.get("a.md")).toBeDefined();
+      expect(store.get("c.md")).toBeDefined();
+      // The throwing path keeps its prior cache entry.
+      expect(store.get("bad.md")).toBe(lastGood);
+      // The error is surfaced with the path and the error object, once,
+      // for the throwing path only.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("bad.md"),
+        bug,
+      );
+    });
+
+    it("a failed read (not a deletion) retains the last-good entry and logs; a null read still evicts", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const ioError = new Error("EIO: transient vault failure");
+      let readState: "good" | "failing" | "gone" = "good";
+      const { store } = makeStore({
+        readText: async () => {
+          if (readState === "good") return NOTE_TEXT;
+          if (readState === "failing") throw ioError;
+          return null;
+        },
+      });
+
+      store.scheduleReparse("flaky.md");
+      await elapse();
+      const lastGood = store.get("flaky.md");
+      expect(lastGood).toBeDefined();
+
+      readState = "failing";
+      store.scheduleReparse("flaky.md");
+      await elapse();
+      expect(store.get("flaky.md")).toBe(lastGood);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("flaky.md"),
+        ioError,
+      );
+
+      readState = "gone";
+      store.scheduleReparse("flaky.md");
+      await elapse();
+      expect(store.has("flaky.md")).toBe(false);
+      expect(errorSpy).toHaveBeenCalledTimes(1); // the null read is not logged
+    });
   });
 });

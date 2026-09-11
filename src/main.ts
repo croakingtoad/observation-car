@@ -65,9 +65,12 @@ export default class ObservationCarPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.metadataCache.on("resolved", () => {
-        this.reparseBookNotes().catch(() => {
-          // A failed initial-load parse is non-fatal; the next change
-          // event retries the affected note.
+        this.reparseBookNotes().catch((error) => {
+          // Per-note failures are already logged and isolated by the
+          // store, so this only fires on an unexpected vault-level
+          // failure. The next `changed` or `resolved` event re-parses
+          // the affected notes.
+          console.error("[observation-car] book-note reparse pass failed:", error);
         });
       }),
     );
@@ -79,8 +82,12 @@ export default class ObservationCarPlugin extends Plugin {
     // ordering: while the metadata cache is not built, every cache lookup
     // returns null so nothing is parsed, and the `resolved` pass picks the
     // notes up later.
-    this.reparseBookNotes().catch(() => {
-      // Non-fatal; the next change event retries the affected note.
+    this.reparseBookNotes().catch((error) => {
+      // Per-note failures are already logged and isolated by the store, so
+      // this only fires on an unexpected vault-level failure; it must not
+      // break plugin load. The next `changed` or `resolved` event
+      // re-parses the affected notes.
+      console.error("[observation-car] book-note reparse pass failed:", error);
     });
   }
 
