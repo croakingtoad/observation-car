@@ -16,6 +16,13 @@ An Obsidian plugin for reading EPUBs and PDFs alongside your own notes. The book
 - `npm run build` — type-check (`tsc --noEmit`) and produce `main.js`
 - `npm test` — run the vitest suite
 
+## Installing via BRAT
+
+1. Install [BRAT](https://github.com/obsidianmd/obsidian-releases/wiki/Plugin-custom-community-indexes) if you don't have it already.
+2. In BRAT, paste the repo path `croakingtoad/observation-car` as a community plugin repo.
+3. Pick the version you want — a GitHub release must already exist for that version; BRAT installs the release's top-level assets (`main.js`, `manifest.json`, `styles.css`, `versions.json`).
+4. Restart Obsidian and enable **Observation Car** under Settings → Community plugins.
+
 ## Directory layout
 
 The `src/` tree follows PRD §8:
