@@ -1,0 +1,9 @@
+{
+  "id": "observation-car",
+  "name": "Observation Car",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.2",
+  "description": "Read EPUBs and PDFs alongside your notes, with note sections anchored to locations in the book.",
+  "author": "Marty Martin",
+  "isDesktopOnly": false
+}
