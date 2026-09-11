@@ -112,6 +112,11 @@ describe("F1.4 data.json persistence (mergeSettings)", () => {
     expect(merged.noteTemplate).toBe("custom");
     expect(merged.pdfChapterWindowPages).toBe(10);
   });
+
+  it("drops unknown keys from stored data", () => {
+    const merged = mergeSettings({ unknownKey: 1, focusModeDefault: true });
+    expect(merged).toEqual({ ...DEFAULT_SETTINGS, focusModeDefault: true });
+  });
 });
 
 describe("F1.4 normalization helpers", () => {
@@ -141,8 +146,17 @@ describe("F1.4 secret hygiene", () => {
         if (!/\bconsole\.(log|info|warn|error|debug|table)\b/.test(line)) {
           return;
         }
-        for (const term of credentialTerms) {
-          expect(line, `${name}:${index + 1} logs a credential field`).not.toContain(term);
+        for (let offset = -2; offset <= 2; offset++) {
+          const windowIndex = index + offset;
+          if (windowIndex < 0 || windowIndex >= lines.length) {
+            continue;
+          }
+          for (const term of credentialTerms) {
+            expect(
+              lines[windowIndex],
+              `${name}:${windowIndex + 1} logs a credential field within a console call`,
+            ).not.toContain(term);
+          }
         }
       });
     }
