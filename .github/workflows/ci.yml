@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   ci:
     name: ci
@@ -23,7 +27,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # vitest@4 declares engines >=24.
+          # Node 24 is the current LTS-track major and the strongest version the
+          # locked vitest@4.1.11 accepts (engines: ^20 || ^22 || >=24).
           node-version: 24
           cache: npm
 
