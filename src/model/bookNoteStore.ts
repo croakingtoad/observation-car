@@ -108,6 +108,8 @@ export class BookNoteStore {
   clear(): void {
     this.pending.clear();
     this.notes.clear();
+    this.runPromise = null;
+    this.rerunRequested = false;
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;

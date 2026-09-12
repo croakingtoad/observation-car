@@ -197,6 +197,31 @@ describe("BookNoteStore", () => {
     expect(store.size).toBe(0);
   });
 
+  it("clear() drops stale run state before the next flush", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const { store, reads } = makeStore();
+
+    // Recreate run state surviving until plugin unload. The fields are
+    // private to production callers, so Reflect is limited to this
+    // white-box regression setup.
+    Reflect.set(store, "runPromise", Promise.resolve());
+    Reflect.set(store, "rerunRequested", true);
+    store.clear();
+    expect(Reflect.get(store, "runPromise")).toBeNull();
+    expect(Reflect.get(store, "rerunRequested")).toBe(false);
+
+    store.scheduleReparse("Reading/Book.md");
+    await store.flush();
+
+    expect(reads).toEqual(["Reading/Book.md"]);
+    expect(store.has("Reading/Book.md")).toBe(true);
+    expect(consoleError).not.toHaveBeenCalledWith(
+      "[observation-car] book-note flush made no progress",
+    );
+  });
+
   it("reads anchorHeadingLevel at parse time, never from a snapshot", async () => {
     let level = 2;
     const { store } = makeStore({
