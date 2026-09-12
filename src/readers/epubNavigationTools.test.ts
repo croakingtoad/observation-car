@@ -118,8 +118,11 @@ function captureOption(options?: boolean | EventListenerOptions): boolean {
 
 function trackEventListeners(target: Document): {
   activeCount(type: string): number;
+  addedListeners(type: string): EventListenerOrEventListenerObject[];
   removedCount(type: string): number;
+  removedListeners(type: string): EventListenerOrEventListenerObject[];
 } {
+  const added: ListenerRegistration[] = [];
   const active: ListenerRegistration[] = [];
   const removed: ListenerRegistration[] = [];
   const nativeAdd = target.addEventListener.bind(target);
@@ -132,7 +135,9 @@ function trackEventListeners(target: Document): {
       options?: boolean | AddEventListenerOptions,
     ): void => {
       nativeAdd(type, listener, options);
-      active.push({ type, listener, capture: captureOption(options) });
+      const registration = { type, listener, capture: captureOption(options) };
+      added.push(registration);
+      active.push(registration);
     },
   );
   vi.spyOn(target, "removeEventListener").mockImplementation(
@@ -162,7 +167,11 @@ function trackEventListeners(target: Document): {
 
   return {
     activeCount: (type) => active.filter((listener) => listener.type === type).length,
+    addedListeners: (type) =>
+      added.filter((registration) => registration.type === type).map(({ listener }) => listener),
     removedCount: (type) => removed.filter((listener) => listener.type === type).length,
+    removedListeners: (type) =>
+      removed.filter((registration) => registration.type === type).map(({ listener }) => listener),
   };
 }
 
@@ -445,14 +454,36 @@ describe("EpubKeyBridge", () => {
     expect(rendition.removedHandlerCount("rendered")).toBe(1);
     expect(rendition.activeHandlerCount("rendered")).toBe(0);
   });
+
+  it("detaches the keydown handler from every rendered document on destroy", () => {
+    const { host, iframe: firstDocument } = documents();
+    const secondDocument = childDocument(host);
+    const firstListeners = trackEventListeners(firstDocument);
+    const secondListeners = trackEventListeners(secondDocument);
+    const rendition = new FakeRendition();
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn());
+
+    rendition.render(firstDocument);
+    rendition.render(secondDocument);
+    const keydownHandler = firstListeners.addedListeners("keydown")[0];
+    expect(keydownHandler).toBeDefined();
+    expect(secondListeners.addedListeners("keydown")).toEqual([keydownHandler]);
+
+    bridge.destroy();
+
+    expect(firstListeners.removedListeners("keydown")).toEqual([keydownHandler]);
+    expect(secondListeners.removedListeners("keydown")).toEqual([keydownHandler]);
+  });
 });
 
 describe("EpubView reader replacement", () => {
   it("physically detaches the previous book listeners and rendered handlers", async () => {
     const { EpubView } = await import("./EpubView");
     const oldDocument = childDocument(document);
+    const secondOldDocument = childDocument(document);
     const replacementDocument = childDocument(document);
     const oldListeners = trackEventListeners(oldDocument);
+    const secondOldListeners = trackEventListeners(secondOldDocument);
     const replacementListeners = trackEventListeners(replacementDocument);
     const oldRendition = new FakeRendition(oldDocument);
     const replacementRendition = new FakeRendition(replacementDocument);
@@ -462,12 +493,20 @@ describe("EpubView reader replacement", () => {
     const view = new EpubView({} as WorkspaceLeaf);
 
     await view.onLoadFile(bookFile("Books/A.epub"));
+    oldRendition.render(secondOldDocument);
+    const mousedownHandler = oldListeners.addedListeners("mousedown")[0];
+    expect(mousedownHandler).toBeDefined();
+    expect(secondOldListeners.addedListeners("mousedown")).toEqual([mousedownHandler]);
     await view.onLoadFile(bookFile("Books/B.epub"));
 
     expect(oldListeners.removedCount("keydown")).toBe(1);
     expect(oldListeners.removedCount("mousedown")).toBe(1);
+    expect(oldListeners.removedListeners("mousedown")).toEqual([mousedownHandler]);
+    expect(secondOldListeners.removedListeners("mousedown")).toEqual([mousedownHandler]);
     expect(oldListeners.activeCount("keydown")).toBe(0);
     expect(oldListeners.activeCount("mousedown")).toBe(0);
+    expect(secondOldListeners.activeCount("keydown")).toBe(0);
+    expect(secondOldListeners.activeCount("mousedown")).toBe(0);
     expect(replacementListeners.activeCount("keydown")).toBe(1);
     expect(replacementListeners.activeCount("mousedown")).toBe(1);
     expect(oldRendition.removedHandlerCount("rendered")).toBe(2);
