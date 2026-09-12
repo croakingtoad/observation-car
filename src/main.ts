@@ -94,9 +94,8 @@ export default class ObservationCarPlugin extends Plugin {
   }
 
   /**
-   * Merge a partial update into the settings and persist them to data.json.
-   * This is one of the two callers of `persistData`, alongside
-   * `rememberEpubLocation`.
+   * Merge a partial settings update and route the data.json write through
+   * the plugin's persistence boundary.
    */
   async updateSettings(patch: Partial<ObservationCarSettings>): Promise<void> {
     this.settings = { ...this.settings, ...patch };

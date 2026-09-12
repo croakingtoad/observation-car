@@ -142,6 +142,8 @@ describe("F2.4 plugin host persistence", () => {
         },
       },
     ]);
-    expect(JSON.stringify(saves[0])).not.toContain(noteContent);
+    expect(JSON.stringify(saves[0])).not.toContain(
+      JSON.stringify(noteContent).slice(1, -1),
+    );
   });
 });

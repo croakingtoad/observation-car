@@ -292,6 +292,43 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     await view.onClose();
   });
 
+  it("absorbs and logs a rejected location write during a preassigned swap", async () => {
+    const fileA = file("Books/A.epub");
+    const fileB = file("Books/B.epub");
+    const saveError = new Error("disk full");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const host: EpubViewHost = {
+      ...makeHost(),
+      rememberEpubLocation: vi.fn().mockRejectedValue(saveError),
+    };
+    const view = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+      host,
+    );
+
+    try {
+      await view.onLoadFile(fileA);
+      FakeRendition.instances[0].location = {
+        start: { cfi: "epubcfi(/6/8!/4/2/1:0)" },
+      };
+
+      // FileView.loadFile assigns the incoming file before onLoadFile runs.
+      view.file = fileB;
+      await expect(view.onLoadFile(fileB)).resolves.toBeUndefined();
+
+      expect(consoleError).toHaveBeenCalledOnce();
+      expect(consoleError).toHaveBeenCalledWith(
+        "Observation Car: could not save EPUB location",
+        saveError,
+      );
+    } finally {
+      await view.onClose();
+      consoleError.mockRestore();
+    }
+  });
+
   it("a second open inside the readBinary window leaves exactly one live reader", async () => {
     const firstRead = deferred();
     const readBinary = vi
