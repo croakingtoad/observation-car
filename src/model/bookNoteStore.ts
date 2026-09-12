@@ -173,6 +173,7 @@ export class BookNoteStore {
       await Promise.resolve();
       try {
         do {
+          if (this.epoch !== epoch) return;
           this.rerunRequested = false;
           // Absorb the debounce timer: its paths are already in the pending
           // set this loop drains, so the timer must not fire a second pass

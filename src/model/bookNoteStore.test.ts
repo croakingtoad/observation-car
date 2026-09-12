@@ -222,6 +222,42 @@ describe("BookNoteStore", () => {
     );
   });
 
+  it("an orphaned run cannot drain work queued after clear()", async () => {
+    let releaseRead: (text: string) => void = () => {};
+    let markReadStarted: () => void = () => {};
+    const read = new Promise<string>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const { store, reads } = makeStore({
+      readText: async () => {
+        markReadStarted();
+        return await read;
+      },
+    });
+
+    store.scheduleReparse("a.md");
+    const abandonedFlush = store.flush();
+    store.clear();
+    store.scheduleReparse("x.md");
+
+    let successorFlushFinished = false;
+    const successorFlush = store.flush().then(() => {
+      successorFlushFinished = true;
+    });
+    await readStarted;
+    expect(reads).toEqual(["x.md"]);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(successorFlushFinished).toBe(false);
+
+    releaseRead(NOTE_TEXT);
+    await Promise.all([abandonedFlush, successorFlush]);
+    expect(store.has("x.md")).toBe(true);
+  });
+
   it("an orphaned run cannot clear its successor after clear()", async () => {
     let releaseFirst: (text: string) => void = () => {};
     let releaseSecond: (text: string) => void = () => {};
