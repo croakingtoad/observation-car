@@ -85,6 +85,19 @@ describe("ReaderRegistry", () => {
     expect(pairing?.bookNote).toBe(rig.notes.get("Reading/Book.md"));
   });
 
+  it("finds a registered reader without requiring a note pairing", () => {
+    const rig = makeRig();
+    const readerLeaf = leaf();
+    const bookReader = reader("reader", file("Books/Book.epub"));
+    rig.openLeaves.add(readerLeaf);
+    rig.registry.register(readerLeaf, bookReader);
+
+    expect(rig.registry.getReader(readerLeaf)).toBe(bookReader);
+
+    rig.openLeaves.delete(readerLeaf);
+    expect(rig.registry.getReader(readerLeaf)).toBeUndefined();
+  });
+
   it("gives a book to its newest reader leaf and displaces the older leaf", () => {
     const rig = makeRig();
     const book = file("Books/Book.epub");

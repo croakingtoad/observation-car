@@ -1,10 +1,13 @@
 import {
   TFile,
+  TFolder,
   type App,
+  type Command,
   type PluginManifest,
 } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../manifest.json";
+import { parseBookNote } from "./model/bookNote";
 import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
 import { ReaderRegistry } from "./sync/ReaderRegistry";
@@ -20,6 +23,7 @@ import { ReaderRegistry } from "./sync/ReaderRegistry";
 vi.mock("obsidian", () => {
   class Plugin {
     app: unknown;
+    commands: unknown[] = [];
     savedData: unknown[] = [];
     constructor(app: unknown) {
       this.app = app;
@@ -46,6 +50,10 @@ vi.mock("obsidian", () => {
     }
     registerExtensions(_extensions: string[], _viewType: string): void {}
     addSettingTab(_tab: unknown): void {}
+    addCommand(command: unknown): unknown {
+      this.commands.push(command);
+      return command;
+    }
     async loadData(): Promise<unknown> {
       return {};
     }
@@ -67,12 +75,35 @@ vi.mock("obsidian", () => {
   class TFile {
     path: string;
     extension: string;
+    name: string;
+    basename: string;
     constructor(path: string, extension: string) {
       this.path = path;
       this.extension = extension;
+      this.name = path.split("/").at(-1) ?? path;
+      this.basename = this.name.slice(0, -(extension.length + 1));
     }
   }
-  return { Plugin, PluginSettingTab, Setting, TFile };
+  class TFolder {
+    path: string;
+    constructor(path: string) {
+      this.path = path;
+    }
+  }
+  class Notice {
+    constructor(_message: string) {}
+  }
+  const normalizePath = (path: string): string =>
+    path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\//, "");
+  return {
+    Notice,
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TFile,
+    TFolder,
+    normalizePath,
+  };
 });
 
 vi.mock("./readers/EpubView", () => ({
@@ -97,10 +128,12 @@ const TFileDouble = TFile as unknown as new (
   path: string,
   extension: string,
 ) => TFile;
+const TFolderDouble = TFolder as unknown as new (path: string) => TFolder;
 
 interface FakeVault {
   app: unknown;
   files: Map<string, TFile>;
+  folders: Set<string>;
   contents: Map<string, string>;
   caches: Map<string, { frontmatter: Record<string, unknown> | null }>;
   /** Lowercased linkpath → vault path of the file it resolves to. */
@@ -111,10 +144,34 @@ interface FakeVault {
   registeredViews: Map<string, (leaf: unknown) => unknown>;
   leaves: Set<unknown>;
   leafQueries: { count: number };
+  createdFiles: string[];
+  generatedLinks: { filePath: string; sourcePath: string }[];
+  openedFiles: string[];
+  rootSplit: object;
+  sidebarRoot: object;
+  createdSplitLeaves: FakeLeaf[];
+  runtime: {
+    activeView: unknown;
+    mostRecentMainLeaf: FakeLeaf | null;
+    splitRootOverride: object | null;
+    useMarkdownLinks: boolean;
+  };
+}
+
+interface FakeLeaf {
+  view: unknown;
+  area: "main" | "sidebar";
+  splitDirection?: "vertical" | "horizontal";
+  splitFrom?: FakeLeaf;
+  detached: boolean;
+  detach(): void;
+  getRoot(): object;
+  openFile(file: TFile): Promise<void>;
 }
 
 function makeFakeVault(): FakeVault {
   const files = new Map<string, TFile>();
+  const folders = new Set<string>();
   const contents = new Map<string, string>();
   const caches = new Map<string, { frontmatter: Record<string, unknown> | null }>();
   const linkDests = new Map<string, string>();
@@ -124,11 +181,62 @@ function makeFakeVault(): FakeVault {
   const registeredViews = new Map<string, (leaf: unknown) => unknown>();
   const leaves = new Set<unknown>();
   const leafQueries = { count: 0 };
+  const createdFiles: string[] = [];
+  const generatedLinks: { filePath: string; sourcePath: string }[] = [];
+  const openedFiles: string[] = [];
+  const rootSplit = {};
+  const sidebarRoot = {};
+  const createdSplitLeaves: FakeLeaf[] = [];
+  const runtime = {
+    activeView: null as unknown,
+    mostRecentMainLeaf: null as FakeLeaf | null,
+    splitRootOverride: null as object | null,
+    useMarkdownLinks: false,
+  };
+
+  function makeLeaf(
+    area: "main" | "sidebar",
+    root: object,
+    view: unknown = null,
+  ): FakeLeaf {
+    const leaf: FakeLeaf = {
+      view,
+      area,
+      detached: false,
+      detach: () => {
+        leaf.detached = true;
+      },
+      getRoot: () => root,
+      openFile: async (file: TFile): Promise<void> => {
+        openedFiles.push(file.path);
+        workspaceHandlers.get("file-open")?.(file);
+      },
+    };
+    return leaf;
+  }
 
   const app = {
     vault: {
-      getAbstractFileByPath: (path: string): TFile | null =>
-        files.get(path) ?? null,
+      getAbstractFileByPath: (path: string): TFile | TFolder | null =>
+        files.get(path) ?? (folders.has(path) ? new TFolderDouble(path) : null),
+      create: async (path: string, text: string): Promise<TFile> => {
+        if (files.has(path) || folders.has(path)) {
+          throw new Error(`${path} already exists`);
+        }
+        const extension = path.split(".").at(-1) ?? "";
+        const file = new TFileDouble(path, extension);
+        files.set(path, file);
+        contents.set(path, text);
+        createdFiles.push(path);
+        return file;
+      },
+      createFolder: async (path: string): Promise<TFolder> => {
+        if (files.has(path) || folders.has(path)) {
+          throw new Error(`${path} already exists`);
+        }
+        folders.add(path);
+        return new TFolderDouble(path);
+      },
       // Timer-based on purpose: under fake timers every async step of a
       // parse pass is a timer, so advanceTimersByTimeAsync tracks the
       // whole chain deterministically.
@@ -157,7 +265,19 @@ function makeFakeVault(): FakeVault {
         return { name };
       },
     },
+    fileManager: {
+      generateMarkdownLink: (file: TFile, sourcePath: string): string => {
+        generatedLinks.push({ filePath: file.path, sourcePath });
+        return runtime.useMarkdownLinks
+          ? `[${file.basename}](${file.path})`
+          : `[[${file.name}]]`;
+      },
+    },
     workspace: {
+      rootSplit,
+      getActiveViewOfType: (): unknown => runtime.activeView,
+      getMostRecentLeaf: (root?: object): FakeLeaf | null =>
+        root === rootSplit ? runtime.mostRecentMainLeaf : null,
       on: (name: string, callback: Handler): { name: string } => {
         workspaceHandlers.set(name, callback);
         return { name };
@@ -182,6 +302,25 @@ function makeFakeVault(): FakeVault {
           );
         });
       },
+      getLeaf: (): { openFile: (file: TFile) => Promise<void> } => ({
+        openFile: async (file: TFile): Promise<void> => {
+          openedFiles.push(file.path);
+        },
+      }),
+      createLeafBySplit: (
+        sourceLeaf: FakeLeaf,
+        direction: "vertical" | "horizontal",
+      ): FakeLeaf => {
+        const root =
+          runtime.splitRootOverride ??
+          (sourceLeaf.area === "main" ? rootSplit : sidebarRoot);
+        const area = root === rootSplit ? "main" : "sidebar";
+        const leaf = makeLeaf(area, root);
+        leaf.splitDirection = direction;
+        leaf.splitFrom = sourceLeaf;
+        createdSplitLeaves.push(leaf);
+        return leaf;
+      },
     },
     registeredViews,
   };
@@ -189,6 +328,7 @@ function makeFakeVault(): FakeVault {
   return {
     app,
     files,
+    folders,
     contents,
     caches,
     linkDests,
@@ -198,6 +338,13 @@ function makeFakeVault(): FakeVault {
     registeredViews,
     leaves,
     leafQueries,
+    createdFiles,
+    generatedLinks,
+    openedFiles,
+    rootSplit,
+    sidebarRoot,
+    createdSplitLeaves,
+    runtime,
   };
 }
 
@@ -307,6 +454,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const file = new TFileDouble(path, "epub");
     fake.files.set(path, file);
     fake.linkDests.set(path.toLowerCase(), path);
+    fake.linkDests.set(file.name.toLowerCase(), path);
     return file;
   }
 
@@ -328,13 +476,28 @@ describe("plugin wiring (substituted obsidian module)", () => {
     handler(...args);
   }
 
-  function openEpubReader(book: TFile): {
-    leaf: { view: unknown };
+  function openEpubReader(
+    book: TFile,
+    area: "main" | "sidebar" = "main",
+  ): {
+    leaf: FakeLeaf;
     view: { file: TFile | null; getViewType(): string };
   } {
     const factory = fake.registeredViews.get("observation-car-epub");
     if (factory === undefined) throw new Error("EPUB view was not registered");
-    const leaf = { view: null as unknown };
+    const root = area === "main" ? fake.rootSplit : fake.sidebarRoot;
+    const leaf: FakeLeaf = {
+      view: null,
+      area,
+      detached: false,
+      detach: () => {
+        leaf.detached = true;
+      },
+      getRoot: () => root,
+      openFile: async (file: TFile): Promise<void> => {
+        fake.openedFiles.push(file.path);
+      },
+    };
     const view = factory(leaf) as {
       file: TFile | null;
       getViewType(): string;
@@ -342,9 +505,276 @@ describe("plugin wiring (substituted obsidian module)", () => {
     leaf.view = view;
     view.file = book;
     fake.leaves.add(leaf);
+    fake.runtime.mostRecentMainLeaf = leaf;
     fire("workspace", "file-open", [book]);
     return { leaf, view };
   }
+
+  function getCreateBookNoteCommand(): Command | undefined {
+    const commands = (plugin as unknown as { commands: Command[] }).commands;
+    return commands.find(
+      (command) => command.id === "create-book-note-for-current-book",
+    );
+  }
+
+  function getOpenBookNoteCommand(): Command | undefined {
+    const commands = (plugin as unknown as { commands: Command[] }).commands;
+    return commands.find(
+      (command) => command.id === "open-book-note-beside-reader",
+    );
+  }
+
+  async function settleCommand(): Promise<void> {
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  it("registers the mobile-capable command without writing on plugin load", async () => {
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+
+    expect(command.name).toBe("Create book note for current book");
+    expect(command.icon).toBe("book-open");
+    expect(command.hotkeys).toBeUndefined();
+    expect(command.checkCallback?.(true)).toBe(false);
+    await settleCommand();
+    expect(fake.createdFiles).toEqual([]);
+
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    fake.runtime.activeView = { file: book };
+    expect(command.checkCallback?.(true)).toBe(true);
+    await settleCommand();
+    expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("creates a templated note in the configured folder only when invoked", async () => {
+    plugin.settings = {
+      ...plugin.settings,
+      notesFolder: "Notes/Reading",
+    };
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const notePath = "Notes/Reading/Surprised by Grace.md";
+    expect(fake.folders).toEqual(new Set(["Notes", "Notes/Reading"]));
+    expect(fake.createdFiles).toEqual([notePath]);
+    expect(fake.contents.get(notePath)).toBe(
+      [
+        "---",
+        "type: book-note",
+        'source: "[[Books/Surprised by Grace.epub]]"',
+        "format: epub",
+        'title: "Surprised by Grace"',
+        'author: ""',
+        "---",
+        "",
+      ].join("\n"),
+    );
+    expect(fake.generatedLinks).toEqual([]);
+    expect(fake.openedFiles).toEqual([notePath]);
+  });
+
+  it.each([
+    { mode: "wikilinks on", useMarkdownLinks: false },
+    { mode: "wikilinks off", useMarkdownLinks: true },
+  ])(
+    "writes a resolvable vault-path source with $mode",
+    async ({ useMarkdownLinks }) => {
+      fake.runtime.useMarkdownLinks = useMarkdownLinks;
+      const book = fake.files.get(SOURCE);
+      expect(book).toBeDefined();
+      fake.runtime.activeView = { file: book };
+
+      const command = getCreateBookNoteCommand();
+      expect(command).toBeDefined();
+      if (command === undefined) return;
+      expect(command.checkCallback?.(false)).toBe(true);
+      await settleCommand();
+
+      const notePath = "Reading/Surprised by Grace.md";
+      const content = fake.contents.get(notePath);
+      expect(content).toBeDefined();
+      if (content === undefined) return;
+      const source = parseBookNote(content).frontmatter.source;
+      expect(source).toBe(SOURCE);
+      expect(
+        source === null ? null : fake.linkDests.get(source.toLowerCase()),
+      ).toBe(SOURCE);
+    },
+  );
+
+  it("preserves a literal author placeholder in the book filename", async () => {
+    const source = "Books/Foo {{author}} Bar.epub";
+    const book = addBookFile(source);
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const notePath = "Reading/Foo {{author}} Bar.md";
+    expect(fake.contents.get(notePath)).toBe(
+      [
+        "---",
+        "type: book-note",
+        'source: "[[Books/Foo {{author}} Bar.epub]]"',
+        "format: epub",
+        'title: "Foo {{author}} Bar"',
+        'author: ""',
+        "---",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves a literal format placeholder in the book filename", async () => {
+    const source = "Books/Foo {{format}} Bar.epub";
+    const book = addBookFile(source);
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const notePath = "Reading/Foo {{format}} Bar.md";
+    expect(fake.contents.get(notePath)).toBe(
+      [
+        "---",
+        "type: book-note",
+        'source: "[[Books/Foo {{format}} Bar.epub]]"',
+        "format: epub",
+        'title: "Foo {{format}} Bar"',
+        'author: ""',
+        "---",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("opens an existing note without overwriting it", async () => {
+    const notePath = "Reading/Surprised by Grace.md";
+    addMdFile(notePath, "sentinel — keep me", null);
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    expect(fake.createdFiles).toEqual([]);
+    expect(fake.contents.get(notePath)).toBe("sentinel — keep me");
+    expect(fake.openedFiles).toEqual([notePath]);
+    expect(fake.generatedLinks).toEqual([]);
+  });
+
+  it("opens a paired note beside its registered reader in the main area", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const reader = openEpubReader(book);
+    fake.runtime.activeView = { file: null };
+
+    const command = getOpenBookNoteCommand();
+    expect(command?.checkCallback?.(true)).toBe(true);
+    expect(command?.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    expect(fake.openedFiles).toEqual(["Reading/A.md"]);
+    expect(fake.createdSplitLeaves).toHaveLength(1);
+    const noteLeaf = fake.createdSplitLeaves[0];
+    expect(noteLeaf.area).toBe("main");
+    expect(noteLeaf.getRoot()).toBe(fake.rootSplit);
+    expect(noteLeaf.splitDirection).toBe("vertical");
+    expect(noteLeaf.splitFrom).toBe(reader.leaf);
+  });
+
+  it("rejects a registered reader outside the main workspace root", async () => {
+    await plugin.updateSettings({ autoOpenBookNote: true });
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+
+    openEpubReader(book, "sidebar");
+    await settleCommand();
+
+    expect(getOpenBookNoteCommand()?.checkCallback?.(true)).toBe(false);
+    expect(fake.createdFiles).toEqual([]);
+    expect(fake.createdSplitLeaves).toEqual([]);
+    expect(fake.openedFiles).toEqual([]);
+  });
+
+  it("detaches a note split that resolves outside the main workspace root", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    openEpubReader(book);
+    fake.runtime.splitRootOverride = fake.sidebarRoot;
+
+    expect(getOpenBookNoteCommand()?.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    expect(fake.createdSplitLeaves).toHaveLength(1);
+    const rejectedLeaf = fake.createdSplitLeaves[0];
+    expect(rejectedLeaf.getRoot()).toBe(fake.sidebarRoot);
+    expect(rejectedLeaf.detached).toBe(true);
+    expect(fake.openedFiles).toEqual([]);
+    expect(consoleError).toHaveBeenCalledWith(
+      "[observation-car] could not open book note",
+      expect.any(Error),
+    );
+  });
+
+  it("uses F1.5 creation when the reader has no existing note", async () => {
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    openEpubReader(book);
+
+    const command = getOpenBookNoteCommand();
+    expect(command?.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const notePath = "Reading/Surprised by Grace.md";
+    expect(fake.createdFiles).toEqual([notePath]);
+    expect(fake.contents.get(notePath)).toContain("type: book-note");
+    expect(fake.openedFiles).toEqual([notePath]);
+    expect(fake.createdSplitLeaves[0]?.area).toBe("main");
+  });
+
+  it("automatically opens or creates the note when a reader opens", async () => {
+    await plugin.updateSettings({ autoOpenBookNote: true });
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+
+    const reader = openEpubReader(book);
+    await settleCommand();
+
+    expect(fake.createdFiles).toEqual(["Reading/Surprised by Grace.md"]);
+    expect(fake.openedFiles).toEqual(["Reading/Surprised by Grace.md"]);
+    expect(fake.createdSplitLeaves[0]?.splitFrom).toBe(reader.leaf);
+    expect(fake.createdSplitLeaves[0]?.getRoot()).toBe(fake.rootSplit);
+  });
 
   it("a changed event caches a candidate note after the debounce window", async () => {
     const file = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
