@@ -240,19 +240,20 @@ export class EpubView extends FileView {
    * if its generation has moved, and a superseded render disposes
    * everything it created. The fields are assigned only by a render
    * that finishes undisplaced, so `this.*` always point at the one
-   * reader that owns the view.
+   * reader that owns the view. Returns whether this render installed its
+   * reader, so callers never continue a transaction after supersession.
    */
   private async renderBook(
     file: TFile,
     flowMode: EpubFlowMode = this.host.settings.epubFlowMode,
-  ): Promise<void> {
+  ): Promise<boolean> {
     this.disposeReader();
     const generation = this.renderGeneration;
 
     const bytes = await this.app.vault.readBinary(file);
     if (generation !== this.renderGeneration) {
       // Superseded before building anything — nothing to dispose.
-      return;
+      return false;
     }
 
     const viewerEl = this.contentEl.createDiv({ cls: "epub-viewer" });
@@ -300,7 +301,7 @@ export class EpubView extends FileView {
       // disposeReader emptied the content element but could not reach
       // these locals — dispose them here, exactly once.
       this.disposeCreated(viewerEl, book, rendition, themes, locationEvents);
-      return;
+      return false;
     }
 
     this.book = book;
@@ -312,6 +313,7 @@ export class EpubView extends FileView {
     this.locationRelocatedHandler = locationEvents.relocatedHandler;
     this.locationForward = locationEvents.forward;
     this.renderedFlowMode = flowMode;
+    return true;
   }
 
   /** Tear down a reader a render built locally, possibly only partially. */
@@ -487,14 +489,27 @@ export class EpubView extends FileView {
     cfi: string | null,
   ): Promise<void> {
     this.restoringFile = file;
+    let generation = this.renderGeneration;
     try {
       await this.host.updateSettings({ epubFlowMode: mode });
-      await this.renderBook(file, mode);
-      if (cfi !== null && this.rendition !== null) {
-        await this.rendition.display(cfi);
+      if (!this.ownsFlowChange(file, generation)) {
+        return;
+      }
+
+      generation += 1;
+      const rendered = await this.renderBook(file, mode);
+      if (!rendered || !this.ownsFlowChange(file, generation)) {
+        return;
+      }
+      const rendition = this.rendition;
+      if (cfi !== null && rendition !== null) {
+        await rendition.display(cfi);
       }
       return;
     } catch (error: unknown) {
+      if (!this.ownsFlowChange(file, generation)) {
+        return;
+      }
       const failures: unknown[] = [error];
       try {
         await this.host.updateSettings({ epubFlowMode: previousMode });
@@ -502,13 +517,24 @@ export class EpubView extends FileView {
         failures.push(rollbackError);
       }
 
+      if (!this.ownsFlowChange(file, generation)) {
+        return;
+      }
       if (this.rendition === null || this.renderedFlowMode !== previousMode) {
         try {
-          await this.renderBook(file, previousMode);
-          if (cfi !== null && this.rendition !== null) {
-            await this.rendition.display(cfi);
+          generation += 1;
+          const rendered = await this.renderBook(file, previousMode);
+          if (!rendered || !this.ownsFlowChange(file, generation)) {
+            return;
+          }
+          const rendition = this.rendition;
+          if (cfi !== null && rendition !== null) {
+            await rendition.display(cfi);
           }
         } catch (recoveryError: unknown) {
+          if (!this.ownsFlowChange(file, generation)) {
+            return;
+          }
           failures.push(recoveryError);
         }
       }
@@ -522,6 +548,11 @@ export class EpubView extends FileView {
         this.restoringFile = null;
       }
     }
+  }
+
+  /** Whether a flow-mode transaction still owns this leaf and generation. */
+  private ownsFlowChange(file: TFile, generation: number): boolean {
+    return this.file === file && this.renderGeneration === generation;
   }
 
   private disposeReader(): void {

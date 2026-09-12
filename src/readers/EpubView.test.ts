@@ -32,7 +32,7 @@ const epubMock = vi.hoisted(() => {
     >();
     destroyed = false;
     location: { start: { cfi: string } } | null = null;
-    displayImpl: () => Promise<void> = () =>
+    displayImpl: (target?: string) => Promise<void> = () =>
     {
       if (state.failDisplay) {
         return Promise.reject(new Error("display blew up"));
@@ -41,7 +41,7 @@ const epubMock = vi.hoisted(() => {
         ? state.currentDisplayGate
         : Promise.resolve();
     };
-    display = vi.fn(() => this.displayImpl());
+    display = vi.fn((target?: string) => this.displayImpl(target));
     destroy = vi.fn(() => {
       this.destroyed = true;
     });
@@ -170,12 +170,15 @@ function file(path: string): TFile {
 }
 
 function makeHost(): EpubViewHost {
-  return {
+  const host: EpubViewHost = {
     settings: { ...DEFAULT_SETTINGS },
-    updateSettings: async () => undefined,
+    updateSettings: async (patch) => {
+      host.settings = { ...host.settings, ...patch };
+    },
     getLastEpubLocation: () => null,
     rememberEpubLocation: async () => undefined,
   };
+  return host;
 }
 
 function makeView(
@@ -486,6 +489,117 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
       fileB.path,
       `#${renderStartCfi}`,
     );
+  });
+
+  it("does not redisplay book A's CFI on book B after a flow toggle is superseded", async () => {
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const fileA = file("library/a.epub");
+    const fileB = file("library/b.epub");
+    const cfiA = "epubcfi(/6/8!/4/2/1:0)";
+    await view.onLoadFile(fileA);
+    FakeRendition.instances[0].location = { start: { cfi: cfiA } };
+
+    const toggleDisplay = deferred();
+    state.currentDisplayGate = toggleDisplay.promise;
+    const toggle = view.setFlowMode("scrolled");
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[1].display).toHaveBeenCalledOnce();
+    });
+
+    state.currentDisplayGate = null;
+    await view.onLoadFile(fileB);
+    const renditionB = FakeRendition.instances[2];
+    expect(renditionB.display).toHaveBeenCalledOnce();
+
+    toggleDisplay.resolve();
+    await toggle;
+
+    expect(renditionB.display).toHaveBeenCalledOnce();
+    expect(renditionB.display).not.toHaveBeenCalledWith(cfiA);
+  });
+
+  it("keeps book B's saved CFI when a superseded flow toggle settles", async () => {
+    const fileA = file("library/a.epub");
+    const fileB = file("library/b.epub");
+    const cfiA = "epubcfi(/6/8!/4/2/1:0)";
+    const cfiB = "#epubcfi(/6/22!/4/2/9:0)";
+    const locations: Record<string, string> = { [fileB.path]: cfiB };
+    const host: EpubViewHost = {
+      ...makeHost(),
+      rememberEpubLocation: async (path, fragment) => {
+        locations[path] = fragment;
+      },
+    };
+    const view = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+      host,
+    );
+    await view.onLoadFile(fileA);
+    FakeRendition.instances[0].location = { start: { cfi: cfiA } };
+
+    const toggleDisplay = deferred();
+    state.currentDisplayGate = toggleDisplay.promise;
+    const toggle = view.setFlowMode("scrolled");
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[1].display).toHaveBeenCalledOnce();
+    });
+
+    state.currentDisplayGate = null;
+    await view.onLoadFile(fileB);
+    const renditionB = FakeRendition.instances[2];
+    renditionB.location = { start: { cfi: cfiB.slice(1) } };
+    renditionB.displayImpl = async (target) => {
+      if (target !== undefined) {
+        renditionB.location = { start: { cfi: target } };
+        renditionB.emit("relocated", {
+          start: { cfi: target, href: "chapters/wrong.xhtml" },
+        });
+      }
+    };
+
+    vi.useFakeTimers();
+    toggleDisplay.resolve();
+    await toggle;
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(locations[fileB.path]).toBe(cfiB);
+  });
+
+  it("leaves book B's reader installed when book A's CFI cannot resolve", async () => {
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const fileA = file("library/a.epub");
+    const fileB = file("library/b.epub");
+    const cfiA = "epubcfi(/6/8!/4/2/1:0)";
+    await view.onLoadFile(fileA);
+    FakeRendition.instances[0].location = { start: { cfi: cfiA } };
+
+    const toggleDisplay = deferred();
+    state.currentDisplayGate = toggleDisplay.promise;
+    const toggle = view.setFlowMode("scrolled");
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[1].display).toHaveBeenCalledOnce();
+    });
+
+    state.currentDisplayGate = null;
+    await view.onLoadFile(fileB);
+    const bookB = FakeBook.instances[2];
+    bookB.rendition.displayImpl = async (target) => {
+      if (target !== undefined) {
+        throw new Error("CFI does not resolve in book B");
+      }
+    };
+
+    toggleDisplay.resolve();
+    await toggle.catch(() => undefined);
+
+    const internals = view as unknown as {
+      renderedFile: TFile | null;
+      rendition: InstanceType<typeof FakeRendition> | null;
+    };
+    expect(FakeBook.instances).toHaveLength(3);
+    expect(bookB.destroyed).toBe(false);
+    expect(internals.renderedFile).toBe(fileB);
+    expect(internals.rendition).toBe(bookB.rendition);
   });
 
   it("detaches location events when a superseded render finally settles", async () => {

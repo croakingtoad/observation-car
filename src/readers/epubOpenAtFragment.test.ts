@@ -20,12 +20,17 @@ vi.mock("obsidian", () => ({
 import { DEFAULT_SETTINGS } from "../settings";
 import { EpubView, type EpubViewHost } from "./EpubView";
 
-const host = (): EpubViewHost => ({
-  settings: { ...DEFAULT_SETTINGS },
-  updateSettings: async () => undefined,
-  getLastEpubLocation: () => null,
-  rememberEpubLocation: async () => undefined,
-});
+const host = (): EpubViewHost => {
+  const viewHost: EpubViewHost = {
+    settings: { ...DEFAULT_SETTINGS },
+    updateSettings: async (patch) => {
+      viewHost.settings = { ...viewHost.settings, ...patch };
+    },
+    getLastEpubLocation: () => null,
+    rememberEpubLocation: async () => undefined,
+  };
+  return viewHost;
+};
 
 const CHAPTER_ONE = "chapter-1.xhtml";
 const CHAPTER_TWO = "chapter-2.xhtml";

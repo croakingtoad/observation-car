@@ -113,13 +113,18 @@ const makeLeaf = () =>
 const makeFile = (path: string) =>
   ({ path, basename: path.split("/").pop() ?? path }) as TFile;
 
-const makeHost = (overrides: Partial<EpubViewHost> = {}): EpubViewHost => ({
-  settings: { ...DEFAULT_SETTINGS },
-  updateSettings: async () => undefined,
-  getLastEpubLocation: () => null,
-  rememberEpubLocation: async () => undefined,
-  ...overrides,
-});
+const makeHost = (overrides: Partial<EpubViewHost> = {}): EpubViewHost => {
+  const host: EpubViewHost = {
+    settings: { ...DEFAULT_SETTINGS },
+    updateSettings: async (patch) => {
+      host.settings = { ...host.settings, ...patch };
+    },
+    getLastEpubLocation: () => null,
+    rememberEpubLocation: async () => undefined,
+    ...overrides,
+  };
+  return host;
+};
 
 beforeEach(() => {
   epub.reset();

@@ -24,6 +24,7 @@ vi.mock("./epubNavigationTools", () => ({
 vi.mock("./epubThemes", () => ({ EpubThemes: class {} }));
 
 interface FlowHarnessState {
+  renderGeneration: number;
   renderedFlowMode: EpubFlowMode;
 }
 
@@ -41,15 +42,20 @@ function createHost(): EpubViewHost {
 
 function createView(
   host: EpubViewHost,
-  renderBook: (file: TFile, flowMode: EpubFlowMode) => Promise<void>,
+  renderBook: (file: TFile, flowMode: EpubFlowMode) => Promise<boolean>,
 ): EpubView {
   const view = Object.create(EpubView.prototype) as EpubView;
   Object.assign(view, {
     file: Object.create(TFile.prototype) as TFile,
     flowModeChange: null,
     host,
+    renderGeneration: 0,
     renderedFlowMode: "paginated",
-    renderBook,
+    renderBook: async (file: TFile, flowMode: EpubFlowMode) => {
+      const state = view as unknown as FlowHarnessState;
+      state.renderGeneration += 1;
+      return renderBook(file, flowMode);
+    },
     rendition: {
       display: vi.fn(async () => undefined),
       location: { start: { cfi: "epubcfi(/6/2)" } },
@@ -69,7 +75,7 @@ describe("F2.2 flow-mode recovery", () => {
       host.settings = { ...host.settings, ...patch };
       await saveGate;
     });
-    const renderBook = vi.fn(async () => undefined);
+    const renderBook = vi.fn(async () => true);
     const view = createView(host, renderBook);
 
     const first = view.setFlowMode("scrolled");
@@ -92,10 +98,11 @@ describe("F2.2 flow-mode recovery", () => {
     const host = createHost();
     let view: EpubView;
     const renderBook = vi.fn(async (_file: TFile, mode: EpubFlowMode) => {
-      Object.assign(view, { renderedFlowMode: mode } satisfies FlowHarnessState);
+      (view as unknown as FlowHarnessState).renderedFlowMode = mode;
       if (mode === "scrolled") {
         throw new Error("render failed");
       }
+      return true;
     });
     view = createView(host, renderBook);
 
@@ -110,7 +117,7 @@ describe("F2.2 flow-mode recovery", () => {
 
   it("notifies the user when a toggle fails", async () => {
     const host = createHost();
-    const view = createView(host, vi.fn(async () => undefined));
+    const view = createView(host, vi.fn(async () => true));
     const error = new Error("toggle failed");
     Object.assign(view, {
       setFlowMode: vi.fn(async () => {
