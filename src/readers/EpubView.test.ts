@@ -31,6 +31,7 @@ const epubMock = vi.hoisted(() => {
       Set<(...args: unknown[]) => void>
     >();
     destroyed = false;
+    location: { start: { cfi: string } } | null = null;
     displayImpl: () => Promise<void> = () =>
     {
       if (state.failDisplay) {
@@ -251,6 +252,44 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     );
     expect(FakeRendition.instances[1].display).toHaveBeenCalledOnce();
     await secondView.onClose();
+  });
+
+  it("keeps each book's CFI under its owner when Obsidian preassigns a swap", async () => {
+    const fileA = file("Books/A.epub");
+    const fileB = file("Books/B.epub");
+    const cfiA = "#epubcfi(/6/8!/4/2/1:0)";
+    const cfiB = "#epubcfi(/6/22!/4/2/9:0)";
+    const locations: Record<string, string> = { [fileB.path]: cfiB };
+    const host: EpubViewHost = {
+      ...makeHost(),
+      getLastEpubLocation: (path) => locations[path] ?? null,
+      rememberEpubLocation: async (path, fragment) => {
+        locations[path] = fragment;
+      },
+    };
+    const view = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+      host,
+    );
+    await view.onLoadFile(fileA);
+    FakeRendition.instances[0].location = {
+      start: { cfi: cfiA.slice(1) },
+    };
+
+    // FileView.loadFile assigns the incoming file before onLoadFile runs.
+    view.file = fileB;
+    const openAtFragment = vi
+      .spyOn(view, "openAtFragment")
+      .mockResolvedValue(undefined);
+    await view.onLoadFile(fileB);
+
+    expect(locations).toEqual({
+      [fileA.path]: cfiA,
+      [fileB.path]: cfiB,
+    });
+    expect(openAtFragment).toHaveBeenCalledOnce();
+    expect(openAtFragment).toHaveBeenCalledWith(cfiB);
+    await view.onClose();
   });
 
   it("a second open inside the readBinary window leaves exactly one live reader", async () => {

@@ -56,6 +56,8 @@ export class EpubView extends FileView {
   /** The book currently loaded in this leaf, or null before first open. */
   file: TFile | null = null;
 
+  /** The file that owns `book` and `rendition`; unlike `file`, we assign it. */
+  private renderedFile: TFile | null = null;
   private book: Book | null = null;
   private rendition: Rendition | null = null;
   private themes: EpubThemes | null = null;
@@ -120,8 +122,8 @@ export class EpubView extends FileView {
   }
 
   async onLoadFile(file: TFile): Promise<void> {
-    // A same-leaf book swap has no intervening onClose. Capture the old
-    // rendition's exact position before replacing `this.file`.
+    // FileView.loadFile has already assigned `this.file` to the incoming
+    // book. Persist against our render owner before disposing that reader.
     void this.persistRenderedLocation();
     const restoredFragment = this.host.getLastEpubLocation(file.path);
     this.file = file;
@@ -301,6 +303,7 @@ export class EpubView extends FileView {
 
     this.book = book;
     this.rendition = rendition;
+    this.renderedFile = file;
     this.themes = themes;
     this.selectionTracker = selectionTracker;
     this.locationTracker = locationEvents.tracker;
@@ -391,7 +394,7 @@ export class EpubView extends FileView {
 
   /** Persist the rendition's immediate position, including a debounced turn. */
   private persistRenderedLocation(): Promise<void> {
-    const file = this.file;
+    const file = this.renderedFile;
     const cfi = this.rendition?.location?.start?.cfi;
     if (
       file === null ||
@@ -521,6 +524,7 @@ export class EpubView extends FileView {
     this.themes = null;
     this.rendition?.destroy();
     this.rendition = null;
+    this.renderedFile = null;
     this.renderedFlowMode = null;
     this.book?.destroy();
     this.book = null;
