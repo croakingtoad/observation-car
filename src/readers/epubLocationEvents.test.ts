@@ -184,6 +184,28 @@ describe("EpubView location events (F2.5)", () => {
     expect(rememberEpubLocation).toHaveBeenCalledOnce();
   });
 
+  it("logs a rendition CFI that the anchor grammar rejects on close", async () => {
+    vi.useFakeTimers();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const view = new EpubView(makeLeaf(), makeHost());
+    await view.onLoadFile(makeFile("Books/Test.epub"));
+
+    epub.emit(
+      "relocated",
+      relocatedAt("not-a-cfi", "chapters/ch1.xhtml"),
+    );
+    await view.onClose();
+
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Observation Car: could not save EPUB location",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
   it("emits a debounced LocationChanged with {file, fragment, chapter, label}", async () => {
     vi.useFakeTimers();
     const view = new EpubView(makeLeaf(), makeHost());

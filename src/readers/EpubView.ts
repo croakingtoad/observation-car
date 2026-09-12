@@ -405,8 +405,8 @@ export class EpubView extends FileView {
         file.path,
         buildEpubCfiFragment(cfi),
       );
-    } catch {
-      // A malformed rendition location cannot be restored; ignore it.
+    } catch (error: unknown) {
+      console.error("Observation Car: could not save EPUB location", error);
       return Promise.resolve();
     }
   }
