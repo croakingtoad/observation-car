@@ -76,6 +76,8 @@ export class EpubView extends FileView {
     | null = null;
   private locationForward: (() => void) | null = null;
   private locationListeners = new Set<(loc: EpubLocationEvent) => void>();
+  /** Whether the latest rendition relocation came from a reader move. */
+  private persistPendingLocation = true;
   private renderedFlowMode: EpubFlowMode | null = null;
   private flowModeChange: Promise<void> | null = null;
   /** The book whose initial relocation must not overwrite its saved CFI. */
@@ -348,13 +350,13 @@ export class EpubView extends FileView {
     generation: number,
   ): PreparedLocationEvents {
     const tracker = new EpubLocationTracker();
-    let persistPendingLocation = true;
+    this.persistPendingLocation = this.restoringFile !== file;
     const onRelocated = (
       loc: EpubRenditionLocation | null | undefined,
     ): void => {
       const start = loc?.start;
-      if (start !== undefined) {
-        persistPendingLocation = this.restoringFile !== file;
+      if (start !== undefined && generation === this.renderGeneration) {
+        this.persistPendingLocation = this.restoringFile !== file;
       }
       tracker.onRelocated(
         start === undefined ? null : { cfi: start.cfi, href: start.href },
@@ -375,7 +377,7 @@ export class EpubView extends FileView {
         return;
       }
       const event: EpubLocationEvent = { ...loc, file };
-      if (persistPendingLocation && this.restoringFile !== file) {
+      if (this.persistPendingLocation && this.restoringFile !== file) {
         void this.persistCurrentLocation(file.path, event.fragment);
       }
       for (const listener of [...this.locationListeners]) {
@@ -403,6 +405,7 @@ export class EpubView extends FileView {
     if (
       file === null ||
       cfi === undefined ||
+      this.persistPendingLocation === false ||
       this.restoringFile === file
     ) {
       return Promise.resolve();

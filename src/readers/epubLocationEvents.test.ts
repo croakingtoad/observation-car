@@ -43,6 +43,7 @@ const epub = vi.hoisted(() => {
 
   const book = {
     renderTo: () => rendition,
+    spine: { get: () => undefined },
     loaded: {
       navigation: Promise.resolve({
         toc: [
@@ -147,9 +148,13 @@ afterEach(() => {
 });
 
 describe("EpubView location events (F2.5)", () => {
+  // PROBE-AC1b
   it("does not persist the book start when a flow-mode redisplay fails", async () => {
     vi.useFakeTimers();
-    const rememberEpubLocation = vi.fn(async () => undefined);
+    let storedLocation = "#epubcfi(/6/8!/4/2/1:0)";
+    const rememberEpubLocation = vi.fn(async (_path: string, fragment: string) => {
+      storedLocation = fragment;
+    });
     const view = new EpubView(makeLeaf(), makeHost({ rememberEpubLocation }));
     const file = makeFile("Books/Test.epub");
     await view.onLoadFile(file);
@@ -174,9 +179,114 @@ describe("EpubView location events (F2.5)", () => {
 
     await expect(view.setFlowMode("scrolled")).rejects.toThrow();
     await vi.advanceTimersByTimeAsync(150);
-
-    expect(rememberEpubLocation).not.toHaveBeenCalled();
     await view.onClose();
+
+    expect(storedLocation).toBe("#epubcfi(/6/8!/4/2/1:0)");
+  });
+
+  // PROBE-I
+  it("keeps the saved CFI when a successful flow toggle emits no restore relocation", async () => {
+    vi.useFakeTimers();
+    let storedLocation = "#epubcfi(/6/8!/4/2/1:0)";
+    const rememberEpubLocation = vi.fn(async (_path: string, fragment: string) => {
+      storedLocation = fragment;
+    });
+    const view = new EpubView(makeLeaf(), makeHost({ rememberEpubLocation }));
+    const file = makeFile("Books/Test.epub");
+    await view.onLoadFile(file);
+
+    epub.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    epub.setDisplay(async (target) => {
+      if (target === undefined) {
+        epub.emit(
+          "relocated",
+          relocatedAt("epubcfi(/6/2!/4/2/1:0)", "chapters/start.xhtml"),
+        );
+      }
+    });
+
+    await view.setFlowMode("scrolled");
+    await vi.advanceTimersByTimeAsync(150);
+    await view.onClose();
+
+    expect(storedLocation).toBe("#epubcfi(/6/8!/4/2/1:0)");
+  });
+
+  // PROBE-J
+  it("keeps the saved CFI when restore-on-open fails before landing", async () => {
+    vi.useFakeTimers();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    let storedLocation = "#epubcfi(/6/8!/4/2/1:0)";
+    const rememberEpubLocation = vi.fn(async (_path: string, fragment: string) => {
+      storedLocation = fragment;
+    });
+    const view = new EpubView(
+      makeLeaf(),
+      makeHost({
+        getLastEpubLocation: () => storedLocation,
+        rememberEpubLocation,
+      }),
+    );
+
+    epub.setDisplay(async (target) => {
+      if (target === undefined) {
+        epub.emit(
+          "relocated",
+          relocatedAt("epubcfi(/6/2!/4/2/1:0)", "chapters/start.xhtml"),
+        );
+      }
+    });
+
+    await view.onLoadFile(makeFile("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(150);
+    await view.onClose();
+
+    expect(storedLocation).toBe("#epubcfi(/6/8!/4/2/1:0)");
+    consoleError.mockRestore();
+  });
+
+  // PROBE-E; mutation M-N3 makes the latch sticky-false after the toggle.
+  it("persists a genuine page turn after a successful flow toggle", async () => {
+    vi.useFakeTimers();
+    let storedLocation = "#epubcfi(/6/8!/4/2/1:0)";
+    const rememberEpubLocation = vi.fn(async (_path: string, fragment: string) => {
+      storedLocation = fragment;
+    });
+    const view = new EpubView(makeLeaf(), makeHost({ rememberEpubLocation }));
+    const file = makeFile("Books/Test.epub");
+    await view.onLoadFile(file);
+
+    epub.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    epub.setDisplay(async (target) => {
+      if (target === undefined) {
+        epub.emit(
+          "relocated",
+          relocatedAt("epubcfi(/6/2!/4/2/1:0)", "chapters/start.xhtml"),
+        );
+      }
+    });
+
+    await view.setFlowMode("scrolled");
+    epub.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/14!/4/2/12:0)", "chapters/ch3.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    await view.onClose();
+
+    expect(storedLocation).toBe("#epubcfi(/6/14!/4/2/12:0)");
   });
 
   it("records the last CFI under the current book's vault path", async () => {
