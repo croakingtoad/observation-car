@@ -18,6 +18,11 @@
  * - `hasFocus` is dropped: its only caller was an upstream view hook that
  *   nothing in Obsidian invokes; the relocated/resized correction below
  *   still carries the pane-resize recovery.
+ * - Clipboard writes are awaited and the button flash reflects the write's
+ *   actual outcome (✔ on success, ✖ with the reason on reject).
+ * - The TOC/selection setup promises no longer go unhandled: a book whose
+ *   `loaded.navigation` or `loaded.metadata` rejects reports a readable
+ *   error in the viewer instead of leaving the panel silently absent.
  */
 import { type Book, type Contents, type Rendition } from "epubjs";
 import type Locations from "epubjs/types/locations";
@@ -41,9 +46,13 @@ export class EpubNavigationTools {
     this.copyPanel = this.createCopyPanel(viewerEl);
     this.createNavigationButton(viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
     this.createNavigationButton(viewerEl, "epub-nav-next", "❯", () => this.rendition.next());
-    void this.createTocPanel(viewerEl);
+    void this.createTocPanel(viewerEl).catch((error: unknown) =>
+      this.reportSetupFailure(viewerEl, "Table of contents", error),
+    );
     this.addKeyListeners();
-    void this.addSelectionListener(viewerEl);
+    void this.addSelectionListener(viewerEl).catch((error: unknown) =>
+      this.reportSetupFailure(viewerEl, "Selection copying", error),
+    );
 
     // Pane/layout changes make epub.js reflow and report a fresh
     // location; re-display the one we had so the page does not jump.
@@ -202,7 +211,7 @@ export class EpubNavigationTools {
       copyBtn.dataset.label = safeLabel;
       copyBtn.tabIndex = -1;
       copyBtn.textContent = "🔗";
-      copyBtn.onclick = (e) => this.copyTocLink(e, bookTitle, safeHref, safeLabel);
+      copyBtn.onclick = (e) => void this.copyTocLink(e, bookTitle, safeHref, safeLabel);
       copyBtn.ariaLabel = `Copy link to ${safeLabel}`;
 
       tocLink.append(labelSpan, copyBtn);
@@ -218,20 +227,32 @@ export class EpubNavigationTools {
     });
   }
 
-  private copyTocLink(e: Event, bookTitle: string, href: string, label: string): void {
+  private async copyTocLink(e: Event, bookTitle: string, href: string, label: string): Promise<void> {
     e.stopPropagation();
-    void navigator.clipboard.writeText(
-      `[[${this.bookPath}#${href}|${bookTitle}, ${label}]]`,
-    );
-    this.flashCopied(e.currentTarget as HTMLButtonElement);
+    const btn = e.currentTarget as HTMLButtonElement;
+    try {
+      await navigator.clipboard.writeText(
+        `[[${this.bookPath}#${href}|${bookTitle}, ${label}]]`,
+      );
+    } catch (error) {
+      this.flashCopyFailed(btn, error);
+      return;
+    }
+    this.flashCopied(btn);
   }
 
   private async copyLinkToCFIToClipboard(e: Event, bookTitle: string, cfiRange: string): Promise<void> {
     e.stopPropagation();
-    const location = await this.locationNumber(cfiRange);
-    const fragment = buildEpubCfiFragment(cfiRange);
-    void navigator.clipboard.writeText(`[[${this.bookPath}${fragment}|${bookTitle}, loc. ${location}]]`);
-    this.flashCopied(e.currentTarget as HTMLButtonElement);
+    const btn = e.currentTarget as HTMLButtonElement;
+    try {
+      const location = await this.locationNumber(cfiRange);
+      const fragment = buildEpubCfiFragment(cfiRange);
+      await navigator.clipboard.writeText(`[[${this.bookPath}${fragment}|${bookTitle}, loc. ${location}]]`);
+    } catch (error) {
+      this.flashCopyFailed(btn, error);
+      return;
+    }
+    this.flashCopied(btn);
   }
 
   private async copyQuoteAndLinkToClipboard(
@@ -241,13 +262,32 @@ export class EpubNavigationTools {
     selection: Selection,
   ): Promise<void> {
     e.stopPropagation();
-    const location = await this.locationNumber(cfiRange);
-    const fragment = buildEpubCfiFragment(cfiRange);
-    const selectedText = selection ? selection.toString().trim() : "";
-    const quote = selectedText ? `> ${selectedText}\n-- ` : "";
-    const link = `[[${this.bookPath}${fragment}|${bookTitle}, loc. ${location}]]`;
-    void navigator.clipboard.writeText(`${quote}${link}`);
-    this.flashCopied(e.currentTarget as HTMLButtonElement);
+    const btn = e.currentTarget as HTMLButtonElement;
+    try {
+      const location = await this.locationNumber(cfiRange);
+      const fragment = buildEpubCfiFragment(cfiRange);
+      const selectedText = selection ? selection.toString().trim() : "";
+      const quote = selectedText ? `> ${selectedText}\n-- ` : "";
+      const link = `[[${this.bookPath}${fragment}|${bookTitle}, loc. ${location}]]`;
+      await navigator.clipboard.writeText(`${quote}${link}`);
+    } catch (error) {
+      this.flashCopyFailed(btn, error);
+      return;
+    }
+    this.flashCopied(btn);
+  }
+
+  /**
+   * A book whose navigation or metadata cannot be loaded degrades
+   * visibly: the missing feature reports why, instead of the panel
+   * being silently absent and the rejection left to the console.
+   */
+  private reportSetupFailure(viewerEl: HTMLElement, feature: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const notice = document.createElement("div");
+    notice.className = "epub-setup-error";
+    notice.textContent = `${feature} unavailable: ${message}`;
+    viewerEl.appendChild(notice);
   }
 
   /**
@@ -287,6 +327,23 @@ export class EpubNavigationTools {
     btn.textContent = "✔";
     setTimeout(() => {
       btn.textContent = original;
+    }, 1000);
+  }
+
+  /**
+   * Visible, readable failure for a copy that did not land: the button
+   * the user clicked shows ✖ and the reason on hover, for the same
+   * window as the success flash.
+   */
+  private flashCopyFailed(btn: HTMLButtonElement, error: unknown): void {
+    const originalText = btn.textContent;
+    const originalTitle = btn.title;
+    const message = error instanceof Error ? error.message : String(error);
+    btn.textContent = "✖";
+    btn.title = `Copy failed: ${message}`;
+    setTimeout(() => {
+      btn.textContent = originalText;
+      btn.title = originalTitle;
     }, 1000);
   }
 
