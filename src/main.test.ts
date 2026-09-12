@@ -28,7 +28,21 @@ vi.mock("obsidian", () => {
       // here — the timers under test live in the plugin, not the refs.
       void ref;
     }
-    registerView(_viewType: string, _factory: unknown): void {}
+    registerView(viewType: string, factory: unknown): void {
+      if (
+        typeof this.app === "object" &&
+        this.app !== null &&
+        "registeredViews" in this.app
+      ) {
+        const app = this.app as {
+          registeredViews: Map<string, (leaf: unknown) => unknown>;
+        };
+        app.registeredViews.set(
+          viewType,
+          factory as (leaf: unknown) => unknown,
+        );
+      }
+    }
     registerExtensions(_extensions: string[], _viewType: string): void {}
     addSettingTab(_tab: unknown): void {}
     async loadData(): Promise<unknown> {
@@ -62,7 +76,12 @@ vi.mock("obsidian", () => {
 
 vi.mock("./readers/EpubView", () => ({
   EPUB_VIEW_TYPE: "observation-car-epub",
-  EpubView: class {},
+  EpubView: class {
+    file: TFile | null = null;
+    getViewType(): string {
+      return "observation-car-epub";
+    }
+  },
 }));
 
 type Handler = (...args: unknown[]) => void;
@@ -87,6 +106,9 @@ interface FakeVault {
   linkDests: Map<string, string>;
   metadataHandlers: Map<string, Handler>;
   vaultHandlers: Map<string, Handler>;
+  workspaceHandlers: Map<string, Handler>;
+  registeredViews: Map<string, (leaf: unknown) => unknown>;
+  leaves: Set<unknown>;
 }
 
 function makeFakeVault(): FakeVault {
@@ -96,6 +118,9 @@ function makeFakeVault(): FakeVault {
   const linkDests = new Map<string, string>();
   const metadataHandlers = new Map<string, Handler>();
   const vaultHandlers = new Map<string, Handler>();
+  const workspaceHandlers = new Map<string, Handler>();
+  const registeredViews = new Map<string, (leaf: unknown) => unknown>();
+  const leaves = new Set<unknown>();
 
   const app = {
     vault: {
@@ -129,6 +154,31 @@ function makeFakeVault(): FakeVault {
         return { name };
       },
     },
+    workspace: {
+      on: (name: string, callback: Handler): { name: string } => {
+        workspaceHandlers.set(name, callback);
+        return { name };
+      },
+      getLeavesOfType: (viewType: string): unknown[] =>
+        [...leaves].filter((leaf) => {
+          if (
+            typeof leaf !== "object" ||
+            leaf === null ||
+            !("view" in leaf)
+          ) {
+            return false;
+          }
+          const view = leaf.view;
+          return (
+            typeof view === "object" &&
+            view !== null &&
+            "getViewType" in view &&
+            typeof view.getViewType === "function" &&
+            view.getViewType() === viewType
+          );
+        }),
+    },
+    registeredViews,
   };
 
   return {
@@ -139,6 +189,9 @@ function makeFakeVault(): FakeVault {
     linkDests,
     metadataHandlers,
     vaultHandlers,
+    workspaceHandlers,
+    registeredViews,
+    leaves,
   };
 }
 
@@ -251,17 +304,39 @@ describe("plugin wiring (substituted obsidian module)", () => {
   }
 
   function fire(
-    where: "metadata" | "vault",
+    where: "metadata" | "vault" | "workspace",
     name: string,
     args: readonly unknown[],
   ): void {
-    const handler = (
-      where === "metadata" ? fake.metadataHandlers : fake.vaultHandlers
-    ).get(name);
+    const handlers =
+      where === "metadata"
+        ? fake.metadataHandlers
+        : where === "vault"
+          ? fake.vaultHandlers
+          : fake.workspaceHandlers;
+    const handler = handlers.get(name);
     if (handler === undefined) {
       throw new Error(`no ${where} handler registered for "${name}"`);
     }
     handler(...args);
+  }
+
+  function openEpubReader(book: TFile): {
+    leaf: { view: unknown };
+    view: { file: TFile | null; getViewType(): string };
+  } {
+    const factory = fake.registeredViews.get("observation-car-epub");
+    if (factory === undefined) throw new Error("EPUB view was not registered");
+    const leaf = { view: null as unknown };
+    const view = factory(leaf) as {
+      file: TFile | null;
+      getViewType(): string;
+    };
+    leaf.view = view;
+    view.file = book;
+    fake.leaves.add(leaf);
+    fire("workspace", "file-open", [book]);
+    return { leaf, view };
   }
 
   it("a changed event caches a candidate note after the debounce window", async () => {
@@ -493,5 +568,42 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(
       plugin.getBookNote("Reading/A.md")?.sections.map((s) => s.fragment),
     ).toEqual([CFI_1]);
+  });
+
+  it("wires registered reader leaves to notes and removes closed leaves", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const first = openEpubReader(book);
+    expect(plugin.getReaderPairingForNote("Reading/A.md")?.leaf).toBe(
+      first.leaf,
+    );
+
+    const second = openEpubReader(book);
+    expect(plugin.getReaderPairingForNote("Reading/A.md")?.leaf).toBe(
+      second.leaf,
+    );
+
+    // Re-focus and layout movement do not give the displaced leaf back
+    // ownership: neither event changes leaf or file identity.
+    fire("workspace", "active-leaf-change", [first.leaf]);
+    fire("workspace", "layout-change", []);
+    expect(plugin.getReaderPairingForNote("Reading/A.md")?.leaf).toBe(
+      second.leaf,
+    );
+
+    fake.leaves.delete(second.leaf);
+    fire("workspace", "layout-change", []);
+    expect(plugin.getReaderPairingForNote("Reading/A.md")?.leaf).toBe(
+      first.leaf,
+    );
+
+    fake.leaves.delete(first.leaf);
+    fire("workspace", "layout-change", []);
+    expect(plugin.getReaderPairingForNote("Reading/A.md")).toBeUndefined();
   });
 });

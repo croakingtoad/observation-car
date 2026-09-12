@@ -11,6 +11,10 @@ import {
 } from "./model/bookNote";
 import { BookNoteStore } from "./model/bookNoteStore";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
+import {
+  ReaderRegistry,
+  type ReaderPairing,
+} from "./sync/ReaderRegistry";
 
 /**
  * Observation Car — plugin entry point.
@@ -34,14 +38,12 @@ export default class ObservationCarPlugin extends Plugin {
   /** Parsed book notes, keyed by vault path (PRD §5.2 storage model). */
   private bookNoteStore!: BookNoteStore;
 
+  /** Format-neutral reader-leaf ↔ book-note pairings (PRD F4.1). */
+  private readerRegistry!: ReaderRegistry;
+
   async onload(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
     this.addSettingTab(new ObservationCarSettingTab(this.app, this));
-
-    // F2.1: `.epub` opens in the in-plugin reader view; no external
-    // reader is involved. The view-type factory is called once per leaf.
-    this.registerView(EPUB_VIEW_TYPE, (leaf) => new EpubView(leaf));
-    this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
@@ -57,9 +59,55 @@ export default class ObservationCarPlugin extends Plugin {
       // file before a heading counts as an anchor (parseBookNote's
       // resolveLink contract).
       resolveLink: (linkpath, notePath) =>
-        this.app.metadataCache.getFirstLinkpathDest(linkpath, notePath)
-          ?.path ?? null,
+        this.resolveLink(linkpath, notePath)?.path ?? null,
     });
+
+    this.readerRegistry = new ReaderRegistry({
+      listBookNotes: () =>
+        this.bookNoteStore.paths().flatMap((path) => {
+          const bookNote = this.bookNoteStore.get(path);
+          return bookNote === undefined ? [] : [{ path, bookNote }];
+        }),
+      // This is the same canonical Obsidian resolution seam the parser
+      // uses above. The registry compares the returned TFile identity;
+      // it never compares source/link text.
+      resolveLink: (linkpath, notePath) =>
+        this.resolveLink(linkpath, notePath),
+      isLeafOpen: (leaf, reader) =>
+        this.app.workspace
+          .getLeavesOfType(reader.getViewType())
+          .includes(leaf),
+    });
+
+    // F2.1: `.epub` opens in the in-plugin reader view; the concrete view
+    // satisfies Reader structurally and only this composition root knows
+    // its implementation. The registry itself is EPUB/PDF agnostic.
+    this.registerView(EPUB_VIEW_TYPE, (leaf) => {
+      const reader = new EpubView(leaf);
+      this.readerRegistry.register(leaf, reader);
+      return reader;
+    });
+    this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
+
+    // Obsidian has no leaf-close event. `layout-change` covers closes and
+    // moves; the other events make a newly loaded reader visible quickly.
+    // Refresh is identity-based, so focus and layout changes cannot steal
+    // a pairing from the newest leaf. registerEvent owns listener cleanup.
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        this.readerRegistry.refresh();
+      }),
+    );
+    this.registerEvent(
+      this.app.workspace.on("file-open", () => {
+        this.readerRegistry.refresh();
+      }),
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        this.readerRegistry.refresh();
+      }),
+    );
 
     // `changed` also fires when a file's cache entry is first built, which
     // covers notes created after load; `resolved` covers the initial load
@@ -154,8 +202,22 @@ export default class ObservationCarPlugin extends Plugin {
     return this.bookNoteStore.paths();
   }
 
+  /** Active reader pairing for a cached book-note path, if one is open. */
+  getReaderPairingForNote(path: string): ReaderPairing | undefined {
+    return this.readerRegistry.getByNotePath(path);
+  }
+
   onunload(): void {
+    this.readerRegistry.clear();
     this.bookNoteStore.clear();
+  }
+
+  /** Resolve a wikilink target to Obsidian's canonical vault file. */
+  private resolveLink(linkpath: string, sourcePath: string): TFile | null {
+    return this.app.metadataCache.getFirstLinkpathDest(
+      linkpath,
+      sourcePath,
+    );
   }
 
   /**
