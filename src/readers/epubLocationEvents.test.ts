@@ -27,6 +27,7 @@ const epub = vi.hoisted(() => {
 
   const rendition = {
     themes: { register: () => {}, select: () => {} },
+    location: null as unknown,
     on: (event: string, callback: (...args: unknown[]) => void) => {
       (listeners[event] ??= []).push(callback);
     },
@@ -62,6 +63,9 @@ const epub = vi.hoisted(() => {
       for (const key of Object.keys(listeners)) delete listeners[key];
     },
     emit(event: string, ...args: unknown[]) {
+      if (event === "relocated") {
+        rendition.location = args[0];
+      }
       const callbacks = [...(listeners[event] ?? [])];
       for (const callback of callbacks) {
         callback(...args);
@@ -99,9 +103,12 @@ const makeLeaf = () =>
 const makeFile = (path: string) =>
   ({ path, basename: path.split("/").pop() ?? path }) as TFile;
 
-const makeHost = (): EpubViewHost => ({
+const makeHost = (overrides: Partial<EpubViewHost> = {}): EpubViewHost => ({
   settings: { ...DEFAULT_SETTINGS },
   updateSettings: async () => undefined,
+  getLastEpubLocation: () => null,
+  rememberEpubLocation: async () => undefined,
+  ...overrides,
 });
 
 beforeEach(() => {
@@ -134,6 +141,49 @@ afterEach(() => {
 });
 
 describe("EpubView location events (F2.5)", () => {
+  it("records the last CFI under the current book's vault path", async () => {
+    vi.useFakeTimers();
+    const rememberEpubLocation = vi.fn(async () => undefined);
+    const view = new EpubView(makeLeaf(), makeHost({ rememberEpubLocation }));
+    const file = makeFile("Books/Test.epub");
+    await view.onLoadFile(file);
+
+    epub.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(rememberEpubLocation).toHaveBeenCalledOnce();
+    expect(rememberEpubLocation).toHaveBeenCalledWith(
+      file.path,
+      "#epubcfi(/6/8!/4/2/1:0)",
+    );
+    await view.onClose();
+  });
+
+  it("records the rendition's current CFI when closed inside the debounce window", async () => {
+    vi.useFakeTimers();
+    const rememberEpubLocation = vi.fn(async () => undefined);
+    const view = new EpubView(makeLeaf(), makeHost({ rememberEpubLocation }));
+    const file = makeFile("Books/Test.epub");
+    await view.onLoadFile(file);
+
+    epub.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/14!/4/2/12:0)", "chapters/ch3.xhtml"),
+    );
+    await view.onClose();
+
+    expect(rememberEpubLocation).toHaveBeenCalledOnce();
+    expect(rememberEpubLocation).toHaveBeenCalledWith(
+      file.path,
+      "#epubcfi(/6/14!/4/2/12:0)",
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    expect(rememberEpubLocation).toHaveBeenCalledOnce();
+  });
+
   it("emits a debounced LocationChanged with {file, fragment, chapter, label}", async () => {
     vi.useFakeTimers();
     const view = new EpubView(makeLeaf(), makeHost());

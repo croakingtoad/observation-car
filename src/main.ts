@@ -1,7 +1,6 @@
 import { Plugin, TFile } from "obsidian";
 import {
   DEFAULT_SETTINGS,
-  mergeSettings,
   type ObservationCarSettings,
 } from "./settings";
 import { ObservationCarSettingTab } from "./settingsTab";
@@ -11,6 +10,7 @@ import {
 } from "./model/bookNote";
 import { BookNoteStore } from "./model/bookNoteStore";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
+import { loadPluginData, serializePluginData } from "./pluginData";
 
 /**
  * Observation Car — plugin entry point.
@@ -29,11 +29,18 @@ import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
 export default class ObservationCarPlugin extends Plugin {
   settings: ObservationCarSettings = DEFAULT_SETTINGS;
 
+  /** F2.4: last canonical EPUB CFI, keyed by the book's vault path. */
+  private epubLastLocations: Record<string, string> = {};
+  private dataRevision = 0;
+  private dataSave: Promise<void> | null = null;
+
   /** Parsed book notes, keyed by vault path (PRD §5.2 storage model). */
   private bookNoteStore!: BookNoteStore;
 
   async onload(): Promise<void> {
-    this.settings = mergeSettings(await this.loadData());
+    const pluginData = loadPluginData(await this.loadData());
+    this.settings = pluginData.settings;
+    this.epubLastLocations = pluginData.epubLastLocations;
     this.addSettingTab(new ObservationCarSettingTab(this.app, this));
 
     // F2.1: `.epub` opens in the in-plugin reader view; no external
@@ -93,7 +100,21 @@ export default class ObservationCarPlugin extends Plugin {
    */
   async updateSettings(patch: Partial<ObservationCarSettings>): Promise<void> {
     this.settings = { ...this.settings, ...patch };
-    await this.saveData(this.settings);
+    await this.persistData();
+  }
+
+  /** F2.4: the last location recorded for one EPUB, if any. */
+  getLastEpubLocation(path: string): string | null {
+    return this.epubLastLocations[path] ?? null;
+  }
+
+  /** F2.4: persist one EPUB's canonical CFI without disturbing other books. */
+  async rememberEpubLocation(path: string, fragment: string): Promise<void> {
+    if (this.epubLastLocations[path] === fragment) {
+      return;
+    }
+    this.epubLastLocations[path] = fragment;
+    await this.persistData();
   }
 
   /** The cached parse of a book note, or undefined if the store holds none. */
@@ -136,5 +157,34 @@ export default class ObservationCarPlugin extends Plugin {
       this.bookNoteStore.scheduleReparse(file.path);
     }
     await this.bookNoteStore.flush();
+  }
+
+  /**
+   * Serialize settings and per-book state through one writer. If state changes
+   * during a save, the loop writes a fresh snapshot before resolving callers.
+   */
+  private async persistData(): Promise<void> {
+    this.dataRevision += 1;
+    if (this.dataSave === null) {
+      this.dataSave = this.flushData();
+    }
+    const save = this.dataSave;
+    try {
+      await save;
+    } finally {
+      if (this.dataSave === save) {
+        this.dataSave = null;
+      }
+    }
+  }
+
+  private async flushData(): Promise<void> {
+    let savedRevision = -1;
+    while (savedRevision !== this.dataRevision) {
+      savedRevision = this.dataRevision;
+      await this.saveData(
+        serializePluginData(this.settings, this.epubLastLocations),
+      );
+    }
   }
 }

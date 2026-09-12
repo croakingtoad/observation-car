@@ -19,7 +19,7 @@ import { FileView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
 import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
 import { type Location as EpubRenditionLocation } from "epubjs/types/rendition";
-import { parseFragment } from "../model/anchor";
+import { buildEpubCfiFragment, parseFragment } from "../model/anchor";
 import { EpubThemes } from "./epubThemes";
 import { EpubLocationTracker, type EpubLocation } from "./epubLocation";
 import type { EpubFlowMode, ObservationCarSettings } from "../settings";
@@ -48,6 +48,8 @@ interface PreparedLocationEvents {
 export interface EpubViewHost {
   settings: ObservationCarSettings;
   updateSettings(patch: Partial<ObservationCarSettings>): Promise<void>;
+  getLastEpubLocation(path: string): string | null;
+  rememberEpubLocation(path: string, fragment: string): Promise<void>;
 }
 
 export class EpubView extends FileView {
@@ -74,6 +76,8 @@ export class EpubView extends FileView {
   private locationListeners = new Set<(loc: EpubLocationEvent) => void>();
   private renderedFlowMode: EpubFlowMode | null = null;
   private flowModeChange: Promise<void> | null = null;
+  /** The book whose initial relocation must not overwrite its saved CFI. */
+  private restoringFile: TFile | null = null;
 
   constructor(leaf: WorkspaceLeaf, private readonly host: EpubViewHost) {
     super(leaf);
@@ -116,12 +120,34 @@ export class EpubView extends FileView {
   }
 
   async onLoadFile(file: TFile): Promise<void> {
+    // A same-leaf book swap has no intervening onClose. Capture the old
+    // rendition's exact position before replacing `this.file`.
+    void this.persistRenderedLocation();
+    const restoredFragment = this.host.getLastEpubLocation(file.path);
     this.file = file;
-    await this.renderBook(file);
+    this.restoringFile = restoredFragment === null ? null : file;
+    try {
+      await this.renderBook(file);
+      if (
+        restoredFragment !== null &&
+        this.file === file &&
+        this.rendition !== null
+      ) {
+        await this.openAtFragment(restoredFragment);
+      }
+    } finally {
+      if (this.restoringFile === file) {
+        this.restoringFile = null;
+      }
+    }
   }
 
   async onClose(): Promise<void> {
-    this.disposeReader();
+    try {
+      await this.persistRenderedLocation();
+    } finally {
+      this.disposeReader();
+    }
   }
 
   /** Open this EPUB at a CFI or spine-item fragment. */
@@ -342,11 +368,47 @@ export class EpubView extends FileView {
         return;
       }
       const event: EpubLocationEvent = { ...loc, file };
+      if (this.restoringFile !== file) {
+        void this.persistCurrentLocation(file.path, event.fragment);
+      }
       for (const listener of [...this.locationListeners]) {
         listener(event);
       }
     });
     return { tracker, relocatedHandler: onRelocated, forward };
+  }
+
+  private async persistCurrentLocation(
+    path: string,
+    fragment: string,
+  ): Promise<void> {
+    try {
+      await this.host.rememberEpubLocation(path, fragment);
+    } catch (error: unknown) {
+      console.error("Observation Car: could not save EPUB location", error);
+    }
+  }
+
+  /** Persist the rendition's immediate position, including a debounced turn. */
+  private persistRenderedLocation(): Promise<void> {
+    const file = this.file;
+    const cfi = this.rendition?.location?.start?.cfi;
+    if (
+      file === null ||
+      cfi === undefined ||
+      this.restoringFile === file
+    ) {
+      return Promise.resolve();
+    }
+    try {
+      return this.persistCurrentLocation(
+        file.path,
+        buildEpubCfiFragment(cfi),
+      );
+    } catch {
+      // A malformed rendition location cannot be restored; ignore it.
+      return Promise.resolve();
+    }
   }
 
   /** Detach F2.5 location events from the current rendition. */

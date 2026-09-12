@@ -168,11 +168,19 @@ function file(path: string): TFile {
   return { path, basename: path.split("/").pop() ?? path } as unknown as TFile;
 }
 
-function makeView(readBinary: (file: TFile) => Promise<Uint8Array>): EpubView {
-  const host: EpubViewHost = {
+function makeHost(): EpubViewHost {
+  return {
     settings: { ...DEFAULT_SETTINGS },
     updateSettings: async () => undefined,
+    getLastEpubLocation: () => null,
+    rememberEpubLocation: async () => undefined,
   };
+}
+
+function makeView(
+  readBinary: (file: TFile) => Promise<Uint8Array>,
+  host: EpubViewHost = makeHost(),
+): EpubView {
   const view = new EpubView(null as unknown as WorkspaceLeaf, host);
   // Mirrors the workspace injecting the App into a real view.
   Object.assign(view, { app: { vault: { readBinary } } });
@@ -202,6 +210,49 @@ afterEach(() => {
 });
 
 describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
+  it("reopens a book at its recorded CFI through openAtFragment", async () => {
+    vi.useFakeTimers();
+    const locations: Record<string, string> = {};
+    const host: EpubViewHost = {
+      ...makeHost(),
+      getLastEpubLocation: (path) => locations[path] ?? null,
+      rememberEpubLocation: async (path, fragment) => {
+        locations[path] = fragment;
+      },
+    };
+    const openedFile = file("library/a.epub");
+    const firstView = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+      host,
+    );
+    await firstView.onLoadFile(openedFile);
+    FakeRendition.instances[0].emit("relocated", {
+      start: {
+        cfi: "epubcfi(/6/8!/4/2/1:0)",
+        href: "chapters/ch1.xhtml",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(locations[openedFile.path]).toBe("#epubcfi(/6/8!/4/2/1:0)");
+    await firstView.onClose();
+
+    const secondView = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+      host,
+    );
+    const openAtFragment = vi
+      .spyOn(secondView, "openAtFragment")
+      .mockResolvedValue(undefined);
+    await secondView.onLoadFile(openedFile);
+
+    expect(openAtFragment).toHaveBeenCalledOnce();
+    expect(openAtFragment).toHaveBeenCalledWith(
+      "#epubcfi(/6/8!/4/2/1:0)",
+    );
+    expect(FakeRendition.instances[1].display).toHaveBeenCalledOnce();
+    await secondView.onClose();
+  });
+
   it("a second open inside the readBinary window leaves exactly one live reader", async () => {
     const firstRead = deferred();
     const readBinary = vi
