@@ -148,7 +148,11 @@ const CFI_A = "epubcfi(/6/8!/4/2/1:0)";
 const CFI_B = "epubcfi(/6/22!/4/2/9:0)";
 
 interface FlowHost extends EpubViewHost {
+  beforeSettingsWrite: (
+    patch: Parameters<EpubViewHost["updateSettings"]>[0],
+  ) => Promise<void>;
   locations: Record<string, string>;
+  persistSettings: () => Promise<void>;
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -163,13 +167,21 @@ function makeFile(path: string): TFile {
   return { path, basename: path.split("/").pop() ?? path } as TFile;
 }
 
-function createHost(): FlowHost {
+function createHost(options: {
+  beforeSettingsWrite?: FlowHost["beforeSettingsWrite"];
+  persistSettings?: FlowHost["persistSettings"];
+} = {}): FlowHost {
   const host: FlowHost = {
     settings: { ...DEFAULT_SETTINGS },
+    beforeSettingsWrite:
+      options.beforeSettingsWrite ?? (async () => undefined),
     locations: {},
+    persistSettings: options.persistSettings ?? (async () => undefined),
     updateSettings: vi.fn(async (patch) => {
-      // Faithful to main.ts:102-105: merge first, then persist.
+      await host.beforeSettingsWrite(patch);
+      // Faithful to main.ts:102-105: merge, then await persistence.
       host.settings = { ...host.settings, ...patch };
+      await host.persistSettings();
     }),
     getLastEpubLocation: (path) => host.locations[path] ?? null,
     rememberEpubLocation: vi.fn(async (path, fragment) => {
@@ -224,6 +236,22 @@ async function swapWhileFlowRenderIsBlocked(
   };
 }
 
+function expectBookStillInstalled(
+  view: EpubView,
+  file: TFile,
+  book: InstanceType<typeof FakeBook>,
+  bookCount: number,
+): void {
+  const reader = view as unknown as {
+    renderedFile: TFile | null;
+    rendition: InstanceType<typeof FakeRendition> | null;
+  };
+  expect(FakeBook.instances).toHaveLength(bookCount);
+  expect(reader.renderedFile).toBe(file);
+  expect(book.rendition.destroyed).toBe(false);
+  expect(reader.rendition).toBe(book.rendition);
+}
+
 beforeAll(() => {
   const proto = HTMLElement.prototype as unknown as {
     createDiv: (options?: { cls?: string }) => HTMLDivElement;
@@ -255,6 +283,57 @@ beforeEach(() => {
 });
 
 describe("F2.2 flow-mode recovery", () => {
+  // QC-PROBE-W / MX-S1: the first ownership check after settings save.
+  it("does not render book A after its settings write is superseded", async () => {
+    const persistGate = deferred();
+    const host = createHost({
+      persistSettings: async () => persistGate.promise,
+    });
+    const { view } = await openInitialBook(host);
+
+    const toggle = view.setFlowMode("scrolled");
+    await vi.waitFor(() => {
+      expect(host.updateSettings).toHaveBeenCalledOnce();
+    });
+    expect(host.settings.epubFlowMode).toBe("scrolled");
+
+    await view.onLoadFile(FILE_B);
+    const bookB = FakeBook.instances[1];
+    persistGate.resolve();
+    await toggle;
+
+    expectBookStillInstalled(view, FILE_B, bookB, 2);
+  });
+
+  // QC-PROBE-V / MX-S4: ownership after a parked rollback write.
+  it("does not recover book A after its rollback is superseded", async () => {
+    const rollbackGate = deferred();
+    let settingsWrite = 0;
+    const host = createHost({
+      beforeSettingsWrite: async () => {
+        settingsWrite += 1;
+        if (settingsWrite === 2) {
+          await rollbackGate.promise;
+        }
+      },
+    });
+    const { view } = await openInitialBook(host);
+    state.failNextInitialDisplay = true;
+
+    const toggle = view.setFlowMode("scrolled");
+    await vi.waitFor(() => {
+      expect(host.updateSettings).toHaveBeenCalledTimes(2);
+    });
+    expect(host.settings.epubFlowMode).toBe("scrolled");
+
+    await view.onLoadFile(FILE_B);
+    const bookB = FakeBook.instances[2];
+    rollbackGate.resolve();
+    await toggle;
+
+    expectBookStillInstalled(view, FILE_B, bookB, 3);
+  });
+
   // QC-PROBE-X plus the existing toggle-vs-toggle mutex pin.
   it("keeps a second toggle from driving a replacement book", async () => {
     const host = createHost();
