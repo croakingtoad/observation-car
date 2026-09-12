@@ -19,6 +19,12 @@ import {
   type LocationChanged,
 } from "./sync/scrollSync";
 
+interface RecordedCommand {
+  id: string;
+  name: string;
+  editorCallback?: (editor: unknown, context: unknown) => unknown;
+}
+
 /**
  * The plugin wiring is the seam with the Obsidian runtime, so this suite
  * substitutes the `obsidian` module with recording doubles — the events
@@ -56,11 +62,21 @@ vi.mock("obsidian", () => {
       }
     }
     registerExtensions(_extensions: string[], _viewType: string): void {}
-    addSettingTab(_tab: unknown): void {}
-    addCommand(command: unknown): unknown {
+    addCommand(command: RecordedCommand): RecordedCommand {
       this.commands.push(command);
+      if (
+        typeof this.app === "object" &&
+        this.app !== null &&
+        "registeredCommands" in this.app
+      ) {
+        const app = this.app as {
+          registeredCommands: Map<string, typeof command>;
+        };
+        app.registeredCommands.set(command.id, command);
+      }
       return command;
     }
+    addSettingTab(_tab: unknown): void {}
     async loadData(): Promise<unknown> {
       return {};
     }
@@ -185,6 +201,7 @@ interface FakeVault {
   metadataHandlers: Map<string, Handler>;
   vaultHandlers: Map<string, Handler>;
   workspaceHandlers: Map<string, Handler>;
+  registeredCommands: Map<string, RecordedCommand>;
   registeredViews: Map<string, (leaf: unknown) => unknown>;
   leaves: Set<unknown>;
   leafQueries: { count: number };
@@ -222,6 +239,7 @@ function makeFakeVault(): FakeVault {
   const metadataHandlers = new Map<string, Handler>();
   const vaultHandlers = new Map<string, Handler>();
   const workspaceHandlers = new Map<string, Handler>();
+  const registeredCommands = new Map<string, RecordedCommand>();
   const registeredViews = new Map<string, (leaf: unknown) => unknown>();
   const leaves = new Set<unknown>();
   const leafQueries = { count: 0 };
@@ -366,6 +384,7 @@ function makeFakeVault(): FakeVault {
         return leaf;
       },
     },
+    registeredCommands,
     registeredViews,
   };
 
@@ -379,6 +398,7 @@ function makeFakeVault(): FakeVault {
     metadataHandlers,
     vaultHandlers,
     workspaceHandlers,
+    registeredCommands,
     registeredViews,
     leaves,
     leafQueries,
@@ -823,6 +843,76 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(fake.openedFiles).toEqual(["Reading/Surprised by Grace.md"]);
     expect(fake.createdSplitLeaves[0]?.splitFrom).toBe(reader.leaf);
     expect(fake.createdSplitLeaves[0]?.getRoot()).toBe(fake.rootSplit);
+  });
+
+  it("registers an explicit, idempotent section-sort editor command", () => {
+    const command = fake.registeredCommands.get(
+      "sort-sections-by-book-position",
+    );
+    expect(command?.name).toBe("Sort sections by book position");
+    if (command?.editorCallback === undefined) {
+      throw new Error("section-sort editor command was not registered");
+    }
+
+    const handReordered = [
+      "---",
+      `source: "[[${SOURCE}]]"`,
+      "format: epub",
+      "---",
+      "Preamble stays put.",
+      `## [[${SOURCE}#${CFI_2}|Later]]`,
+      "later body",
+      `## [[${SOURCE}#${CFI_1}|Earlier]]`,
+      "earlier body",
+    ].join("\n");
+    const expected = [
+      "---",
+      `source: "[[${SOURCE}]]"`,
+      "format: epub",
+      "---",
+      "Preamble stays put.",
+      `## [[${SOURCE}#${CFI_1}|Earlier]]`,
+      "earlier body",
+      `## [[${SOURCE}#${CFI_2}|Later]]`,
+      "later body",
+    ].join("\n");
+    const noteFile = addMdFile(
+      "Reading/A.md",
+      handReordered,
+      NOTE_FRONTMATTER,
+    );
+    let editorText = handReordered;
+    const setValue = vi.fn((value: string) => {
+      editorText = value;
+    });
+    const editor = {
+      getValue: (): string => editorText,
+      setValue,
+    };
+
+    command.editorCallback(editor, { file: noteFile });
+    expect(editorText).toBe(expected);
+    expect(setValue).toHaveBeenCalledOnce();
+
+    command.editorCallback(editor, { file: noteFile });
+    expect(editorText).toBe(expected);
+    expect(setValue).toHaveBeenCalledOnce();
+  });
+
+  it("does not run the section-sort command without a backing file", () => {
+    const command = fake.registeredCommands.get(
+      "sort-sections-by-book-position",
+    );
+    if (command?.editorCallback === undefined) {
+      throw new Error("section-sort editor command was not registered");
+    }
+    const getValue = vi.fn(() => NOTE_TEXT);
+    const setValue = vi.fn();
+
+    command.editorCallback({ getValue, setValue }, { file: undefined });
+
+    expect(getValue).not.toHaveBeenCalled();
+    expect(setValue).not.toHaveBeenCalled();
   });
 
   it("a changed event caches a candidate note after the debounce window", async () => {

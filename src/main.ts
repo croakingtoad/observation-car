@@ -12,9 +12,11 @@ import {
 import { ObservationCarSettingTab } from "./settingsTab";
 import {
   isBookNoteCandidate,
+  parseBookNote,
   type BookNote,
 } from "./model/bookNote";
 import { BookNoteStore } from "./model/bookNoteStore";
+import { sortSectionsByBookPosition } from "./model/sortBookNoteSections";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
 import {
   ReaderRegistry,
@@ -57,6 +59,24 @@ export default class ObservationCarPlugin extends Plugin {
   async onload(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
     this.addSettingTab(new ObservationCarSettingTab(this.app, this));
+
+    this.addCommand({
+      id: "sort-sections-by-book-position",
+      name: "Sort sections by book position",
+      editorCallback: (editor, context) => {
+        const notePath = context.file?.path;
+        if (notePath === undefined) return;
+
+        const text = editor.getValue();
+        const bookNote = parseBookNote(text, {
+          anchorHeadingLevel: this.settings.anchorHeadingLevel,
+          resolveLink: (linkpath) =>
+            this.resolveLink(linkpath, notePath)?.path ?? null,
+        });
+        const sorted = sortSectionsByBookPosition(text, bookNote.sections);
+        if (sorted !== text) editor.setValue(sorted);
+      },
+    });
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
