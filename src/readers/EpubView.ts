@@ -516,6 +516,7 @@ export class EpubView extends FileView {
       return;
     } catch (error: unknown) {
       if (!this.ownsFlowChange(file, generation)) {
+        console.error("Observation Car: abandoned EPUB flow-mode failure", error);
         return;
       }
       const failures: unknown[] = [error];
@@ -526,6 +527,7 @@ export class EpubView extends FileView {
       }
 
       if (!this.ownsFlowChange(file, generation)) {
+        console.error("Observation Car: abandoned EPUB flow-mode failure", error);
         return;
       }
       if (this.rendition === null || this.renderedFlowMode !== previousMode) {
@@ -549,6 +551,10 @@ export class EpubView extends FileView {
           }
         } catch (recoveryError: unknown) {
           if (!this.ownsFlowChange(file, generation)) {
+            console.error(
+              "Observation Car: abandoned EPUB flow-mode recovery failure",
+              recoveryError,
+            );
             return;
           }
           failures.push(recoveryError);
