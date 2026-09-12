@@ -16,6 +16,7 @@
 import { FileView, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
 import { EpubNavigationTools } from "./epubNavigationTools";
+import { EpubStyles } from "./epubStyles";
 import { EpubThemes } from "./epubThemes";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
@@ -26,6 +27,7 @@ export class EpubView extends FileView {
 
   private book: Book | null = null;
   private rendition: Rendition | null = null;
+  private styles: EpubStyles | null = null;
   private themes: EpubThemes | null = null;
   private navigationTools: EpubNavigationTools | null = null;
 
@@ -67,6 +69,7 @@ export class EpubView extends FileView {
       width: "100%",
       height: "100%",
     });
+    this.styles = new EpubStyles(this.book, this.rendition);
     this.navigationTools = new EpubNavigationTools(
       viewerEl,
       file.path,
@@ -82,6 +85,8 @@ export class EpubView extends FileView {
     this.navigationTools = null;
     this.themes?.destroy();
     this.themes = null;
+    this.styles?.destroy();
+    this.styles = null;
     this.rendition?.destroy();
     this.rendition = null;
     this.book?.destroy();
