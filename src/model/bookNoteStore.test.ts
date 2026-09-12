@@ -212,6 +212,49 @@ describe("BookNoteStore", () => {
     expect(store.has("b.md")).toBe(true);
   });
 
+  it("flush() does not resolve until paths scheduled mid-run are parsed", async () => {
+    // The QC Tier 2 probe: with a run in flight, the old flush() set
+    // rerunRequested and returned immediately, so `await flush()`
+    // resolved with b.md still unparsed.
+    let releaseFirst: (text: string) => void = () => {};
+    const firstRead = new Promise<string>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const { store, reads } = makeStore({
+      readText: async (path) => (path === "a.md" ? await firstRead : NOTE_TEXT),
+    });
+    store.scheduleReparse("a.md");
+    const flushing = store.flush();
+    store.scheduleReparse("b.md"); // while a.md's read is in flight
+    const secondFlush = store.flush();
+    expect(store.has("b.md")).toBe(false); // still unparsed
+
+    releaseFirst(NOTE_TEXT);
+    await secondFlush;
+    expect(reads).toEqual(["a.md", "b.md"]);
+    expect(store.has("a.md")).toBe(true);
+    expect(store.has("b.md")).toBe(true); // true at the moment flush resolved
+    await flushing;
+  });
+
+  it("a second flush concurrent with the first also awaits the full drain", async () => {
+    let releaseFirst: (text: string) => void = () => {};
+    const firstRead = new Promise<string>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const { store } = makeStore({
+      readText: async (path) => (path === "a.md" ? await firstRead : NOTE_TEXT),
+    });
+    store.scheduleReparse("a.md");
+    const first = store.flush();
+    store.scheduleReparse("b.md");
+    const second = store.flush();
+    releaseFirst(NOTE_TEXT);
+    await Promise.all([first, second]);
+    expect(store.has("a.md")).toBe(true);
+    expect(store.has("b.md")).toBe(true);
+  });
+
   it("a parse failure keeps batch siblings cached and surfaces the error", async () => {
     // The store's seam with the parser is this import; spy there so the
     // throw is deterministic. The parser's own throw contract (rethrow
