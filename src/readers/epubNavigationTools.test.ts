@@ -1,11 +1,12 @@
 import type { Book } from "epubjs";
 import { JSDOM } from "jsdom";
-import type { TFile, WorkspaceLeaf } from "obsidian";
+import type { Command, TFile, WorkspaceLeaf } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtime = vi.hoisted(() => ({
   createEpub: vi.fn(),
   readBinary: vi.fn(),
+  noticeMessages: [] as string[],
 }));
 
 vi.mock("epubjs", async (importOriginal) => {
@@ -14,14 +15,40 @@ vi.mock("epubjs", async (importOriginal) => {
 });
 
 vi.mock("obsidian", () => {
+  class TFile {
+    readonly path: string;
+    readonly extension: string;
+    readonly basename: string;
+
+    constructor(path: string) {
+      this.path = path;
+      const name = path.split("/").at(-1) ?? path;
+      this.extension = name.split(".").at(-1) ?? "";
+      this.basename = name.slice(0, -(this.extension.length + 1));
+    }
+  }
+
+  class TFolder {
+    constructor(readonly path: string) {}
+  }
+
+  class Notice {
+    constructor(message: string) {
+      runtime.noticeMessages.push(message);
+    }
+  }
+
   class FileView {
-    readonly app = { vault: { readBinary: runtime.readBinary } };
+    readonly app: unknown;
+    readonly leaf: unknown;
     readonly contentEl: HTMLElement & {
       createDiv(options?: { cls?: string }): HTMLDivElement;
       empty(): void;
     };
 
-    constructor(_leaf: unknown) {
+    constructor(leaf: { app?: unknown }) {
+      this.app = leaf.app ?? { vault: { readBinary: runtime.readBinary } };
+      this.leaf = leaf;
       const contentEl = document.createElement("div") as FileView["contentEl"];
       contentEl.createDiv = (options = {}) => {
         const child = document.createElement("div");
@@ -38,9 +65,13 @@ vi.mock("obsidian", () => {
     }
   }
 
-  return { FileView };
+  const normalizePath = (path: string): string =>
+    path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\//, "");
+
+  return { FileView, Notice, TFile, TFolder, normalizePath };
 });
 
+import { registerCreateBookNoteCommand } from "../commands/createBookNote";
 import {
   EpubKeyBridge,
   type EpubKeyBridgeRendition,
@@ -192,7 +223,13 @@ function fakeBook(title: string, rendition: FakeRendition): Book {
 }
 
 function bookFile(path: string): TFile {
-  return { path, basename: path.split("/").at(-1) ?? path } as TFile;
+  const name = path.split("/").at(-1) ?? path;
+  const extension = name.split(".").at(-1) ?? "";
+  return {
+    path,
+    extension,
+    basename: name.slice(0, -(extension.length + 1)),
+  } as TFile;
 }
 
 function keyboardEvent(
@@ -512,5 +549,98 @@ describe("EpubView reader replacement", () => {
     expect(oldRendition.removedHandlerCount("rendered")).toBe(2);
     expect(oldRendition.activeHandlerCount("rendered")).toBe(0);
     await view.onClose();
+  });
+});
+
+describe("forwarded EPUB hotkey integration", () => {
+  it("creates the note for the iframe that received the chord, not the last active book", async () => {
+    const { EpubView, EPUB_VIEW_TYPE } = await import("./EpubView");
+    const firstDocument = childDocument(document);
+    const secondDocument = childDocument(document);
+    const firstRendition = new FakeRendition(firstDocument);
+    const secondRendition = new FakeRendition(secondDocument);
+    runtime.createEpub
+      .mockReturnValueOnce(fakeBook("Book A", firstRendition))
+      .mockReturnValueOnce(fakeBook("Book B", secondRendition));
+
+    const createdFiles: string[] = [];
+    let activeView: InstanceType<typeof EpubView> | null = null;
+    let command: Command | undefined;
+    const app = {
+      vault: {
+        readBinary: runtime.readBinary,
+        getAbstractFileByPath: vi.fn(() => null),
+        createFolder: vi.fn(async (): Promise<void> => undefined),
+        create: vi.fn(async (path: string): Promise<TFile> => {
+          createdFiles.push(path);
+          return bookFile(path);
+        }),
+      },
+      workspace: {
+        getActiveViewOfType: vi.fn(() => activeView),
+        getLeavesOfType: vi.fn(() => [firstLeaf, secondLeaf]),
+        setActiveLeaf: vi.fn((leaf: TestLeaf) => {
+          activeView = leaf.view;
+        }),
+        on: vi.fn(() => ({ name: "active-leaf-change" })),
+        getLeaf: vi.fn(() => ({
+          openFile: vi.fn(async (): Promise<void> => undefined),
+        })),
+      },
+    };
+    interface TestLeaf {
+      app: typeof app;
+      view: InstanceType<typeof EpubView>;
+      getViewState(): { type: string };
+      loadIfDeferred(): Promise<void>;
+    }
+    const firstLeaf = {
+      app,
+      getViewState: () => ({ type: EPUB_VIEW_TYPE }),
+      loadIfDeferred: vi.fn(async (): Promise<void> => undefined),
+    } as unknown as TestLeaf;
+    const secondLeaf = {
+      app,
+      getViewState: () => ({ type: EPUB_VIEW_TYPE }),
+      loadIfDeferred: vi.fn(async (): Promise<void> => undefined),
+    } as unknown as TestLeaf;
+    firstLeaf.view = new EpubView(firstLeaf as unknown as WorkspaceLeaf);
+    secondLeaf.view = new EpubView(secondLeaf as unknown as WorkspaceLeaf);
+    const plugin = {
+      app,
+      settings: { notesFolder: "", noteTemplate: "{{title}}" },
+      registerEvent: vi.fn(),
+      addCommand: vi.fn((registered: Command) => {
+        command = registered;
+      }),
+    };
+    registerCreateBookNoteCommand(
+      plugin as unknown as Parameters<typeof registerCreateBookNoteCommand>[0],
+    );
+    document.addEventListener("keydown", (event) => {
+      if (event.ctrlKey && event.key === "p") {
+        command?.callback?.();
+      }
+    });
+
+    await firstLeaf.view.onLoadFile(bookFile("Books/Book A.epub"));
+    await secondLeaf.view.onLoadFile(bookFile("Books/Book B.epub"));
+    activeView = secondLeaf.view;
+    firstDocument.dispatchEvent(
+      keyboardEvent(firstDocument, "p", {
+        code: "KeyP",
+        keyCode: 80,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await vi.waitFor(() => expect(createdFiles).toEqual(["Book A.md"]));
+    expect(app.workspace.setActiveLeaf).toHaveBeenLastCalledWith(firstLeaf, {
+      focus: false,
+    });
+    await firstLeaf.view.onClose();
+    await secondLeaf.view.onClose();
   });
 });

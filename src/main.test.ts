@@ -132,9 +132,15 @@ interface FakeVault {
   openedFiles: string[];
   runtime: {
     activeView: unknown;
-    epubLeaves: { view: unknown }[];
+    epubLeaves: FakeEpubLeaf[];
     useMarkdownLinks: boolean;
   };
+}
+
+interface FakeEpubLeaf {
+  view: unknown;
+  getViewState(): { type: string };
+  loadIfDeferred(): Promise<void>;
 }
 
 function makeFakeVault(): FakeVault {
@@ -151,7 +157,7 @@ function makeFakeVault(): FakeVault {
   const openedFiles: string[] = [];
   const runtime = {
     activeView: null as unknown,
-    epubLeaves: [] as { view: unknown }[],
+    epubLeaves: [] as FakeEpubLeaf[],
     useMarkdownLinks: false,
   };
 
@@ -215,7 +221,7 @@ function makeFakeVault(): FakeVault {
     },
     workspace: {
       getActiveViewOfType: (): unknown => runtime.activeView,
-      getLeavesOfType: (): { view: unknown }[] => runtime.epubLeaves,
+      getLeavesOfType: (): FakeEpubLeaf[] => runtime.epubLeaves,
       on: (name: string, callback: Handler): { name: string } => {
         workspaceHandlers.set(name, callback);
         return { name };
@@ -354,10 +360,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     return file;
   }
 
-  function openBookLeaf(book: TFile): { view: EpubView } {
+  function openBookLeaf(book: TFile): FakeEpubLeaf {
     const view = new EpubViewDouble();
     view.file = book;
-    const leaf = { view };
+    const leaf = {
+      view,
+      getViewState: () => ({ type: "observation-car-epub" }),
+      loadIfDeferred: vi.fn(async (): Promise<void> => undefined),
+    };
     fake.runtime.epubLeaves.push(leaf);
     return leaf;
   }
@@ -414,24 +424,44 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(fake.createdFiles).toEqual(["Reading/Surprised by Grace.md"]);
   });
 
-  it("prefers the most recently active EPUB when multiple books are open", async () => {
+  it("shows an ambiguity notice and writes nothing when multiple books are open", async () => {
     const firstBook = fake.files.get(SOURCE);
     expect(firstBook).toBeDefined();
     if (firstBook === undefined) return;
     const secondBook = addBookFile("Books/Second Book.epub");
-    const firstLeaf = openBookLeaf(firstBook);
-    const secondLeaf = openBookLeaf(secondBook);
-    const activeLeafChanged = fake.workspaceHandlers.get("active-leaf-change");
-    expect(activeLeafChanged).toBeDefined();
-    activeLeafChanged?.(firstLeaf);
-    activeLeafChanged?.(secondLeaf);
-    activeLeafChanged?.({ view: {} });
+    openBookLeaf(firstBook);
+    openBookLeaf(secondBook);
     fake.runtime.activeView = null;
 
     getCreateBookNoteCommand()?.callback?.();
     await settleCommand();
 
-    expect(fake.createdFiles).toEqual(["Reading/Second Book.md"]);
+    expect(obsidianMock.noticeMessages).toEqual([
+      "Choose which open book to create a note for",
+    ]);
+    expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("loads a deferred EPUB leaf before resolving its book", async () => {
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    if (book === undefined) return;
+    const leaf: FakeEpubLeaf = {
+      view: {},
+      getViewState: () => ({ type: "observation-car-epub" }),
+      loadIfDeferred: vi.fn(async () => {
+        const view = new EpubViewDouble();
+        view.file = book;
+        leaf.view = view;
+      }),
+    };
+    fake.runtime.epubLeaves.push(leaf);
+
+    getCreateBookNoteCommand()?.callback?.();
+    await settleCommand();
+
+    expect(leaf.loadIfDeferred).toHaveBeenCalledOnce();
+    expect(fake.createdFiles).toEqual(["Reading/Surprised by Grace.md"]);
   });
 
   it("shows a notice and writes nothing when no EPUB is open", async () => {
