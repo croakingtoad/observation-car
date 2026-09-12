@@ -47,7 +47,12 @@ export class BookNoteStore {
   private readonly notes = new Map<string, BookNote>();
   private readonly pending = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private running = false;
+  /**
+   * The re-parse pass currently in flight, if any. `flush()` awaits this
+   * (and loops while work keeps landing) instead of returning early when
+   * a pass is already underway — see `flush` for the contract.
+   */
+  private runPromise: Promise<void> | null = null;
   private rerunRequested = false;
 
   constructor(deps: BookNoteStoreDeps) {
@@ -77,7 +82,7 @@ export class BookNoteStore {
     if (this.timer === null) {
       this.timer = setTimeout(() => {
         this.timer = null;
-        this.runPending().catch((error) => {
+        this.ensureRun().catch((error) => {
           // Per-path read/parse failures are contained and logged inside
           // the loop; only a bug in the store itself escapes here.
           console.error(
@@ -105,26 +110,52 @@ export class BookNoteStore {
     }
   }
 
-  /** Run any pending re-parses now, ignoring the debounce window. */
+  /**
+   * Run any pending re-parses now, ignoring the debounce window.
+   *
+   * Resolves only when every scheduled path has been re-parsed —
+   * including paths scheduled while this flush is in flight. A consumer
+   * that does `await flush(); read()` must never read a half-built cache.
+   */
   async flush(): Promise<void> {
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
+    for (;;) {
+      if (this.timer !== null) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      if (this.runPromise === null && this.pending.size === 0) return;
+      await this.ensureRun();
     }
-    await this.runPending();
+  }
+
+  /**
+   * Make sure a pass is in flight covering the current pending set, and
+   * return its promise. When a pass is already running, the flag it
+   * checks before exiting — together with the pending set itself, which
+   * it re-checks on every loop — makes it pick up whatever was scheduled
+   * after its last snapshot; no second pass, no dropped paths.
+   */
+  private ensureRun(): Promise<void> {
+    if (this.runPromise !== null) {
+      this.rerunRequested = true;
+      return this.runPromise;
+    }
+    const run = this.runPending();
+    this.runPromise = run;
+    return run;
   }
 
   private async runPending(): Promise<void> {
-    if (this.running) {
-      // A run is in flight; its pending-set snapshot may not include paths
-      // scheduled after it started, so re-loop once it is done.
-      this.rerunRequested = true;
-      return;
-    }
-    this.running = true;
     try {
       do {
         this.rerunRequested = false;
+        // Absorb the debounce timer: its paths are already in the pending
+        // set this loop drains, so the timer must not fire a second pass
+        // for work this pass has taken over.
+        if (this.timer !== null) {
+          clearTimeout(this.timer);
+          this.timer = null;
+        }
         const paths = [...this.pending];
         this.pending.clear();
         for (const path of paths) {
@@ -132,9 +163,9 @@ export class BookNoteStore {
           // on, so one bad note can never drop its batch siblings.
           await this.reparsePath(path);
         }
-      } while (this.rerunRequested);
+      } while (this.rerunRequested || this.pending.size > 0);
     } finally {
-      this.running = false;
+      this.runPromise = null;
     }
   }
 
