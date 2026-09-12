@@ -26,7 +26,7 @@ Frontmatter keys:
 | Key | Required | Meaning |
 |---|---|---|
 | `source` | **Yes** — the only required key | Vault path of the book file. Wikilink form (`[[Books/Name.epub]]`) or plain path; a trailing `#fragment` is ignored. A note without a usable `source` is not a book note. |
-| `format` | Recommended | `epub` or `pdf` (case-insensitive). Constrains which fragment kinds count as anchors; a kind/format mismatch is reported as a diagnostic, never guessed at. |
+| `format` | Recommended | `epub` or `pdf` (case-insensitive). Constrains which fragment kinds count as anchors; a kind/format mismatch is reported as a diagnostic, never guessed at. With no `format` or an unrecognized value it is treated as unset: any well-formed fragment kind is accepted and no kind check runs — silently, with no diagnostic. |
 | `type` | No | The convention `book-note`. The parser keys off `source`; this key is for humans and other tools. |
 | `title`, `author` | No | Free text, informational. |
 | `booklore_id`, `booklore_url`, `cover` | No | Booklore provenance: the library's book id, its URL, and a wikilink to a cover image in the vault. Set when a book is downloaded from Booklore. |
@@ -118,15 +118,15 @@ Parsing is strict on purpose: anything outside this grammar is not a position. T
 
 ### Ordering
 
-A section's position in the book lives in its anchor; **the order sections appear in the file is not authoritative**. Sync resolves each section by its parsed position, not its line in the file, so hand-reordering, splitting, or merging sections in the note is tolerated and keeps working. The intended workflow keeps the file tidy for you — new sections insert at their book-sorted position, and a "Sort sections by book position" command re-sorts an existing note (both per PRD §5.2, not yet shipped as of this writing).
+A section's position in the book lives in its anchor; **the order sections appear in the file is not authoritative**. Sync will resolve each section by its parsed position, not its line in the file, so hand-reordering, splitting, or merging sections in the note will be tolerated and keep working. The intended workflow keeps the file tidy for you — new sections insert at their book-sorted position, and a "Sort sections by book position" command re-sorts an existing note (both per PRD §5.2, not yet shipped as of this writing).
 
-Positions compare in book order: EPUB by spine item, then path, then character offset (epub.js `EpubCFI.compare`; range CFIs by their start); PDF by page, then selection rectangle, with a bare `page=N` before any selection on that page.
+Positions compare in book order: EPUB by spine item, then path, then character offset (epub.js `EpubCFI.compare`; range CFIs by their start); PDF by page, then selection rectangle, with a bare `page=N` before any selection on that page. Bare spine-item href anchors currently order lexicographically by href in code-unit order (`chapter-10.xhtml` sorts before `chapter-2.xhtml`); resolving them to true spine order needs the book and is not yet shipped.
 
 ### Chapter membership (focus mode)
 
 Focus mode groups sections by the chapter of their anchor. Chapter membership is computed at read time and is **never stored in the note**:
 
-- **EPUB** — the chapter is inside the anchor itself: the CFI chapter component is of the form `/X/N!`, where epub.js encodes the spine item as `N = (itemIndex + 1) × 2`, so the 0-based spine item index is `N / 2 − 1` (in the example above, `/6/8!` → chapter 3, `/6/14!` → chapter 6). No book file is needed.
+- **EPUB** — the chapter is inside the anchor itself: the CFI chapter component is of the form `/X/N!`, where epub.js encodes the spine item as `N = (itemIndex + 1) × 2`, so the 0-based spine item index is `N / 2 − 1` (in the example above, `/6/8!` → spine item 3 (0-based), `/6/14!` → spine item 6 (0-based)). No book file is needed.
 - **PDF** — the fragment carries no chapter. The chapter is the nearest outline/bookmark entry at or before the page, or — when the PDF has no outline — a configurable `±N` page window around the page (`pdfChapterWindowPages`, default 10).
 
 The focus-mode behaviour itself (folding sections outside the current chapter) is planned (PRD F4.5) and not yet shipped.
