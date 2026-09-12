@@ -7,6 +7,8 @@ import {
 } from "../model/anchor";
 import type { BookNoteSection } from "../model/bookNote";
 import type { Reader, ReaderPairing } from "./ReaderRegistry";
+import { codeMirrorView } from "./codeMirrorView";
+import { setCurrentSectionDecoration } from "./currentSectionDecoration";
 
 /** The reader-side debounce leaves 50 ms of the 200 ms PRD budget. */
 export const DEFAULT_SCROLL_DEBOUNCE_MS = 25;
@@ -45,6 +47,10 @@ export interface ScrollSyncDeps {
   debounceMs?: number;
   typingIdleMs?: number;
   now?: () => number;
+  setCurrentSection?: (
+    editor: ScrollEditor,
+    section: BookNoteSection | null,
+  ) => void;
 }
 
 interface Subscription {
@@ -59,6 +65,12 @@ interface PendingScroll {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+interface CurrentSection {
+  readonly key: string;
+  /** Non-retaining handle to the exact editor that received the class. */
+  readonly editor: WeakRef<ScrollEditor>;
+}
+
 /**
  * Reader-location → book-note-heading synchronization (PRD F4.3).
  *
@@ -71,7 +83,7 @@ export class ScrollSync {
   private readonly subscriptions = new Map<WorkspaceLeaf, Subscription>();
   private readonly pending = new Map<WorkspaceLeaf, PendingScroll>();
   private readonly lastEditorChange = new WeakMap<ScrollEditor, number>();
-  private readonly currentSection = new Map<WorkspaceLeaf, string>();
+  private readonly currentSection = new Map<WorkspaceLeaf, CurrentSection>();
 
   constructor(deps: ScrollSyncDeps) {
     this.deps = deps;
@@ -143,7 +155,7 @@ export class ScrollSync {
       pairing.reader !== pending.reader ||
       pairing.bookFile !== pending.location.file
     ) {
-      this.currentSection.delete(pending.leaf);
+      this.clearCurrentSection(pending.leaf);
       this.pending.delete(pending.leaf);
       return;
     }
@@ -165,13 +177,23 @@ export class ScrollSync {
       position,
     );
     if (section === undefined) {
-      this.currentSection.delete(pending.leaf);
+      this.clearCurrentSection(pending.leaf);
       this.pending.delete(pending.leaf);
       return;
     }
 
     const sectionKey = `${pairing.notePath}\0${section.headingLine}\0${section.fragment}`;
-    if (this.currentSection.get(pending.leaf) === sectionKey) {
+    const current = this.currentSection.get(pending.leaf);
+    if (current?.key === sectionKey) {
+      const editor = this.deps.findEditor(pairing.notePath);
+      if (editor !== null) {
+        this.applyCurrentSection(
+          pending.leaf,
+          editor,
+          section,
+          sectionKey,
+        );
+      }
       this.pending.delete(pending.leaf);
       return;
     }
@@ -192,7 +214,7 @@ export class ScrollSync {
     }
 
     scrollHeadingIntoView(editor, section.headingLine);
-    this.currentSection.set(pending.leaf, sectionKey);
+    this.applyCurrentSection(pending.leaf, editor, section, sectionKey);
     this.pending.delete(pending.leaf);
   }
 
@@ -205,7 +227,37 @@ export class ScrollSync {
       clearTimeout(pending.timer);
     }
     this.pending.delete(leaf);
+    this.clearCurrentSection(leaf);
+  }
+
+  private clearCurrentSection(leaf: WorkspaceLeaf): void {
+    const current = this.currentSection.get(leaf);
+    if (current === undefined) return;
+    const editor = current.editor.deref();
+    if (editor !== undefined) this.setCurrentSection(editor, null);
     this.currentSection.delete(leaf);
+  }
+
+  private applyCurrentSection(
+    leaf: WorkspaceLeaf,
+    editor: ScrollEditor,
+    section: BookNoteSection,
+    key: string,
+  ): void {
+    const previousEditor = this.currentSection.get(leaf)?.editor.deref();
+    if (previousEditor !== undefined && previousEditor !== editor) {
+      this.setCurrentSection(previousEditor, null);
+    }
+    this.setCurrentSection(editor, section);
+    this.currentSection.set(leaf, { key, editor: new WeakRef(editor) });
+  }
+
+  private setCurrentSection(
+    editor: ScrollEditor,
+    section: BookNoteSection | null,
+  ): void {
+    const setCurrent = this.deps.setCurrentSection ?? setCurrentSectionDecoration;
+    setCurrent(editor, section);
   }
 
   private now(): number {
@@ -260,12 +312,4 @@ export function scrollHeadingIntoView(
   }
   const point = { line: resolvedLine, ch: 0 };
   editor.scrollIntoView({ from: point, to: point }, false);
-}
-
-function codeMirrorView(editor: ScrollEditor): EditorView | null {
-  if (typeof editor !== "object" || editor === null || !("cm" in editor)) {
-    return null;
-  }
-  const cm: unknown = editor.cm;
-  return cm instanceof EditorView ? cm : null;
 }
