@@ -263,6 +263,8 @@ describe("BookNoteStore", () => {
 
     releaseFirst(NOTE_TEXT);
     await orphanedRun;
+    expect(store.size).toBe(0);
+    expect(store.has("a.md")).toBe(false);
     expect(Reflect.get(store, "runPromise")).toBe(successorRun);
 
     let lateFlushFinished = false;

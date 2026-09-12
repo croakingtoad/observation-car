@@ -54,6 +54,7 @@ export class BookNoteStore {
    */
   private runPromise: Promise<void> | null = null;
   private rerunRequested = false;
+  private epoch = 0;
 
   constructor(deps: BookNoteStoreDeps) {
     this.deps = deps;
@@ -106,6 +107,7 @@ export class BookNoteStore {
 
   /** Drop everything and cancel a pending re-parse (plugin unload). */
   clear(): void {
+    this.epoch += 1;
     this.pending.clear();
     this.notes.clear();
     this.runPromise = null;
@@ -163,6 +165,7 @@ export class BookNoteStore {
   }
 
   private runPending(): Promise<void> {
+    const epoch = this.epoch;
     let thisRun: Promise<void> | null = null;
     thisRun = (async (): Promise<void> => {
       // `ensureRun` must publish this promise before any path, including an
@@ -183,9 +186,12 @@ export class BookNoteStore {
           for (const path of paths) {
             // Per-path containment: a read or parse failure logs and moves
             // on, so one bad note can never drop its batch siblings.
-            await this.reparsePath(path);
+            await this.reparsePath(path, epoch);
           }
-        } while (this.rerunRequested || this.pending.size > 0);
+        } while (
+          this.epoch === epoch &&
+          (this.rerunRequested || this.pending.size > 0)
+        );
       } finally {
         if (this.runPromise === thisRun) this.runPromise = null;
       }
@@ -199,7 +205,7 @@ export class BookNoteStore {
    * note degrades to stale-but-usable data instead of corrupting the
    * batch or silently discarding state.
    */
-  private async reparsePath(path: string): Promise<void> {
+  private async reparsePath(path: string, epoch: number): Promise<void> {
     let text: string | null;
     try {
       text = await this.deps.readText(path);
@@ -215,6 +221,7 @@ export class BookNoteStore {
       );
       return;
     }
+    if (this.epoch !== epoch) return;
     if (text === null) {
       this.notes.delete(path);
       return;
