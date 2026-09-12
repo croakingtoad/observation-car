@@ -95,8 +95,8 @@ export default class ObservationCarPlugin extends Plugin {
 
   /**
    * Merge a partial update into the settings and persist them to data.json.
-   * The only writer for plugin data; keep the OPDS credentials out of
-   * anything else (notes, logs, events).
+   * This is one of the two callers of `persistData`, alongside
+   * `rememberEpubLocation`.
    */
   async updateSettings(patch: Partial<ObservationCarSettings>): Promise<void> {
     this.settings = { ...this.settings, ...patch };
@@ -160,8 +160,10 @@ export default class ObservationCarPlugin extends Plugin {
   }
 
   /**
-   * Serialize settings and per-book state through one writer. If state changes
-   * during a save, the loop writes a fresh snapshot before resolving callers.
+   * The single writer for plugin data: serialize settings and per-book state
+   * while keeping OPDS credentials out of notes, logs, and events. If state
+   * changes during a save, the loop writes a fresh snapshot before resolving
+   * callers.
    */
   private async persistData(): Promise<void> {
     this.dataRevision += 1;
