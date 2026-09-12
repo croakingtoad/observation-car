@@ -151,7 +151,7 @@ describe("installEpubLinkHandler", () => {
     expect(reader.openAtFragment).not.toHaveBeenCalled();
   });
 
-  it("delegates links that are not resolvable EPUB CFI links", async () => {
+  it("delegates links that do not resolve to vault files", async () => {
     const { app, original } = appFor(null);
     installEpubLinkHandler(app);
 
@@ -166,6 +166,28 @@ describe("installEpubLinkHandler", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("delegates grammar-valid links that resolve to non-EPUB files", async () => {
+    const { app, original, workspace } = appFor(file("Notes/note.md"));
+    installEpubLinkHandler(app);
+    const openViewState = {} as OpenViewState;
+
+    await app.workspace.openLinkText(
+      "note.md#Introduction",
+      "Notes/source.md",
+      "split",
+      openViewState,
+    );
+
+    expect(original).toHaveBeenCalledWith(
+      "note.md#Introduction",
+      "Notes/source.md",
+      "split",
+      openViewState,
+    );
+    expect(workspace.getLeaf).not.toHaveBeenCalled();
+    expect(reader.openAtFragment).not.toHaveBeenCalled();
   });
 
   it("restores the original openLinkText method on uninstall", () => {
