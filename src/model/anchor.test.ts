@@ -344,6 +344,10 @@ describe("spineIndexFromCfi", () => {
     expect(spineIndexFromCfi("epubcfi(/6/8!/4/2/1:0)")).toBe(3);
   });
 
+  it("returns null when the chapter step precedes the first spine item", () => {
+    expect(spineIndexFromCfi("/6/0!/4/2/1:0")).toBeNull();
+  });
+
   it("returns null for non-canonical chapter components", () => {
     expect(spineIndexFromCfi("/6/8")).toBeNull(); // missing "!"
     expect(spineIndexFromCfi("/6!")).toBeNull(); // missing second step

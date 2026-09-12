@@ -12,8 +12,9 @@ import { EpubView, type EpubLocationEvent } from "./EpubView";
  * `obsidian` resolves to the test stub (see `vitest.config.ts`);
  * `epubjs` is mocked below: the view under test is the wiring and
  * lifetime, not epub.js's rendering or Obsidian's view framework. The
- * fake rendition keeps its listeners per event and clears them all on
- * `destroy()`, like a real (collected) rendition's emitter.
+ * fake rendition keeps its listeners per event, including on `destroy()`,
+ * matching epub.js's rendition lifetime so explicit `off()` calls remain
+ * observable.
  */
 
 const epub = vi.hoisted(() => {
@@ -30,9 +31,7 @@ const epub = vi.hoisted(() => {
       );
     },
     display: async () => {},
-    destroy: () => {
-      for (const key of Object.keys(listeners)) delete listeners[key];
-    },
+    destroy: () => {},
   };
 
   const book = {
@@ -61,6 +60,9 @@ const epub = vi.hoisted(() => {
       for (const callback of [...(listeners[event] ?? [])]) {
         callback(...args);
       }
+    },
+    listenerCount(event: string) {
+      return listeners[event]?.length ?? 0;
     },
   };
 });
@@ -217,9 +219,11 @@ describe("EpubView location events (F2.5)", () => {
       "relocated",
       relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
     );
+    const listenersBeforeClose = epub.listenerCount("relocated");
 
     // The event is pending in its 150 ms window when the leaf closes.
     await view.onClose();
+    expect(epub.listenerCount("relocated")).toBe(listenersBeforeClose - 1);
     await vi.advanceTimersByTimeAsync(1000);
     expect(events).toHaveLength(0);
 

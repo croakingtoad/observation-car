@@ -252,18 +252,26 @@ describe("EpubLocationTracker", () => {
     tracker.destroy();
   });
 
-  it("cancels a pending event and stops accepting relocations on destroy", () => {
+  it("cancels a pending event on destroy", () => {
     vi.useFakeTimers();
     const tracker = new EpubLocationTracker();
     const seen = collect(tracker);
 
     tracker.onRelocated(rel("/6/8!/4/2/1:0", "ch1.xhtml"));
     tracker.destroy();
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(1000);
     expect(seen).toHaveLength(0);
+  });
+
+  it("stops accepting relocations after destroy when re-subscribed", () => {
+    vi.useFakeTimers();
+    const tracker = new EpubLocationTracker();
+    tracker.destroy();
+    const afterDestroy = collect(tracker);
 
     tracker.onRelocated(rel("/6/14!/4/2/12:0", "ch3.xhtml"));
     vi.advanceTimersByTime(1000);
-    expect(seen).toHaveLength(0);
+    expect(afterDestroy).toHaveLength(0);
   });
 });
