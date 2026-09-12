@@ -232,16 +232,30 @@ describe("parseBookNote — link resolution (injected resolver)", () => {
     expect(bookNote.diagnostics[0].message).toContain(`[[${SHORT}]]`);
   });
 
-  it("falls back to string comparison when neither path resolves", () => {
-    // The book is not in the vault yet (e.g. before download): file
-    // identity is unavailable, so the old case-insensitive string equality
-    // decides — a short link still does not match a full-path source, and
-    // no diagnostic is claimed (there is no resolution to contradict).
+  it("diagnoses a note source that does not name a file in the vault", () => {
+    const text = note([
+      `## [[${SHORT}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
+      "body",
+    ]);
+    const bookNote = parseBookNote(text, { resolveLink: () => null });
+    expect(bookNote.sections).toHaveLength(0);
+    expect(bookNote.diagnostics).toHaveLength(1);
+    expect(bookNote.diagnostics[0].line).toBe(5);
+    expect(bookNote.diagnostics[0].message).toContain("note's source");
+    expect(bookNote.diagnostics[0].message).toContain(SOURCE);
+    expect(bookNote.diagnostics[0].message).toContain(
+      "does not name a file in the vault",
+    );
+  });
+
+  it("falls back to string comparison when no resolver is supplied", () => {
+    // Without an Obsidian resolver (plain-Node parser use), the old
+    // case-insensitive string equality remains the compatibility path.
     const shortLink = note([
       `## [[${SHORT}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
       "body",
     ]);
-    const miss = parseBookNote(shortLink, { resolveLink: () => null });
+    const miss = parseBookNote(shortLink);
     expect(miss.sections).toHaveLength(0);
     expect(miss.diagnostics).toEqual([]);
 
@@ -249,7 +263,7 @@ describe("parseBookNote — link resolution (injected resolver)", () => {
       `## [[${SOURCE}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
       "body",
     ]);
-    const hit = parseBookNote(exact, { resolveLink: () => null });
+    const hit = parseBookNote(exact);
     expect(hit.sections).toHaveLength(1);
   });
 

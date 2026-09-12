@@ -283,11 +283,22 @@ function resolveAnchor(
   // The source is resolved once per heading; null when there is no
   // resolver or the source does not name a file in the vault.
   const sourceDest = resolveLink === undefined ? null : resolveLink(source);
+  const links = extractWikilinks(headingText);
+
+  if (resolveLink !== undefined && sourceDest === null) {
+    if (links.some((link) => link.fragment !== "")) {
+      diagnostics.push({
+        line,
+        message: `The note's source ${source} does not name a file in the vault, so this heading cannot be anchored`,
+      });
+    }
+    return null;
+  }
 
   let candidate: Wikilink | undefined;
   let mismatch: { path: string; dest: string } | null = null;
   let unresolvable: string | null = null;
-  for (const link of extractWikilinks(headingText)) {
+  for (const link of links) {
     if (link.fragment === "") continue;
     const linkDest = resolveLink === undefined ? null : resolveLink(link.path);
     const matches =

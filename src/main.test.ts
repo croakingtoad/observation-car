@@ -206,6 +206,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     fake = makeFakeVault();
+    addBookFile(SOURCE);
     plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
     await plugin.onload();
   });
