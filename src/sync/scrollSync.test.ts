@@ -199,6 +199,24 @@ describe("ScrollSync", () => {
     );
   });
 
+  it("clears the displaced editor before highlighting a new section", () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    const firstEditor = rig.currentEditor;
+    rig.currentEditor = {
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    };
+    rig.reader.emit(CFI_2);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(rig.setCurrentSection).toHaveBeenCalledWith(firstEditor, null);
+  });
+
   it("does not move before the first anchor, then scrolls when the first anchor is reached", () => {
     vi.useFakeTimers();
     const rig = makeRig();

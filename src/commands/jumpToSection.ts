@@ -90,6 +90,8 @@ function findEnclosingSection(
 }
 
 interface FragmentReader extends Reader {
+  // F2.7 (LOCO-32, 71c4743) implements this on EpubView. This path is
+  // available only after LOCO-364 merges the E002 reader lineage.
   openAtFragment(fragment: string): Promise<void>;
 }
 

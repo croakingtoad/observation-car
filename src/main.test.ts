@@ -899,7 +899,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     ]);
   });
 
-  it("jumps the paired reader to the live editor section containing the cursor", async () => {
+  it("exercises the FragmentReader contract for the live editor section containing the cursor", async () => {
     const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
     fire("metadata", "changed", [noteFile]);
     await settle();
