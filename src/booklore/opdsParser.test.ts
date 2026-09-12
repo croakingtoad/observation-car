@@ -285,6 +285,16 @@ describe("F5.1c parseOpdsFeed — live acquisition feed, page 23 (final page)", 
     expect(entry.language).toBe("en");
   });
 
+  it("decodes entities nested inside escaped summary markup", () => {
+    const entry = feed().entries[0];
+    expect(entry.summary).toContain(
+      '"Whoever does not love does not know God, because God is love."—1 John 4:8',
+    );
+    expect(entry.summary).toContain(
+      '"the best couple therapist in the world," according to bestselling relationship expert',
+    );
+  });
+
   it("classifies the zero-acquisition entry with a null navigation link", () => {
     const entry = feed().entries[1];
     expect(entry.acquisitions).toHaveLength(0);

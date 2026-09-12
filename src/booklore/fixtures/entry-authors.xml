@@ -4,9 +4,9 @@
   one entry with no author elements at all.
   SPEC-DERIVED: hand-authored from OPDS 1.2 (catalog module) and Atom
   (RFC 4287). NOT captured from a live Booklore instance: the LOCO-101
-  survey of all 68 books found no entry carrying two distinct authors
-  (the live library's only multi-author entry duplicates one name,
-  pinned in catalog-page1.xml), so that case has no live equivalent.
+  captured entries include none carrying two distinct authors (the only
+  captured multi-author entry, urn:booklore:book:91, duplicates one name;
+  see catalog-page1.xml), so that case has no captured equivalent.
 -->
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>urn:uuid:44ee55ff-authors</id>
