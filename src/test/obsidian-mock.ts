@@ -32,7 +32,8 @@ export class ItemView {
 export class FileView extends ItemView {}
 
 export class Notice {
-  constructor(message: string) {
+  constructor(message: string, timeout?: number) {
     void message;
+    void timeout;
   }
 }

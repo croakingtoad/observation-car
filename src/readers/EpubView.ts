@@ -19,6 +19,7 @@ import { FileView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
 import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
 import { type Location as EpubRenditionLocation } from "epubjs/types/rendition";
+import { parseFragment } from "../model/anchor";
 import { EpubThemes } from "./epubThemes";
 import { EpubLocationTracker, type EpubLocation } from "./epubLocation";
 import type { EpubFlowMode, ObservationCarSettings } from "../settings";
@@ -121,6 +122,84 @@ export class EpubView extends FileView {
 
   async onClose(): Promise<void> {
     this.disposeReader();
+  }
+
+  /** Open this EPUB at a CFI or spine-item fragment. */
+  async openAtFragment(fragment: string): Promise<void> {
+    try {
+      const position = parseFragment(fragment);
+      const book = this.book;
+      const rendition = this.rendition;
+      if (book === null || rendition === null) {
+        throw new Error("no book is loaded in this leaf");
+      }
+      const activeRendition: Rendition = rendition;
+      if (position.kind === "pdf-page") {
+        throw new Error("a PDF page fragment cannot be opened in an EPUB");
+      }
+
+      const target = position.kind === "epub-cfi"
+        ? `epubcfi(${position.cfi})`
+        : position.href;
+      const section = book.spine.get(target);
+      if (section === null || section === undefined) {
+        throw new Error(`the EPUB spine does not contain "${target}"`);
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        let matchingRelocations = 0;
+        let settled = false;
+        let timeout = 0;
+        const targetHref = section.href;
+        const targetCfi = position.kind === "epub-cfi" ? target : null;
+
+        function finish(error?: unknown): void {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          window.clearTimeout(timeout);
+          activeRendition.off("relocated", onRelocated);
+          if (error === undefined) {
+            resolve();
+          } else {
+            reject(error);
+          }
+        }
+
+        function onRelocated(location: EpubRenditionLocation): void {
+          const matches = targetCfi === null
+            ? location.start.href === targetHref
+            : activeRendition.epubcfi.compare(
+                location.start.cfi,
+                targetCfi,
+              ) <= 0 &&
+              activeRendition.epubcfi.compare(targetCfi, location.end.cfi) <= 0;
+          if (matches === false) {
+            return;
+          }
+
+          matchingRelocations += 1;
+          if (matchingRelocations === 1) {
+            // Queue one final display behind any correction that a pending
+            // resize scheduled from this relocation; the deliberate jump wins.
+            void activeRendition.display(target).catch(finish);
+          } else {
+            finish();
+          }
+        }
+
+        activeRendition.on("relocated", onRelocated);
+        timeout = window.setTimeout(() => {
+          finish(new Error("the reader did not report the new location"));
+        }, 5000);
+        void activeRendition.display(target).catch(finish);
+      });
+    } catch (error) {
+      console.error("Unable to open EPUB fragment", fragment, error);
+      const reason = error instanceof Error ? error.message : String(error);
+      new Notice(`Cannot open EPUB fragment "${fragment}": ${reason}`, 6000);
+    }
   }
 
   /**
