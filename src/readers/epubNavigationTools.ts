@@ -22,7 +22,8 @@
 import { type Book, type Contents, type Rendition } from "epubjs";
 import type Locations from "epubjs/types/locations";
 import { type Location } from "epubjs/types/rendition";
-import { buildEpubCfiFragment } from "../model/anchor";
+import { Notice } from "obsidian";
+import { buildEpubCfiFragment, buildEpubSpineFragment } from "../model/anchor";
 import type { EpubFlowMode } from "../settings";
 import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 
@@ -395,8 +396,18 @@ export class EpubNavigationTools {
 
   private copyTocLink(e: Event, bookTitle: string, href: string, label: string): void {
     e.stopPropagation();
+    let fragment: string;
+    try {
+      fragment = buildEpubSpineFragment(href);
+    } catch {
+      new Notice(
+        "Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.",
+      );
+      return;
+    }
+    const safeLabel = label.replaceAll("|", "｜").replaceAll("]", "］");
     void navigator.clipboard.writeText(
-      `[[${this.bookPath}#${href}|${bookTitle}, ${label}]]`,
+      `[[${this.bookPath}${fragment}|${bookTitle}, ${safeLabel}]]`,
     );
     this.flashCopied(e.currentTarget as HTMLButtonElement);
   }

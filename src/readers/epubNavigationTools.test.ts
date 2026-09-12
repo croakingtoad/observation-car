@@ -1,7 +1,35 @@
-// @vitest-environment jsdom
+import type { Book, Rendition } from "epubjs";
+import { createRequire } from "node:module";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { addPagingListeners } from "./epubNavigationTools";
+const showNotice = vi.hoisted(() => vi.fn());
+
+vi.mock("obsidian", () => ({
+  Notice: showNotice,
+}));
+
+interface TestDom {
+  readonly window: {
+    readonly document: Document;
+    readonly navigator: Navigator;
+    close(): void;
+  };
+}
+
+const testRequire = createRequire(import.meta.url);
+const { JSDOM } = testRequire("jsdom") as {
+  JSDOM: new (html: string) => TestDom;
+};
+const dom = new JSDOM("<!doctype html><html><body></body></html>");
+vi.stubGlobal("document", dom.window.document);
+vi.stubGlobal("navigator", dom.window.navigator);
+
+afterAll(() => {
+  vi.unstubAllGlobals();
+  dom.window.close();
+});
+
+const { addPagingListeners, EpubNavigationTools } = await import("./epubNavigationTools");
 
 interface PointerOptions {
   clientX: number;
@@ -42,6 +70,41 @@ function renderedDocument(bodyWidth: number, documentWidth: number): Document {
     value: documentWidth,
   });
   return doc;
+}
+
+function epubBookWithToc(href: string, label: string): Book {
+  return {
+    loaded: {
+      metadata: Promise.resolve({ title: "Test Book" }),
+      navigation: Promise.resolve({ toc: [{ href, label }] }),
+    },
+  } as unknown as Book;
+}
+
+function inertRendition(): Rendition {
+  return {
+    next: vi.fn().mockResolvedValue(undefined),
+    on: vi.fn(),
+    prev: vi.fn().mockResolvedValue(undefined),
+  } as unknown as Rendition;
+}
+
+async function clickTocCopy(href: string, label: string): Promise<void> {
+  new EpubNavigationTools(
+    document.body,
+    "Books/Test Book.epub",
+    epubBookWithToc(href, label),
+    inertRendition(),
+    undefined,
+  );
+  await vi.waitFor(() => {
+    expect(document.querySelector(".epub-toc-copy")).not.toBeNull();
+  });
+  const copyButton = document.querySelector<HTMLButtonElement>(".epub-toc-copy");
+  if (copyButton === null) {
+    throw new Error("Test TOC copy button was not rendered");
+  }
+  copyButton.click();
 }
 
 describe("F2.2 paging event wiring", () => {
@@ -120,5 +183,43 @@ describe("F2.2 paging event wiring", () => {
     dispatchPointer(link, "pointerup", { clientX: 290, timeStamp: 150 });
 
     expect(page).not.toHaveBeenCalled();
+  });
+});
+
+describe("TOC link copying", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    showNotice.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it("shows a readable failure instead of copying an href outside the spine grammar", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    await clickTocCopy("text/chapter.xhtml#section-2", "Section 2");
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(showNotice).toHaveBeenCalledWith(
+      "Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.",
+    );
+  });
+
+  it("keeps wikilink metacharacters in a TOC label inside the alias", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    await clickTocCopy("text/chapter.xhtml", "Part | 1 ]] Notes");
+
+    expect(writeText).toHaveBeenCalledWith(
+      "[[Books/Test Book.epub#text/chapter.xhtml|Test Book, Part ｜ 1 ］］ Notes]]",
+    );
+    expect(showNotice).not.toHaveBeenCalled();
   });
 });
