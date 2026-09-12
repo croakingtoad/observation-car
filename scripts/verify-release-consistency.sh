@@ -4,12 +4,13 @@ set -euo pipefail
 
 TAG="${1-}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# RELEASE_ROOT deliberately defaults relative to the repository, not the caller's cwd.
 RELEASE_ROOT="${RELEASE_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 
 cd -- "$RELEASE_ROOT"
 
 VERSION="${TAG#v}"
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
   echo "::error::Tag '${TAG}' is not a plugin version (expected '1.2.3' or 'v1.2.3')."
   exit 1
 fi

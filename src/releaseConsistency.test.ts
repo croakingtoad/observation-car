@@ -42,8 +42,8 @@ const createFixture = (options: FixtureOptions = {}): string => {
 
   const manifest =
     options.manifest === undefined ? VALID_MANIFEST : options.manifest;
-  const versions = options.versions ??
-    (options.versions === null ? null : VALID_VERSIONS);
+  const versions =
+    options.versions === undefined ? VALID_VERSIONS : options.versions;
 
   if (manifest !== null) {
     writeFileSync(join(directory, "manifest.json"), manifest);
@@ -194,6 +194,19 @@ describe("release version consistency guard", () => {
         "::error::Tag 'release-latest' is not a plugin version (expected '1.2.3' or 'v1.2.3').",
       );
     });
+
+    it.each(["0.1.0-rc1", "01.2.3"])(
+      "rejects non-version tag %s with the tag-format diagnostic",
+      (tag) => {
+        const result = runGuard(createFixture(), tag);
+
+        expectFailure(
+          result,
+          1,
+          `::error::Tag '${tag}' is not a plugin version (expected '1.2.3' or 'v1.2.3').`,
+        );
+      },
+    );
 
     it("rejects a version tag that differs from manifest.json", () => {
       const result = runGuard(createFixture(), "0.2.0");
