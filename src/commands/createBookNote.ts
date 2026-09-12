@@ -54,10 +54,8 @@ async function createOrOpenBookNote(
     }
 
     await ensureFolder(plugin, folderPath);
-    const source = plugin.app.fileManager.generateMarkdownLink(
-      book,
-      notePath,
-    );
+    // F1.2 resolves vault-path wikilinks regardless of the user's link style.
+    const source = `[[${book.path}]]`;
     const content = renderTemplate(plugin.settings.noteTemplate, {
       source,
       format: book.extension.toLowerCase(),
@@ -120,24 +118,32 @@ interface TemplateValues {
 
 /** Replace every supported placeholder with a YAML-safe scalar. */
 function renderTemplate(template: string, values: TemplateValues): string {
-  let rendered = template;
-  rendered = replaceStringPlaceholder(rendered, "source", values.source);
-  rendered = rendered.replaceAll("{{format}}", values.format);
-  rendered = replaceStringPlaceholder(rendered, "title", values.title);
-  rendered = replaceStringPlaceholder(rendered, "author", values.author);
-  return rendered;
-}
+  return template.replace(
+    /(["']?){{(source|format|title|author)}}\1/g,
+    (placeholder, quote: string, name: string): string => {
+      if (name === "format") {
+        return quote === ""
+          ? values.format
+          : `${quote}${values.format}${quote}`;
+      }
 
-function replaceStringPlaceholder(
-  template: string,
-  name: "source" | "title" | "author",
-  value: string,
-): string {
-  const placeholder = `{{${name}}}`;
-  const doubleQuoted = `"${placeholder}"`;
-  const singleQuoted = `'${placeholder}'`;
-  return template
-    .replaceAll(doubleQuoted, JSON.stringify(value))
-    .replaceAll(singleQuoted, `'${value.replaceAll("'", "''")}'`)
-    .replaceAll(placeholder, JSON.stringify(value));
+      let value: string;
+      switch (name) {
+        case "source":
+          value = values.source;
+          break;
+        case "title":
+          value = values.title;
+          break;
+        case "author":
+          value = values.author;
+          break;
+        default:
+          return placeholder;
+      }
+      return quote === "'"
+        ? `'${value.replaceAll("'", "''")}'`
+        : JSON.stringify(value);
+    },
+  );
 }
