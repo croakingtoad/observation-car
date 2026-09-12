@@ -442,7 +442,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     }
   }
 
-  it("registers the mobile-capable command without writing on plugin load", () => {
+  it("registers the mobile-capable command without writing on plugin load", async () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
@@ -451,12 +451,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(command.icon).toBe("book-open");
     expect(command.hotkeys).toBeUndefined();
     expect(command.checkCallback?.(true)).toBe(false);
+    await settleCommand();
     expect(fake.createdFiles).toEqual([]);
 
     const book = fake.files.get(SOURCE);
     expect(book).toBeDefined();
     fake.runtime.activeView = { file: book };
     expect(command.checkCallback?.(true)).toBe(true);
+    await settleCommand();
     expect(fake.createdFiles).toEqual([]);
   });
 
