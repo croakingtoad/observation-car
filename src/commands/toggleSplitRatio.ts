@@ -4,7 +4,7 @@ import type ObservationCarPlugin from "../main";
 export const SPLIT_RATIO_TOGGLE_COMMAND_ID =
   "toggle-reader-note-split-ratio";
 
-/** The PRD identifies the Fold's ~830 CSS px inner display as narrow. */
+/** The Fold is ~830 CSS px wide; 900 px leaves headroom for browser/UI chrome. */
 export const NARROW_TABLET_MAX_WIDTH_PX = 900;
 export const NARROW_TABLET_READER_RATIO_PERCENT = 80;
 
@@ -20,6 +20,7 @@ interface SplitItem {
   readonly parent?: unknown;
   readonly children?: unknown;
   readonly containerEl?: unknown;
+  readonly direction?: unknown;
   readonly setDimension?: unknown;
 }
 
@@ -30,7 +31,7 @@ interface SplitContext {
   readonly widths: readonly number[] | null;
   readonly readerIndex: number;
   readonly noteIndex: number;
-  readonly viewportWidth: number;
+  readonly splitWidth: number;
 }
 
 /** Register F4.8's command for either side of the active reader/note pair. */
@@ -116,6 +117,7 @@ function sharedSplitContext(
 
   const parentSplit = splitItem(readerTabs.parent);
   if (parentSplit === null || noteTabs.parent !== parentSplit) return null;
+  if (parentSplit.direction !== "vertical") return null;
   if (!Array.isArray(parentSplit.children)) return null;
 
   const children: SplitItem[] = [];
@@ -146,7 +148,9 @@ function sharedSplitContext(
     widths,
     readerIndex,
     noteIndex,
-    viewportWidth: readerLeaf.getContainer().win.innerWidth,
+    splitWidth:
+      widths?.reduce((total, width) => total + width, 0) ??
+      readerLeaf.getContainer().win.innerWidth,
   };
 }
 
@@ -185,7 +189,7 @@ function applyNextRatio(
   const targets = ratioTargets(
     plugin.settings.splitReadRatioPercent,
     plugin.settings.splitWriteRatioPercent,
-    context.viewportWidth <= NARROW_TABLET_MAX_WIDTH_PX,
+    context.splitWidth <= NARROW_TABLET_MAX_WIDTH_PX,
   );
   const current = currentReaderRatio(context);
   const target = nextTarget(targets, current);

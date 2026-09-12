@@ -23,6 +23,7 @@ vi.mock("obsidian", () => {
 interface TestSplitItem {
   parent?: TestSplitItem;
   children?: TestSplitItem[];
+  direction?: "vertical" | "horizontal";
   containerEl: {
     getBoundingClientRect(): { width: number };
   };
@@ -60,13 +61,21 @@ const MarkdownViewDouble = MarkdownView as unknown as new (
 function makeTabs(width: number): TestSplitItem {
   const tabs: TestSplitItem = {
     containerEl: {
-      getBoundingClientRect: () => ({ width: tabs.width }),
+      getBoundingClientRect: () => {
+        const dimension = tabs.dimensions.at(-1);
+        const splitWidth = tabs.parent?.width;
+        return {
+          width:
+            dimension === undefined || splitWidth === undefined
+              ? tabs.width
+              : (dimension / 100) * splitWidth,
+        };
+      },
     },
     width,
     dimensions: [],
     setDimension: (dimension) => {
       tabs.dimensions.push(dimension);
-      tabs.width = dimension;
     },
   };
   return tabs;
@@ -79,9 +88,10 @@ function makeHarness(
   },
 ): Harness {
   const rootSplit = {};
-  const parentSplit = makeTabs(100);
-  const readerTabs = makeTabs(50);
-  const noteTabs = makeTabs(50);
+  const parentSplit = makeTabs(1200);
+  parentSplit.direction = "vertical";
+  const readerTabs = makeTabs(600);
+  const noteTabs = makeTabs(600);
   readerTabs.parent = parentSplit;
   noteTabs.parent = parentSplit;
   parentSplit.children = [readerTabs, noteTabs];
@@ -180,9 +190,14 @@ describe("split-ratio toggle command", () => {
     expect(harness.noteTabs.dimensions).toEqual([35, 65, 30]);
   });
 
-  it("adds the 80/20 reader-dominant step on a narrow tablet", () => {
+  it("adds the 80/20 step for a narrow split inside a wide window", () => {
     const harness = makeHarness();
-    harness.setViewportWidth(NARROW_TABLET_MAX_WIDTH_PX);
+    const split = harness.readerTabs.parent;
+    if (split === undefined) throw new Error("parent split fixture is missing");
+    split.width = NARROW_TABLET_MAX_WIDTH_PX;
+    harness.readerTabs.width = NARROW_TABLET_MAX_WIDTH_PX / 2;
+    harness.noteTabs.width = NARROW_TABLET_MAX_WIDTH_PX / 2;
+    harness.setViewportWidth(1400);
 
     invoke(harness);
     invoke(harness);
@@ -191,6 +206,47 @@ describe("split-ratio toggle command", () => {
 
     expect(harness.readerTabs.dimensions).toEqual([60, 40, 80, 60]);
     expect(harness.noteTabs.dimensions).toEqual([40, 60, 20, 40]);
+  });
+
+  it("emits percentage dimensions when measured widths are pixels", () => {
+    const harness = makeHarness();
+
+    invoke(harness);
+
+    expect(harness.readerTabs.dimensions).toEqual([60]);
+    expect(harness.noteTabs.dimensions).toEqual([40]);
+  });
+
+  it("advances when the measured ratio is within the configured tolerance", () => {
+    const harness = makeHarness();
+    const split = harness.readerTabs.parent;
+    if (split === undefined) throw new Error("parent split fixture is missing");
+    split.width = 1000;
+    harness.readerTabs.width = 605;
+    harness.noteTabs.width = 395;
+
+    invoke(harness);
+
+    expect(harness.readerTabs.dimensions).toEqual([40]);
+    expect(harness.noteTabs.dimensions).toEqual([60]);
+  });
+
+  it("cycles directly to 80/20 when the read and write ratios match", () => {
+    const harness = makeHarness({
+      splitReadRatioPercent: 60,
+      splitWriteRatioPercent: 60,
+    });
+    const split = harness.readerTabs.parent;
+    if (split === undefined) throw new Error("parent split fixture is missing");
+    split.width = 800;
+    harness.readerTabs.width = 400;
+    harness.noteTabs.width = 400;
+
+    invoke(harness);
+    invoke(harness);
+
+    expect(harness.readerTabs.dimensions).toEqual([60, 80]);
+    expect(harness.noteTabs.dimensions).toEqual([40, 20]);
   });
 
   it("uses the note leaf when the paired note was most recently active", () => {
@@ -223,6 +279,17 @@ describe("split-ratio toggle command", () => {
   it("is unavailable when the paired leaves do not share a resizable split", () => {
     const harness = makeHarness();
     harness.noteTabs.parent = makeTabs(100);
+
+    expect(harness.command.checkCallback?.(true)).toBe(false);
+    expect(harness.readerTabs.dimensions).toEqual([]);
+    expect(harness.noteTabs.dimensions).toEqual([]);
+  });
+
+  it("is unavailable for a stacked split", () => {
+    const harness = makeHarness();
+    const split = harness.readerTabs.parent;
+    if (split === undefined) throw new Error("parent split fixture is missing");
+    split.direction = "horizontal";
 
     expect(harness.command.checkCallback?.(true)).toBe(false);
     expect(harness.readerTabs.dimensions).toEqual([]);
