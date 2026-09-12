@@ -80,7 +80,11 @@ function makeRig(): Rig {
   const reader = new TestReader(bookFile);
   const scrollIntoView = vi.fn();
   const focus = vi.fn();
-  const editor = { scrollIntoView, focus } as unknown as ScrollEditor;
+  const editor = {
+    lineCount: () => 20,
+    scrollIntoView,
+    focus,
+  } as unknown as ScrollEditor;
   const rig = {
     sync: null as unknown as ScrollSync,
     bookFile,
@@ -141,6 +145,7 @@ describe("ScrollSync", () => {
   it("coalesces locations and scrolls the newest relevant heading within 25 ms", () => {
     vi.useFakeTimers();
     const rig = makeRig();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     rig.reader.emit(CFI_1);
     vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS - 10);
@@ -158,6 +163,7 @@ describe("ScrollSync", () => {
       false,
     );
     expect(rig.focus).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("does not move again while later pages still resolve to the same section", () => {
@@ -232,11 +238,49 @@ describe("ScrollSync", () => {
     rig.reader.emit(CFI_1);
 
     rig.sync.clear();
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(DEFAULT_TYPING_IDLE_MS + 100);
 
     expect(rig.scrollIntoView).not.toHaveBeenCalled();
     expect(rig.reader.listenerCount).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels a deferred scroll as soon as its reader leaf closes", () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+    rig.reader.emit(CFI_1);
+
+    rig.leafOpen = false;
+    rig.sync.refresh();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(rig.scrollIntoView).not.toHaveBeenCalled();
+    expect(rig.reader.listenerCount).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("warns for an unparseable location and still syncs the next valid one", () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    rig.reader.emit("not-a-fragment");
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      "[observation-car] ignoring unparseable reader location",
+      "#epubcfi(not-a-fragment)",
+    );
+    expect(rig.scrollIntoView).not.toHaveBeenCalled();
+
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(rig.scrollIntoView).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
   });
 });
 
@@ -244,7 +288,11 @@ describe("scrollHeadingIntoView", () => {
   it("uses the public editor API without changing focus when CM6 is unavailable", () => {
     const scrollIntoView = vi.fn();
     const focus = vi.fn();
-    const editor = { scrollIntoView, focus } as unknown as ScrollEditor;
+    const editor = {
+      lineCount: () => 20,
+      scrollIntoView,
+      focus,
+    } as unknown as ScrollEditor;
 
     scrollHeadingIntoView(editor, 12);
 
@@ -256,6 +304,43 @@ describe("scrollHeadingIntoView", () => {
       false,
     );
     expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("clamps the same past-EOF heading for the CM6 and fallback paths", () => {
+    const effect = EditorView.scrollIntoView(0);
+    vi.spyOn(EditorView, "scrollIntoView").mockReturnValue(effect);
+    const line = vi.fn(() => ({ from: 40 }));
+    const dispatch = vi.fn();
+    const cm = Object.create(EditorView.prototype) as EditorView;
+    Object.defineProperty(cm, "state", {
+      value: { doc: { lines: 5, line } },
+    });
+    Object.defineProperty(cm, "dispatch", { value: dispatch });
+    const cmFallback = vi.fn();
+    const cmEditor = {
+      cm,
+      lineCount: () => 5,
+      scrollIntoView: cmFallback,
+    } as unknown as ScrollEditor;
+    const publicFallback = vi.fn();
+    const publicEditor = {
+      lineCount: () => 5,
+      scrollIntoView: publicFallback,
+    } as unknown as ScrollEditor;
+
+    scrollHeadingIntoView(cmEditor, 9);
+    scrollHeadingIntoView(publicEditor, 9);
+
+    expect(line).toHaveBeenCalledWith(5);
+    expect(dispatch).toHaveBeenCalledWith({ effects: effect });
+    expect(cmFallback).not.toHaveBeenCalled();
+    expect(publicFallback).toHaveBeenCalledWith(
+      {
+        from: { line: 4, ch: 0 },
+        to: { line: 4, ch: 0 },
+      },
+      false,
+    );
   });
 
   it("uses CM6 start alignment with a margin without changing focus", () => {
@@ -276,7 +361,12 @@ describe("scrollHeadingIntoView", () => {
     Object.defineProperty(cm, "dispatch", { value: dispatch });
     const fallback = vi.fn();
     const focus = vi.fn();
-    const editor = { cm, scrollIntoView: fallback, focus } as unknown as ScrollEditor;
+    const editor = {
+      cm,
+      lineCount: () => 20,
+      scrollIntoView: fallback,
+      focus,
+    } as unknown as ScrollEditor;
 
     scrollHeadingIntoView(editor, 7);
 
