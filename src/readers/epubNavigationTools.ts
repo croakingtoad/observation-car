@@ -107,7 +107,7 @@ export function addPagingListeners(
     const deltaX = event.clientX - down.startX;
     const deltaY = event.clientY - down.startY;
     const distance = Math.max(down.distance, Math.hypot(deltaX, deltaY));
-    const pageWidth = doc.body.clientWidth;
+    const pageWidth = Math.min(doc.body.clientWidth, doc.documentElement.clientWidth);
     const pageX = pageWidth > 0
       ? ((event.clientX % pageWidth) + pageWidth) % pageWidth
       : event.clientX;
@@ -119,9 +119,11 @@ export function addPagingListeners(
       deltaY,
       distance,
       durationMs: event.timeStamp - down.startStamp,
-      // epub.js makes the iframe/document span every column in a section,
-      // while body.clientWidth remains one visible page. Reduce the
-      // document-relative pointer coordinate into that page.
+      // Reflowable sections expand the document across every column while
+      // body.clientWidth remains one page/spread. Fixed-layout sections do
+      // the inverse: the body keeps its intrinsic width while the document
+      // is the scaled viewport. The narrower box is the visible paging unit.
+      // Reduce the document-relative pointer coordinate into that unit.
       endX: pageX,
       contentWidth: pageWidth,
     });

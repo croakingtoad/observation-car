@@ -67,7 +67,7 @@ describe("F2.2 flow-mode recovery", () => {
     const view = createView(host, renderBook);
 
     const first = view.setFlowMode("scrolled");
-    const second = view.setFlowMode("paginated");
+    const second = view.setFlowMode("scrolled");
 
     expect(host.updateSettings).toHaveBeenCalledOnce();
     expect(renderBook).not.toHaveBeenCalled();

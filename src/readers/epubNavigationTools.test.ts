@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { addPagingListeners } from "./epubNavigationTools";
 
 interface PointerOptions {
@@ -28,19 +28,29 @@ function dispatchPointer(
   target.dispatchEvent(event);
 }
 
-function multiPageDocument(): Document {
-  document.body.innerHTML = '<a href="chapter-2.xhtml">Next chapter</a>';
-  Object.defineProperty(document.body, "clientWidth", { configurable: true, value: 300 });
-  Object.defineProperty(document.documentElement, "clientWidth", {
+function renderedDocument(bodyWidth: number, documentWidth: number): Document {
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const doc = frame.contentDocument;
+  if (doc === null) {
+    throw new Error("Test iframe has no document");
+  }
+  doc.body.innerHTML = '<a href="chapter-2.xhtml">Next chapter</a>';
+  Object.defineProperty(doc.body, "clientWidth", { configurable: true, value: bodyWidth });
+  Object.defineProperty(doc.documentElement, "clientWidth", {
     configurable: true,
-    value: 900,
+    value: documentWidth,
   });
-  return document;
+  return doc;
 }
 
 describe("F2.2 paging event wiring", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
   it("uses the visible page width for a tap in a multi-page section", () => {
-    const doc = multiPageDocument();
+    const doc = renderedDocument(300, 900);
     const page = vi.fn();
     addPagingListeners(doc, "paginated", page);
 
@@ -51,8 +61,37 @@ describe("F2.2 paging event wiring", () => {
     expect(page).toHaveBeenCalledWith("next");
   });
 
+  it("reduces a later-page pointer coordinate into the visible page", () => {
+    const doc = renderedDocument(300, 900);
+    const page = vi.fn();
+    addPagingListeners(doc, "paginated", page);
+
+    dispatchPointer(doc.body, "pointerdown", { clientX: 590, timeStamp: 100 });
+    dispatchPointer(doc.body, "pointerup", { clientX: 590, timeStamp: 150 });
+
+    expect(page).toHaveBeenCalledOnce();
+    expect(page).toHaveBeenCalledWith("next");
+  });
+
+  it("uses the scaled viewport width for fixed-layout EPUB tap zones", () => {
+    const doc = renderedDocument(1_200, 500);
+    const page = vi.fn();
+    addPagingListeners(doc, "paginated", page);
+
+    dispatchPointer(doc.body, "pointerdown", { clientX: 40, timeStamp: 100 });
+    dispatchPointer(doc.body, "pointerup", { clientX: 40, timeStamp: 150 });
+    dispatchPointer(doc.body, "pointerdown", { clientX: 250, timeStamp: 200 });
+    dispatchPointer(doc.body, "pointerup", { clientX: 250, timeStamp: 250 });
+    dispatchPointer(doc.body, "pointerdown", { clientX: 460, timeStamp: 300 });
+    dispatchPointer(doc.body, "pointerup", { clientX: 460, timeStamp: 350 });
+
+    expect(page).toHaveBeenCalledTimes(2);
+    expect(page).toHaveBeenNthCalledWith(1, "prev");
+    expect(page).toHaveBeenNthCalledWith(2, "next");
+  });
+
   it("pages when a horizontal swipe ends on an in-content link", () => {
-    const doc = multiPageDocument();
+    const doc = renderedDocument(300, 900);
     const page = vi.fn();
     const link = doc.querySelector("a");
     if (link === null) {
@@ -69,7 +108,7 @@ describe("F2.2 paging event wiring", () => {
   });
 
   it("still leaves a tap on an in-content link to epub.js", () => {
-    const doc = multiPageDocument();
+    const doc = renderedDocument(300, 900);
     const page = vi.fn();
     const link = doc.querySelector("a");
     if (link === null) {
