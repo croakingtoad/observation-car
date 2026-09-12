@@ -60,21 +60,24 @@ jobs:
             echo "::error::manifest.json version '${MANIFEST_VERSION}' does not match tag '${TAG}' (normalized version '${VERSION}'). Bump manifest.json before tagging, or retag."
             exit 1
           fi
-          # versions.json must be exactly one top-level JSON object: an empty,
-          # non-object, or multi-document file would make the count below emit
-          # no number and the -eq test would silently pass.
+          # versions.json must be exactly one top-level JSON object: without
+          # this, an empty, non-object, or multi-document file would reach the
+          # version lookup below and fail with a misleading 'no entry' (or
+          # mangled multi-value) diagnostic instead of this one.
           if ! jq -er -s 'select(length == 1 and (.[0] | type == "object"))' versions.json > /dev/null; then
             echo "::error::versions.json must contain exactly one top-level JSON object."
             exit 1
           fi
-          COUNT_FOR_VERSION="$(jq --arg v "$VERSION" '[to_entries[] | select(.value == $v)] | length' versions.json)"
-          if [ "$COUNT_FOR_VERSION" -eq 0 ]; then
-            echo "::error::versions.json has no entry for plugin version '${VERSION}'. Add it (keyed by minAppVersion) before tagging."
+          # Obsidian's community-plugin format: keys are plugin versions,
+          # values are the minAppVersion that version requires. The shape
+          # guard above makes a direct key lookup sufficient.
+          ENTRY_MIN_APP="$(jq -er --arg v "$VERSION" '.[$v] // empty' versions.json || true)"
+          if [ -z "$ENTRY_MIN_APP" ]; then
+            echo "::error::versions.json has no entry for plugin version '${VERSION}'. Add it (keyed by plugin version, with minAppVersion as the value) before tagging."
             exit 1
           fi
-          MISMATCHED_KEYS="$(jq -r --arg v "$VERSION" --arg m "$MIN_APP_VERSION" 'to_entries[] | select(.value == $v) | select(.key != $m) | .key' versions.json | tr '\n' ' ')"
-          if [ -n "$MISMATCHED_KEYS" ]; then
-            echo "::error::versions.json lists version '${VERSION}' under key(s) [${MISMATCHED_KEYS% }] but manifest.json minAppVersion is '${MIN_APP_VERSION}'."
+          if [ "$ENTRY_MIN_APP" != "$MIN_APP_VERSION" ]; then
+            echo "::error::versions.json lists minAppVersion '${ENTRY_MIN_APP}' for plugin version '${VERSION}' but manifest.json minAppVersion is '${MIN_APP_VERSION}'."
             exit 1
           fi
           echo "Version consistency OK: tag '${TAG}' -> version '${VERSION}', minAppVersion '${MIN_APP_VERSION}'."
