@@ -45,6 +45,22 @@ vi.mock("obsidian", () => {
       }
     }
     registerExtensions(_extensions: string[], _viewType: string): void {}
+    addCommand(command: {
+      id: string;
+      name: string;
+      editorCallback?: (editor: unknown, context: unknown) => unknown;
+    }): void {
+      if (
+        typeof this.app === "object" &&
+        this.app !== null &&
+        "registeredCommands" in this.app
+      ) {
+        const app = this.app as {
+          registeredCommands: Map<string, typeof command>;
+        };
+        app.registeredCommands.set(command.id, command);
+      }
+    }
     addSettingTab(_tab: unknown): void {}
     async loadData(): Promise<unknown> {
       return {};
@@ -108,6 +124,14 @@ interface FakeVault {
   metadataHandlers: Map<string, Handler>;
   vaultHandlers: Map<string, Handler>;
   workspaceHandlers: Map<string, Handler>;
+  registeredCommands: Map<
+    string,
+    {
+      id: string;
+      name: string;
+      editorCallback?: (editor: unknown, context: unknown) => unknown;
+    }
+  >;
   registeredViews: Map<string, (leaf: unknown) => unknown>;
   leaves: Set<unknown>;
   leafQueries: { count: number };
@@ -121,6 +145,14 @@ function makeFakeVault(): FakeVault {
   const metadataHandlers = new Map<string, Handler>();
   const vaultHandlers = new Map<string, Handler>();
   const workspaceHandlers = new Map<string, Handler>();
+  const registeredCommands = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      editorCallback?: (editor: unknown, context: unknown) => unknown;
+    }
+  >();
   const registeredViews = new Map<string, (leaf: unknown) => unknown>();
   const leaves = new Set<unknown>();
   const leafQueries = { count: 0 };
@@ -183,6 +215,7 @@ function makeFakeVault(): FakeVault {
         });
       },
     },
+    registeredCommands,
     registeredViews,
   };
 
@@ -195,6 +228,7 @@ function makeFakeVault(): FakeVault {
     metadataHandlers,
     vaultHandlers,
     workspaceHandlers,
+    registeredCommands,
     registeredViews,
     leaves,
     leafQueries,
@@ -345,6 +379,58 @@ describe("plugin wiring (substituted obsidian module)", () => {
     fire("workspace", "file-open", [book]);
     return { leaf, view };
   }
+
+  it("registers an explicit, idempotent section-sort editor command", () => {
+    const command = fake.registeredCommands.get("sort-sections-by-book-position");
+    expect(command?.name).toBe("Sort sections by book position");
+    if (command?.editorCallback === undefined) {
+      throw new Error("section-sort editor command was not registered");
+    }
+
+    const handReordered = [
+      "---",
+      `source: "[[${SOURCE}]]"`,
+      "format: epub",
+      "---",
+      "Preamble stays put.",
+      `## [[${SOURCE}#${CFI_2}|Later]]`,
+      "later body",
+      `## [[${SOURCE}#${CFI_1}|Earlier]]`,
+      "earlier body",
+    ].join("\n");
+    const expected = [
+      "---",
+      `source: "[[${SOURCE}]]"`,
+      "format: epub",
+      "---",
+      "Preamble stays put.",
+      `## [[${SOURCE}#${CFI_1}|Earlier]]`,
+      "earlier body",
+      `## [[${SOURCE}#${CFI_2}|Later]]`,
+      "later body",
+    ].join("\n");
+    const noteFile = addMdFile(
+      "Reading/A.md",
+      handReordered,
+      NOTE_FRONTMATTER,
+    );
+    let editorText = handReordered;
+    const setValue = vi.fn((value: string) => {
+      editorText = value;
+    });
+    const editor = {
+      getValue: (): string => editorText,
+      setValue,
+    };
+
+    command.editorCallback(editor, { file: noteFile });
+    expect(editorText).toBe(expected);
+    expect(setValue).toHaveBeenCalledOnce();
+
+    command.editorCallback(editor, { file: noteFile });
+    expect(editorText).toBe(expected);
+    expect(setValue).toHaveBeenCalledOnce();
+  });
 
   it("a changed event caches a candidate note after the debounce window", async () => {
     const file = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
