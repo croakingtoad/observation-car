@@ -107,6 +107,27 @@ describe("ReaderRegistry", () => {
     expect(rig.registry.pairings()).toHaveLength(1);
   });
 
+  it("does not promote a reader when the same leaf and reader register twice", () => {
+    const rig = makeRig();
+    const book = file("Books/Book.epub");
+    const olderLeaf = leaf();
+    const newerLeaf = leaf();
+    const olderReader = reader("reader", book);
+    rig.notes.set("Reading/Book.md", note(book.path));
+    rig.destinations.set(book.path, book);
+    rig.openLeaves.add(olderLeaf);
+    rig.openLeaves.add(newerLeaf);
+
+    rig.registry.register(olderLeaf, olderReader);
+    rig.registry.register(newerLeaf, reader("reader", book));
+    rig.registry.register(olderLeaf, olderReader);
+
+    expect(rig.registry.getByLeaf(olderLeaf)).toBeUndefined();
+    expect(rig.registry.getByLeaf(newerLeaf)?.notePath).toBe(
+      "Reading/Book.md",
+    );
+  });
+
   it("gives a book to an existing leaf when that leaf opens it later", () => {
     const rig = makeRig();
     const book = file("Books/Book.epub");

@@ -1,4 +1,4 @@
-import { Plugin, TFile } from "obsidian";
+import { MarkdownView, Plugin, TFile } from "obsidian";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -15,6 +15,10 @@ import {
   ReaderRegistry,
   type ReaderPairing,
 } from "./sync/ReaderRegistry";
+import {
+  ScrollSync,
+  type ScrollEditor,
+} from "./sync/scrollSync";
 
 /**
  * Observation Car — plugin entry point.
@@ -40,6 +44,9 @@ export default class ObservationCarPlugin extends Plugin {
 
   /** Format-neutral reader-leaf ↔ book-note pairings (PRD F4.1). */
   private readerRegistry!: ReaderRegistry;
+
+  /** Reader-location → note-heading synchronization (PRD F4.3). */
+  private scrollSync!: ScrollSync;
 
   async onload(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
@@ -78,6 +85,15 @@ export default class ObservationCarPlugin extends Plugin {
           .getLeavesOfType(reader.getViewType())
           .includes(leaf),
     });
+    this.scrollSync = new ScrollSync({
+      getPairing: (leaf) => this.readerRegistry.getByLeaf(leaf),
+      findEditor: (notePath) => this.findOpenEditor(notePath),
+      // The layout listener refreshes ReaderRegistry first; this lookup
+      // reuses that lifecycle result instead of querying the workspace a
+      // second time for every subscription.
+      isLeafOpen: (leaf, reader) =>
+        this.readerRegistry.hasReader(leaf, reader),
+    });
 
     // F2.1: `.epub` opens in the in-plugin reader view; the concrete view
     // satisfies Reader structurally and only this composition root knows
@@ -85,6 +101,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerView(EPUB_VIEW_TYPE, (leaf) => {
       const reader = new EpubView(leaf);
       this.readerRegistry.register(leaf, reader);
+      this.scrollSync.register(leaf, reader);
       return reader;
     });
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
@@ -96,6 +113,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("layout-change", () => {
         this.readerRegistry.refresh();
+        this.scrollSync.refresh();
       }),
     );
     this.registerEvent(
@@ -106,6 +124,14 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
         this.readerRegistry.refresh();
+      }),
+    );
+    this.registerEvent(
+      this.app.workspace.on("editor-change", (editor, info) => {
+        const file = info.file;
+        if (file !== null && editor.hasFocus()) {
+          this.scrollSync.markEditorChanged(editor);
+        }
       }),
     );
 
@@ -208,8 +234,24 @@ export default class ObservationCarPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.scrollSync.clear();
     this.readerRegistry.clear();
     this.bookNoteStore.clear();
+  }
+
+  /** Find a live source-mode editor by note path without retaining its view. */
+  private findOpenEditor(notePath: string): ScrollEditor | null {
+    let fallback: ScrollEditor | null = null;
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      if (
+        leaf.view instanceof MarkdownView &&
+        leaf.view.file?.path === notePath
+      ) {
+        if (leaf.view.editor.hasFocus()) return leaf.view.editor;
+        fallback ??= leaf.view.editor;
+      }
+    }
+    return fallback;
   }
 
   /** Resolve a wikilink target to Obsidian's canonical vault file. */
