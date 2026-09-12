@@ -1,5 +1,9 @@
-import { Plugin, TFile } from "obsidian";
+import { Plugin, TFile, type WorkspaceLeaf } from "obsidian";
 import { registerCreateBookNoteCommand } from "./commands/createBookNote";
+import {
+  openBookNoteBesideRecentReader,
+  registerOpenBookNoteCommand,
+} from "./commands/openBookNote";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -14,6 +18,7 @@ import { BookNoteStore } from "./model/bookNoteStore";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
 import {
   ReaderRegistry,
+  type Reader,
   type ReaderPairing,
 } from "./sync/ReaderRegistry";
 
@@ -90,6 +95,7 @@ export default class ObservationCarPlugin extends Plugin {
     });
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
     registerCreateBookNoteCommand(this);
+    registerOpenBookNoteCommand(this);
 
     // Obsidian has no leaf-close event. `layout-change` covers closes and
     // moves; the other events make a newly loaded reader visible quickly.
@@ -101,8 +107,11 @@ export default class ObservationCarPlugin extends Plugin {
       }),
     );
     this.registerEvent(
-      this.app.workspace.on("file-open", () => {
+      this.app.workspace.on("file-open", (file) => {
         this.readerRegistry.refresh();
+        if (this.settings.autoOpenBookNote && file !== null) {
+          void openBookNoteBesideRecentReader(this, file);
+        }
       }),
     );
     this.registerEvent(
@@ -207,6 +216,16 @@ export default class ObservationCarPlugin extends Plugin {
   /** Active reader pairing for a cached book-note path, if one is open. */
   getReaderPairingForNote(path: string): ReaderPairing | undefined {
     return this.readerRegistry.getByNotePath(path);
+  }
+
+  /** Registered reader for a workspace leaf, with no note required. */
+  getReaderForLeaf(leaf: WorkspaceLeaf): Reader | undefined {
+    return this.readerRegistry.getReader(leaf);
+  }
+
+  /** Active pairing for a reader leaf, if its note already exists. */
+  getReaderPairingForLeaf(leaf: WorkspaceLeaf): ReaderPairing | undefined {
+    return this.readerRegistry.getByLeaf(leaf);
   }
 
   onunload(): void {

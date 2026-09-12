@@ -22,6 +22,8 @@ export interface ObservationCarSettings {
   noteTemplate: string;
   /** Whether focus mode starts on when a book note opens beside its reader. */
   focusModeDefault: boolean;
+  /** Whether opening a reader also opens its book note beside it. */
+  autoOpenBookNote: boolean;
   /**
    * Fallback chapter window (in pages, ± each side) for PDFs without an
    * outline. Default ±10.
@@ -73,6 +75,7 @@ export const DEFAULT_SETTINGS: ObservationCarSettings = {
   anchorHeadingLevel: 2,
   noteTemplate: DEFAULT_NOTE_TEMPLATE,
   focusModeDefault: false,
+  autoOpenBookNote: false,
   pdfChapterWindowPages: 10,
   splitReadRatioPercent: 60,
   splitWriteRatioPercent: 40,
@@ -130,6 +133,9 @@ export function mergeSettings(stored: unknown): ObservationCarSettings {
   }
   if (typeof partial.focusModeDefault === "boolean") {
     settings.focusModeDefault = partial.focusModeDefault;
+  }
+  if (typeof partial.autoOpenBookNote === "boolean") {
+    settings.autoOpenBookNote = partial.autoOpenBookNote;
   }
   if (typeof partial.pdfChapterWindowPages === "number") {
     settings.pdfChapterWindowPages = clampInt(

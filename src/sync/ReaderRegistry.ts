@@ -93,6 +93,12 @@ export class ReaderRegistry {
     return this.byLeaf.get(leaf);
   }
 
+  /** Registered reader in this open leaf, even when it has no note yet. */
+  getReader(leaf: WorkspaceLeaf): Reader | undefined {
+    this.refresh();
+    return this.readers.get(leaf)?.reader;
+  }
+
   getByNotePath(notePath: string): ReaderPairing | undefined {
     this.refresh();
     return this.byNotePath.get(notePath);
