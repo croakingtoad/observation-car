@@ -24,6 +24,139 @@ import type Locations from "epubjs/types/locations";
 import { type Location } from "epubjs/types/rendition";
 import { buildEpubCfiFragment } from "../model/anchor";
 
+type RenderedContents = Pick<Contents, "document">;
+type RenderedHandler = (
+  section: unknown,
+  contents: RenderedContents,
+) => void;
+
+export interface EpubKeyBridgeRendition {
+  on(event: "rendered", handler: RenderedHandler): unknown;
+  off(event: "rendered", handler: RenderedHandler): unknown;
+  prev(): Promise<void>;
+  next(): Promise<void>;
+}
+
+const forwardedKeyEvents = new WeakSet<KeyboardEvent>();
+
+function hasClosest(
+  target: EventTarget | null,
+): target is EventTarget & { closest(selectors: string): Element | null } {
+  return target !== null && "closest" in target && typeof target.closest === "function";
+}
+
+/**
+ * Relays keys out of epub.js's iframe while retaining reader-owned paging.
+ * The original iframe event keeps its default unless the host handles and
+ * cancels the relay, so browser-native actions such as copy run only once.
+ */
+export class EpubKeyBridge {
+  private readonly documents = new Set<Document>();
+  private destroyed = false;
+
+  private readonly onRendered: RenderedHandler = (_section, contents) => {
+    if (this.destroyed) {
+      return;
+    }
+    contents.document.addEventListener("keydown", this.onKeyDown);
+    this.documents.add(contents.document);
+
+    // Keep focus on the iframe so page keys keep working.
+    contents.document.body?.setAttribute("tabindex", "0");
+    contents.document.body?.focus();
+  };
+
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (this.destroyed || forwardedKeyEvents.has(event)) {
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      void this.rendition.prev();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      void this.rendition.next();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "PageUp" || event.key === "PageDown") {
+      void this.pageKeyJump(event.key);
+      event.preventDefault();
+      return;
+    }
+
+    // Keep browser-native interactions in the iframe. In particular, copy
+    // must operate on the book selection rather than also invoking a host
+    // binding for the same gesture.
+    const isCopy =
+      (event.ctrlKey || event.metaKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "c";
+    const isInteractiveTarget =
+      hasClosest(event.target) &&
+      event.target.closest(
+        "a, button, input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+      ) !== null;
+
+    // Scripted EPUB content can deliberately consume a key before it reaches
+    // the document. Do not also fire an Obsidian hotkey in that case.
+    if (isCopy || isInteractiveTarget || event.defaultPrevented) {
+      return;
+    }
+    this.forwardToHost(event);
+  };
+
+  constructor(
+    private readonly rendition: EpubKeyBridgeRendition,
+    private readonly hostDocument: Document,
+    private readonly pageKeyJump: (
+      key: "PageUp" | "PageDown",
+    ) => void | Promise<void>,
+  ) {
+    this.rendition.on("rendered", this.onRendered);
+  }
+
+  destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
+    this.rendition.off("rendered", this.onRendered);
+    for (const document of this.documents) {
+      document.removeEventListener("keydown", this.onKeyDown);
+    }
+    this.documents.clear();
+  }
+
+  private forwardToHost(event: KeyboardEvent): void {
+    const KeyboardEventConstructor = this.hostDocument.defaultView?.KeyboardEvent;
+    if (KeyboardEventConstructor === undefined) {
+      return;
+    }
+    const forwarded = new KeyboardEventConstructor(event.type, {
+      key: event.key,
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      repeat: event.repeat,
+      bubbles: event.bubbles,
+      cancelable: event.cancelable,
+    });
+    // KeyboardEventInit omits this legacy field, but Obsidian and user
+    // hotkeys can still inspect it.
+    Object.defineProperty(forwarded, "keyCode", { value: event.keyCode });
+    forwardedKeyEvents.add(forwarded);
+
+    if (!this.hostDocument.dispatchEvent(forwarded)) {
+      event.preventDefault();
+    }
+  }
+}
+
 export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
   private isTocOpen = false;
@@ -31,54 +164,79 @@ export class EpubNavigationTools {
   private locations: Promise<Locations> | null = null;
   private currentLocation: Location | null = null;
   private needsCorrection = false;
+  private destroyed = false;
+  private readonly keyBridge: EpubKeyBridge;
+  private readonly renderedDocuments = new Set<Document>();
+  private readonly bookTitle: Promise<string>;
+
+  private readonly onRelocated = (loc: Location): void => {
+    if (this.needsCorrection) {
+      this.needsCorrection = false;
+      void this.rendition.display(this.currentLocation?.start.cfi);
+    } else {
+      this.currentLocation = loc;
+    }
+  };
+
+  private readonly onResized = (): void => {
+    this.needsCorrection = true;
+  };
+
+  private readonly onRendered = (_section: unknown, contents: Contents): void => {
+    if (this.destroyed) {
+      return;
+    }
+    contents.document.addEventListener("mousedown", this.onDocumentMouseDown);
+    this.renderedDocuments.add(contents.document);
+  };
+
+  private readonly onDocumentMouseDown = (): void => {
+    this.toggleTocVisibility(false);
+  };
+
+  private readonly onSelected = (cfiRange: string, contents: Contents): void => {
+    void this.showSelection(cfiRange, contents);
+  };
 
   constructor(
-    viewerEl: HTMLElement,
+    private readonly viewerEl: HTMLElement,
     private readonly bookPath: string,
     private readonly book: Book,
     private readonly rendition: Rendition,
   ) {
-    this.copyPanel = this.createCopyPanel(viewerEl);
-    this.createNavigationButton(viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
-    this.createNavigationButton(viewerEl, "epub-nav-next", "❯", () => this.rendition.next());
-    void this.createTocPanel(viewerEl);
-    this.addKeyListeners();
-    void this.addSelectionListener(viewerEl);
+    this.bookTitle = this.book.loaded.metadata.then((metadata) => metadata.title);
+    this.copyPanel = this.createCopyPanel(this.viewerEl);
+    this.createNavigationButton(this.viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
+    this.createNavigationButton(this.viewerEl, "epub-nav-next", "❯", () => this.rendition.next());
+    void this.createTocPanel(this.viewerEl);
+    this.keyBridge = new EpubKeyBridge(
+      this.rendition,
+      this.viewerEl.ownerDocument,
+      (key) => this.pageKeyJump(key),
+    );
 
     // Pane/layout changes make epub.js reflow and report a fresh
     // location; re-display the one we had so the page does not jump.
-    this.rendition.on("relocated", (loc: Location) => {
-      if (this.needsCorrection) {
-        this.needsCorrection = false;
-        void this.rendition.display(this.currentLocation?.start.cfi);
-      } else {
-        this.currentLocation = loc;
-      }
-    });
-    this.rendition.on("resized", () => {
-      this.needsCorrection = true;
-    });
+    this.rendition.on("relocated", this.onRelocated);
+    this.rendition.on("resized", this.onResized);
+    this.rendition.on("rendered", this.onRendered);
+    this.rendition.on("selected", this.onSelected);
   }
 
-  private addKeyListeners(): void {
-    this.rendition.on("rendered", (_section: unknown, contents: Contents) => {
-      contents.document.addEventListener("keydown", (event: KeyboardEvent) => {
-        if (event.key === "ArrowLeft") {
-          void this.rendition.prev();
-          event.preventDefault();
-        } else if (event.key === "ArrowRight") {
-          void this.rendition.next();
-          event.preventDefault();
-        } else if (event.key === "PageUp" || event.key === "PageDown") {
-          void this.pageKeyJump(event.key);
-          event.preventDefault();
-        }
-      });
-
-      // Keep focus on the iframe so page keys keep working.
-      (contents.document.body as HTMLElement).setAttribute("tabindex", "0");
-      (contents.document.body as HTMLElement).focus();
-    });
+  destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
+    this.keyBridge.destroy();
+    this.rendition.off("relocated", this.onRelocated);
+    this.rendition.off("resized", this.onResized);
+    this.rendition.off("rendered", this.onRendered);
+    this.rendition.off("selected", this.onSelected);
+    for (const document of this.renderedDocuments) {
+      document.removeEventListener("mousedown", this.onDocumentMouseDown);
+    }
+    this.renderedDocuments.clear();
   }
 
   /** Chapter-level jump: PageUp = next chapter, PageDown = previous. */
@@ -98,44 +256,43 @@ export class EpubNavigationTools {
     }
   }
 
-  private async addSelectionListener(viewerEl: HTMLElement): Promise<void> {
-    const metadata = await this.book.loaded.metadata;
-    const title = metadata.title;
+  private async showSelection(cfiRange: string, contents: Contents): Promise<void> {
+    if (cfiRange.length === 0) {
+      return;
+    }
+    const selection = contents.window.getSelection();
+    if (selection === null || selection.rangeCount === 0) {
+      return;
+    }
+    const title = await this.bookTitle;
+    if (this.destroyed) {
+      return;
+    }
 
-    this.rendition.on("selected", (cfiRange: string, contents: Contents) => {
-      if (cfiRange.length === 0) {
-        return;
-      }
-      const selection = contents.window.getSelection();
-      if (selection === null || selection.rangeCount === 0) {
-        return;
-      }
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    const iframeRect = contents.document.defaultView?.frameElement?.getBoundingClientRect();
+    const viewerRect = this.viewerEl.getBoundingClientRect();
+    let left: number;
+    let top: number;
 
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      const iframeRect = contents.document.defaultView?.frameElement?.getBoundingClientRect();
-      const viewerRect = viewerEl.getBoundingClientRect();
-      let left: number;
-      let top: number;
+    if (iframeRect) {
+      left = rect.left + iframeRect.left - viewerRect.left;
+      top = rect.bottom + iframeRect.top - viewerRect.top + 2;
+    } else {
+      left = rect.left - viewerRect.left;
+      top = rect.bottom - viewerRect.top + 2;
+    }
+    this.copyPanel.style.left = `${left}px`;
+    this.copyPanel.style.top = `${top}px`;
 
-      if (iframeRect) {
-        left = rect.left + iframeRect.left - viewerRect.left;
-        top = rect.bottom + iframeRect.top - viewerRect.top + 2;
-      } else {
-        left = rect.left - viewerRect.left;
-        top = rect.bottom - viewerRect.top + 2;
-      }
-      this.copyPanel.style.left = `${left}px`;
-      this.copyPanel.style.top = `${top}px`;
-
-      this.setCopyHandler(".epub-cfi-copy", (e) =>
-        void this.copyLinkToCFIToClipboard(e, title, cfiRange),
-      );
-      this.setCopyHandler(".epub-cfi-quote", (e) =>
-        void this.copyQuoteAndLinkToClipboard(e, title, cfiRange, selection),
-      );
-      this.copyPanel.classList.add("open");
-    });
+    this.setCopyHandler(".epub-cfi-copy", (e) =>
+      void this.copyLinkToCFIToClipboard(e, title, cfiRange),
+    );
+    this.setCopyHandler(".epub-cfi-quote", (e) =>
+      void this.copyQuoteAndLinkToClipboard(e, title, cfiRange, selection),
+    );
+    this.copyPanel.classList.add("open");
   }
 
   private createCopyPanel(viewerEl: HTMLElement): HTMLDivElement {
@@ -169,6 +326,9 @@ export class EpubNavigationTools {
       this.book.loaded.navigation,
       this.book.loaded.metadata,
     ]);
+    if (this.destroyed) {
+      return;
+    }
     const bookTitle = metadata.title;
 
     const tocButton = document.createElement("button");
@@ -209,13 +369,6 @@ export class EpubNavigationTools {
       tocLink.onclick = () => void this.rendition.display(safeHref);
       this.tocPanel.appendChild(tocLink);
     }
-
-    // Hide the TOC panel when the reader is clicked.
-    this.rendition.on("rendered", (_section: unknown, contents: Contents) => {
-      contents.document.addEventListener("mousedown", () => {
-        this.toggleTocVisibility(false);
-      });
-    });
   }
 
   private copyTocLink(e: Event, bookTitle: string, href: string, label: string): void {

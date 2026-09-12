@@ -27,6 +27,7 @@ export class EpubView extends FileView {
   private book: Book | null = null;
   private rendition: Rendition | null = null;
   private themes: EpubThemes | null = null;
+  private navigationTools: EpubNavigationTools | null = null;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -66,7 +67,7 @@ export class EpubView extends FileView {
       width: "100%",
       height: "100%",
     });
-    new EpubNavigationTools(
+    this.navigationTools = new EpubNavigationTools(
       viewerEl,
       file.path,
       this.book,
@@ -77,6 +78,8 @@ export class EpubView extends FileView {
   }
 
   private disposeReader(): void {
+    this.navigationTools?.destroy();
+    this.navigationTools = null;
     this.themes?.destroy();
     this.themes = null;
     this.rendition?.destroy();
