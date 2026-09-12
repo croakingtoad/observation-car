@@ -11,6 +11,9 @@
  * and passes `() => this.settings.anchorHeadingLevel` — the level is read
  * at parse time, never snapshotted (`updateSettings` replaces the settings
  * object wholesale, and there is no settings-change event to listen for).
+ * Link resolution is injected the same way (`resolveLink`), so the store
+ * can hand the parser a per-note resolver built on
+ * `metadataCache.getFirstLinkpathDest` without importing `obsidian`.
  */
 
 import { isBookNote, parseBookNote, type BookNote } from "./bookNote";
@@ -24,6 +27,15 @@ export interface BookNoteStoreDeps {
    * picked up on the next parse.
    */
   anchorHeadingLevel: () => number;
+  /**
+   * Resolve a link path (a wikilink target or the note's `source`) to the
+   * vault path of the file it points at, or null when it does not
+   * resolve. `main.ts` supplies
+   * `metadataCache.getFirstLinkpathDest(linkpath, notePath)?.path`;
+   * without it the parser falls back to string comparison, which keeps
+   * `parseBookNote` testable from plain Node.
+   */
+  resolveLink?: (linkpath: string, notePath: string) => string | null;
   /** Debounce window in ms. Default 250. */
   debounceMs?: number;
 }
@@ -155,6 +167,7 @@ export class BookNoteStore {
     try {
       const note = parseBookNote(text, {
         anchorHeadingLevel: this.deps.anchorHeadingLevel(),
+        resolveLink: this.resolveLinkFor(path),
       });
       if (isBookNote(note)) {
         this.notes.set(path, note);
@@ -172,5 +185,19 @@ export class BookNoteStore {
         error,
       );
     }
+  }
+
+  /**
+   * The per-note resolver handed to the parser: the injected dependency
+   * bound to the note's own path (Obsidian resolves relative to the file
+   * the link sits in), or undefined when the caller supplied none, which
+   * keeps the parser on its string-comparison fallback.
+   */
+  private resolveLinkFor(
+    path: string,
+  ): ((linkpath: string) => string | null) | undefined {
+    const resolver = this.deps.resolveLink;
+    if (resolver === undefined) return undefined;
+    return (linkpath: string) => resolver(linkpath, path);
   }
 }
