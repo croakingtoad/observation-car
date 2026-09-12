@@ -1,33 +1,189 @@
-// @vitest-environment jsdom
+import type { Book } from "epubjs";
+import { JSDOM } from "jsdom";
+import type { TFile, WorkspaceLeaf } from "obsidian";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { describe, expect, it, vi } from "vitest";
+const runtime = vi.hoisted(() => ({
+  createEpub: vi.fn(),
+  readBinary: vi.fn(),
+}));
+
+vi.mock("epubjs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("epubjs")>();
+  return { ...actual, default: runtime.createEpub };
+});
+
+vi.mock("obsidian", () => {
+  class FileView {
+    readonly app = { vault: { readBinary: runtime.readBinary } };
+    readonly contentEl: HTMLElement & {
+      createDiv(options?: { cls?: string }): HTMLDivElement;
+      empty(): void;
+    };
+
+    constructor(_leaf: unknown) {
+      const contentEl = document.createElement("div") as FileView["contentEl"];
+      contentEl.createDiv = (options = {}) => {
+        const child = document.createElement("div");
+        const classNames = typeof options === "string" ? options : options.cls;
+        const cls = Array.isArray(classNames) ? classNames.join(" ") : classNames;
+        if (cls !== undefined) {
+          child.className = cls;
+        }
+        contentEl.append(child);
+        return child;
+      };
+      contentEl.empty = () => contentEl.replaceChildren();
+      this.contentEl = contentEl;
+    }
+  }
+
+  return { FileView };
+});
+
 import {
   EpubKeyBridge,
   type EpubKeyBridgeRendition,
 } from "./epubNavigationTools";
 
 type RenderedHandler = Parameters<EpubKeyBridgeRendition["on"]>[1];
+type RenditionHandler = (...args: never[]) => unknown;
 
 class FakeRendition implements EpubKeyBridgeRendition {
   readonly prev = vi.fn(async (): Promise<void> => undefined);
   readonly next = vi.fn(async (): Promise<void> => undefined);
-  private readonly renderedHandlers = new Set<RenderedHandler>();
+  readonly destroy = vi.fn();
+  readonly themes = {
+    register: vi.fn(),
+    select: vi.fn(),
+  };
+  readonly location = { start: { href: "chapter.xhtml" } };
+  readonly display = vi.fn(async (): Promise<void> => {
+    if (this.document !== undefined) {
+      this.render(this.document);
+    }
+  });
+  private readonly handlers = new Map<string, Set<RenditionHandler>>();
+  private readonly removedHandlers = new Map<string, RenditionHandler[]>();
 
-  on(event: "rendered", handler: RenderedHandler): void {
-    expect(event).toBe("rendered");
-    this.renderedHandlers.add(handler);
+  constructor(private readonly document?: Document) {}
+
+  on(event: "rendered", handler: RenderedHandler): void;
+  on(event: string, handler: RenditionHandler): void;
+  on(event: string, handler: RenditionHandler): void {
+    let handlers = this.handlers.get(event);
+    if (handlers === undefined) {
+      handlers = new Set();
+      this.handlers.set(event, handlers);
+    }
+    handlers.add(handler);
   }
 
-  off(event: "rendered", handler: RenderedHandler): void {
-    expect(event).toBe("rendered");
-    this.renderedHandlers.delete(handler);
+  off(event: "rendered", handler: RenderedHandler): void;
+  off(event: string, handler: RenditionHandler): void;
+  off(event: string, handler: RenditionHandler): void {
+    this.handlers.get(event)?.delete(handler);
+    let removals = this.removedHandlers.get(event);
+    if (removals === undefined) {
+      removals = [];
+      this.removedHandlers.set(event, removals);
+    }
+    removals.push(handler);
   }
 
   render(document: Document): void {
-    for (const handler of this.renderedHandlers) {
-      handler({}, { document });
+    for (const handler of this.handlers.get("rendered") ?? []) {
+      (handler as RenderedHandler)({}, { document });
     }
   }
+
+  activeHandlerCount(event: string): number {
+    return this.handlers.get(event)?.size ?? 0;
+  }
+
+  removedHandlerCount(event: string): number {
+    return this.removedHandlers.get(event)?.length ?? 0;
+  }
+}
+
+interface ListenerRegistration {
+  type: string;
+  listener: EventListenerOrEventListenerObject;
+  capture: boolean;
+}
+
+function captureOption(options?: boolean | EventListenerOptions): boolean {
+  return typeof options === "boolean" ? options : (options?.capture ?? false);
+}
+
+function trackEventListeners(target: Document): {
+  activeCount(type: string): number;
+  removedCount(type: string): number;
+} {
+  const active: ListenerRegistration[] = [];
+  const removed: ListenerRegistration[] = [];
+  const nativeAdd = target.addEventListener.bind(target);
+  const nativeRemove = target.removeEventListener.bind(target);
+
+  vi.spyOn(target, "addEventListener").mockImplementation(
+    (
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ): void => {
+      nativeAdd(type, listener, options);
+      active.push({ type, listener, capture: captureOption(options) });
+    },
+  );
+  vi.spyOn(target, "removeEventListener").mockImplementation(
+    (
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | EventListenerOptions,
+    ): void => {
+      nativeRemove(type, listener, options);
+      const registration = {
+        type,
+        listener,
+        capture: captureOption(options),
+      };
+      removed.push(registration);
+      const index = active.findIndex(
+        (candidate) =>
+          candidate.type === registration.type &&
+          candidate.listener === registration.listener &&
+          candidate.capture === registration.capture,
+      );
+      if (index !== -1) {
+        active.splice(index, 1);
+      }
+    },
+  );
+
+  return {
+    activeCount: (type) => active.filter((listener) => listener.type === type).length,
+    removedCount: (type) => removed.filter((listener) => listener.type === type).length,
+  };
+}
+
+function fakeBook(title: string, rendition: FakeRendition): Book {
+  return {
+    loaded: {
+      metadata: Promise.resolve({ title }),
+      navigation: Promise.resolve({ toc: [] }),
+    },
+    ready: Promise.resolve(),
+    locations: {
+      generate: vi.fn(async (): Promise<void> => undefined),
+      locationFromCfi: vi.fn(),
+    },
+    renderTo: vi.fn(() => rendition),
+    destroy: vi.fn(),
+  } as unknown as Book;
+}
+
+function bookFile(path: string): TFile {
+  return { path, basename: path.split("/").at(-1) ?? path } as TFile;
 }
 
 function keyboardEvent(
@@ -72,6 +228,24 @@ function childDocument(parent: Document): Document {
   return frame.contentDocument;
 }
 
+let testDom: JSDOM;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  testDom = new JSDOM("<!doctype html><html><body></body></html>");
+  vi.stubGlobal("window", testDom.window);
+  vi.stubGlobal("document", testDom.window.document);
+  vi.stubGlobal("navigator", testDom.window.navigator);
+  vi.stubGlobal("MutationObserver", testDom.window.MutationObserver);
+  vi.stubGlobal("getComputedStyle", testDom.window.getComputedStyle.bind(testDom.window));
+  runtime.readBinary.mockResolvedValue(new ArrayBuffer(0));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  testDom.window.close();
+});
+
 describe("EpubKeyBridge", () => {
   it("forwards an equivalent non-paging key event to the host document", () => {
     const { host, iframe } = documents();
@@ -111,6 +285,29 @@ describe("EpubKeyBridge", () => {
     bridge.destroy();
   });
 
+  it("preserves the macOS meta modifier on a forwarded key", () => {
+    const { host, iframe } = documents();
+    const rendition = new FakeRendition();
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn());
+    rendition.render(iframe);
+    const forwarded: KeyboardEvent[] = [];
+    host.addEventListener("keydown", (event) => forwarded.push(event));
+
+    iframe.dispatchEvent(
+      keyboardEvent(iframe, "p", {
+        code: "KeyP",
+        keyCode: 80,
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0].metaKey).toBe(true);
+    bridge.destroy();
+  });
+
   it.each([
     ["ArrowLeft", "prev"],
     ["ArrowRight", "next"],
@@ -131,6 +328,33 @@ describe("EpubKeyBridge", () => {
     iframe.dispatchEvent(event);
 
     expect(rendition[method]).toHaveBeenCalledOnce();
+    expect(event.defaultPrevented).toBe(true);
+    expect(hostHandler).not.toHaveBeenCalled();
+    bridge.destroy();
+  });
+
+  it.each([
+    ["PageUp", 33],
+    ["PageDown", 34],
+  ] as const)("keeps %s reader-owned", (key, keyCode) => {
+    const { host, iframe } = documents();
+    const rendition = new FakeRendition();
+    const pageKeyJump = vi.fn();
+    const bridge = new EpubKeyBridge(rendition, host, pageKeyJump);
+    rendition.render(iframe);
+    const hostHandler = vi.fn();
+    host.addEventListener("keydown", hostHandler);
+
+    const event = keyboardEvent(iframe, key, {
+      code: key,
+      keyCode,
+      bubbles: true,
+      cancelable: true,
+    });
+    iframe.dispatchEvent(event);
+
+    expect(pageKeyJump).toHaveBeenCalledOnce();
+    expect(pageKeyJump).toHaveBeenCalledWith(key);
     expect(event.defaultPrevented).toBe(true);
     expect(hostHandler).not.toHaveBeenCalled();
     bridge.destroy();
@@ -211,36 +435,43 @@ describe("EpubKeyBridge", () => {
     bridge.destroy();
   });
 
-  it("removes the disposed rendition's document handler before a replacement pages", () => {
-    const { host, iframe: oldDocument } = documents();
-    const replacementDocument = childDocument(host);
-    const oldRendition = new FakeRendition();
-    const oldBridge = new EpubKeyBridge(oldRendition, host, vi.fn());
-    oldRendition.render(oldDocument);
-    oldBridge.destroy();
+  it("unsubscribes from rendered when destroyed", () => {
+    const { host } = documents();
+    const rendition = new FakeRendition();
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn());
 
-    const replacementRendition = new FakeRendition();
-    const replacementBridge = new EpubKeyBridge(replacementRendition, host, vi.fn());
-    replacementRendition.render(replacementDocument);
-    oldDocument.dispatchEvent(
-      keyboardEvent(oldDocument, "ArrowRight", {
-        code: "ArrowRight",
-        keyCode: 39,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    replacementDocument.dispatchEvent(
-      keyboardEvent(replacementDocument, "ArrowRight", {
-        code: "ArrowRight",
-        keyCode: 39,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    bridge.destroy();
 
-    expect(oldRendition.next).not.toHaveBeenCalled();
-    expect(replacementRendition.next).toHaveBeenCalledOnce();
-    replacementBridge.destroy();
+    expect(rendition.removedHandlerCount("rendered")).toBe(1);
+    expect(rendition.activeHandlerCount("rendered")).toBe(0);
+  });
+});
+
+describe("EpubView reader replacement", () => {
+  it("physically detaches the previous book listeners and rendered handlers", async () => {
+    const { EpubView } = await import("./EpubView");
+    const oldDocument = childDocument(document);
+    const replacementDocument = childDocument(document);
+    const oldListeners = trackEventListeners(oldDocument);
+    const replacementListeners = trackEventListeners(replacementDocument);
+    const oldRendition = new FakeRendition(oldDocument);
+    const replacementRendition = new FakeRendition(replacementDocument);
+    runtime.createEpub
+      .mockReturnValueOnce(fakeBook("Book A", oldRendition))
+      .mockReturnValueOnce(fakeBook("Book B", replacementRendition));
+    const view = new EpubView({} as WorkspaceLeaf);
+
+    await view.onLoadFile(bookFile("Books/A.epub"));
+    await view.onLoadFile(bookFile("Books/B.epub"));
+
+    expect(oldListeners.removedCount("keydown")).toBe(1);
+    expect(oldListeners.removedCount("mousedown")).toBe(1);
+    expect(oldListeners.activeCount("keydown")).toBe(0);
+    expect(oldListeners.activeCount("mousedown")).toBe(0);
+    expect(replacementListeners.activeCount("keydown")).toBe(1);
+    expect(replacementListeners.activeCount("mousedown")).toBe(1);
+    expect(oldRendition.removedHandlerCount("rendered")).toBe(2);
+    expect(oldRendition.activeHandlerCount("rendered")).toBe(0);
+    await view.onClose();
   });
 });
