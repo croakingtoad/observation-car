@@ -199,7 +199,7 @@ describe("ScrollSync", () => {
     );
   });
 
-  it("clears the displaced editor before highlighting a new section", () => {
+  it("clears the displaced editor when a different section resolves in a replacement editor", () => {
     vi.useFakeTimers();
     const rig = makeRig();
 

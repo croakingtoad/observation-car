@@ -899,7 +899,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     ]);
   });
 
-  it("exercises the FragmentReader contract for the live editor section containing the cursor", async () => {
+  it("defines F4.7's future navigation contract with a capability-opted-in reader double", async () => {
     const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
     fire("metadata", "changed", [noteFile]);
     await settle();
