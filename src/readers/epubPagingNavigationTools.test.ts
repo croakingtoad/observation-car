@@ -87,6 +87,7 @@ function inertRendition(): Rendition {
     next: vi.fn().mockResolvedValue(undefined),
     on: vi.fn(),
     prev: vi.fn().mockResolvedValue(undefined),
+    themes: { override: vi.fn() },
   } as unknown as Rendition;
 }
 

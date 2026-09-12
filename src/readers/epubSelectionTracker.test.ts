@@ -85,6 +85,7 @@ function makeRendition(): {
       return rendition;
     },
     display: async () => undefined,
+    themes: { override: () => undefined },
   };
   const emit = (event: string, ...args: unknown[]): void => {
     for (const callback of handlers.get(event) ?? []) {
