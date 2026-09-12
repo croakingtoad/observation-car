@@ -33,6 +33,8 @@ function createHost(): EpubViewHost {
     updateSettings: vi.fn(async (patch) => {
       host.settings = { ...host.settings, ...patch };
     }),
+    getLastEpubLocation: () => null,
+    rememberEpubLocation: async () => undefined,
   };
   return host;
 }
