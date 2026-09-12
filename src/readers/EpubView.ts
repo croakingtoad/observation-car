@@ -503,7 +503,15 @@ export class EpubView extends FileView {
       }
       const rendition = this.rendition;
       if (cfi !== null && rendition !== null) {
-        await rendition.display(cfi);
+        const restored = await this.redisplayAndPersistFlowLocation(
+          file,
+          generation,
+          rendition,
+          cfi,
+        );
+        if (!restored) {
+          return;
+        }
       }
       return;
     } catch (error: unknown) {
@@ -529,7 +537,15 @@ export class EpubView extends FileView {
           }
           const rendition = this.rendition;
           if (cfi !== null && rendition !== null) {
-            await rendition.display(cfi);
+            const restored = await this.redisplayAndPersistFlowLocation(
+              file,
+              generation,
+              rendition,
+              cfi,
+            );
+            if (!restored) {
+              return;
+            }
           }
         } catch (recoveryError: unknown) {
           if (!this.ownsFlowChange(file, generation)) {
@@ -548,6 +564,27 @@ export class EpubView extends FileView {
         this.restoringFile = null;
       }
     }
+  }
+
+  /**
+   * Re-display and save a captured flow location while its render still owns
+   * the leaf.
+   */
+  private async redisplayAndPersistFlowLocation(
+    file: TFile,
+    generation: number,
+    rendition: Rendition,
+    cfi: string,
+  ): Promise<boolean> {
+    await rendition.display(cfi);
+    if (
+      !this.ownsFlowChange(file, generation) ||
+      this.rendition !== rendition
+    ) {
+      return false;
+    }
+    await this.persistCurrentLocation(file.path, buildEpubCfiFragment(cfi));
+    return true;
   }
 
   /** Whether a flow-mode transaction still owns this leaf and generation. */

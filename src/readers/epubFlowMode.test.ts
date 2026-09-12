@@ -146,6 +146,7 @@ const FILE_A = makeFile("Books/A.epub");
 const FILE_B = makeFile("Books/B.epub");
 const CFI_A = "epubcfi(/6/8!/4/2/1:0)";
 const CFI_B = "epubcfi(/6/22!/4/2/9:0)";
+const CFI_TURN = "epubcfi(/6/14!/4/2/12:0)";
 
 interface FlowHost extends EpubViewHost {
   beforeSettingsWrite: (
@@ -332,6 +333,22 @@ describe("F2.2 flow-mode recovery", () => {
     await toggle;
 
     expectBookStillInstalled(view, FILE_B, bookB, 3);
+  });
+
+  // Finding 21: recovery must not swallow a page turn's pending debounce.
+  it("saves a pending page turn when a failed toggle restores the reader", async () => {
+    vi.useFakeTimers();
+    const { host, view } = await openInitialBook();
+    FakeRendition.instances[0].emitRelocated(CFI_TURN);
+    state.failNextInitialDisplay = true;
+
+    await expect(view.setFlowMode("scrolled")).rejects.toThrow("render failed");
+
+    expect(host.settings.epubFlowMode).toBe("paginated");
+    expect(FakeBook.instances).toHaveLength(3);
+    expect(FakeBook.instances[2].flow).toBe("paginated");
+    expect(FakeRendition.instances[2].display).toHaveBeenCalledWith(CFI_TURN);
+    expect(host.locations[FILE_A.path]).toBe(`#${CFI_TURN}`);
   });
 
   // QC-PROBE-X plus the existing toggle-vs-toggle mutex pin.
