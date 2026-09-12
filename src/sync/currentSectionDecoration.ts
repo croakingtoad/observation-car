@@ -7,6 +7,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import type { BookNoteSection } from "../model/bookNote";
+import { codeMirrorView } from "./codeMirrorView";
 
 interface DocumentRange {
   readonly from: number;
@@ -25,10 +26,13 @@ class CurrentSectionViewPlugin {
     let changed = false;
 
     if (update.docChanged && nextRange !== null) {
-      nextRange = {
-        from: update.changes.mapPos(nextRange.from, -1),
-        to: update.changes.mapPos(nextRange.to, 1),
-      };
+      if (replacesWholeDocument(update)) {
+        nextRange = null;
+      } else {
+        const from = update.changes.mapPos(nextRange.from, -1);
+        const to = update.changes.mapPos(nextRange.to, 1);
+        nextRange = from === to ? null : { from, to };
+      }
       changed = true;
     }
 
@@ -63,16 +67,23 @@ export const currentSectionViewPlugin = ViewPlugin.fromClass(
 export function setCurrentSectionDecoration(
   editor: unknown,
   section: BookNoteSection | null,
-): boolean {
+): void {
   const view = codeMirrorView(editor);
-  if (view === null) return false;
+  if (view === null) return;
 
   view.dispatch({
     effects: setCurrentSectionEffect.of(
       section === null ? null : sectionRange(view, section),
     ),
   });
-  return true;
+}
+
+function replacesWholeDocument(update: ViewUpdate): boolean {
+  let replaced = false;
+  update.changes.iterChangedRanges((from, to) => {
+    if (from === 0 && to === update.startState.doc.length) replaced = true;
+  });
+  return replaced;
 }
 
 function sectionRange(
@@ -108,12 +119,4 @@ function buildDecorations(
     line = document.line(line.number + 1);
   }
   return Decoration.set(decorations, true);
-}
-
-function codeMirrorView(editor: unknown): EditorView | null {
-  if (typeof editor !== "object" || editor === null || !("cm" in editor)) {
-    return null;
-  }
-  const cm: unknown = editor.cm;
-  return cm instanceof EditorView ? cm : null;
 }

@@ -64,8 +64,37 @@ describe("current-section CM6 decoration", () => {
     expect(view.state.doc.toString()).toBe(NOTE);
   });
 
+  it("clears the class when the whole document is replaced", () => {
+    view = createView();
+    setCurrentSectionDecoration({ cm: view }, section(1, 3));
+
+    view.dispatch({
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: "unrelated note\nwith unrelated content",
+      },
+    });
+
+    expect(currentLineTexts(view)).toEqual([]);
+  });
+
+  it("clears the class when the whole highlighted section is deleted", () => {
+    view = createView();
+    setCurrentSectionDecoration({ cm: view }, section(1, 3));
+
+    view.dispatch({
+      changes: {
+        from: view.state.doc.line(2).from,
+        to: view.state.doc.line(4).to,
+      },
+    });
+
+    expect(currentLineTexts(view)).toEqual([]);
+  });
+
   it("ignores editors without a live CM6 EditorView", () => {
-    expect(setCurrentSectionDecoration({}, section(1, 3))).toBe(false);
+    expect(() => setCurrentSectionDecoration({}, section(1, 3))).not.toThrow();
   });
 });
 

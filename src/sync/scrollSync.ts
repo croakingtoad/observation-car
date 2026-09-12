@@ -7,6 +7,7 @@ import {
 } from "../model/anchor";
 import type { BookNoteSection } from "../model/bookNote";
 import type { Reader, ReaderPairing } from "./ReaderRegistry";
+import { codeMirrorView } from "./codeMirrorView";
 import { setCurrentSectionDecoration } from "./currentSectionDecoration";
 
 /** The reader-side debounce leaves 50 ms of the 200 ms PRD budget. */
@@ -311,12 +312,4 @@ export function scrollHeadingIntoView(
   }
   const point = { line: resolvedLine, ch: 0 };
   editor.scrollIntoView({ from: point, to: point }, false);
-}
-
-function codeMirrorView(editor: ScrollEditor): EditorView | null {
-  if (typeof editor !== "object" || editor === null || !("cm" in editor)) {
-    return null;
-  }
-  const cm: unknown = editor.cm;
-  return cm instanceof EditorView ? cm : null;
 }
