@@ -159,13 +159,57 @@ describe("F5.1 OpdsClient — live settings reads", () => {
   });
 
   it("applies the same live reads to an absolute feed URL", async () => {
-    const settings = makeSettings({ opdsUsername: "u", opdsPassword: "p" });
+    const settings = makeSettings({
+      bookloreBaseUrl: "https://booklore.example",
+      opdsUsername: "u",
+      opdsPassword: "p",
+    });
     const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
     const client = new OpdsClient({ settings: () => settings, transport });
 
     await client.fetchFeed("https://booklore.example/api/v1/opds/page2");
     expect(calls[0].url).toBe("https://booklore.example/api/v1/opds/page2");
     expect(calls[0].headers.Authorization).toBe(basicAuthHeader("u", "p"));
+  });
+});
+
+describe("F5.1 OpdsClient — credential origin boundary", () => {
+  const USERNAME = "origin-user";
+  const PASSWORD = "origin-pass";
+  const AUTHORIZATION = basicAuthHeader(USERNAME, PASSWORD);
+  const settings = makeSettings({
+    bookloreBaseUrl: "https://booklore.example:8443/",
+    opdsUsername: USERNAME,
+    opdsPassword: PASSWORD,
+  });
+
+  it("sends Authorization to the configured origin", async () => {
+    const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(settings, transport);
+
+    await client.fetchFeed(
+      "https://booklore.example:8443/api/v1/opds/catalog?page=2",
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers.Authorization).toBe(AUTHORIZATION);
+  });
+
+  it.each([
+    ["different host", "https://evil.example.net:8443/collect"],
+    ["different scheme", "http://booklore.example:8443/api/v1/opds"],
+    ["different port", "https://booklore.example:9443/api/v1/opds"],
+  ])("omits every credential-bearing header for a %s", async (_case, url) => {
+    const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(settings, transport);
+
+    await client.fetchFeed(url);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({ Accept: "application/atom+xml" });
+    expect(Object.values(calls[0].headers)).not.toContain(AUTHORIZATION);
+    expect(JSON.stringify(calls[0].headers)).not.toContain(USERNAME);
+    expect(JSON.stringify(calls[0].headers)).not.toContain(PASSWORD);
   });
 });
 

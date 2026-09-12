@@ -27,6 +27,8 @@ const OSD_URL = "https://booklore.example/api/v1/opds/search.opds";
 const SEARCH_URL = "https://booklore.example/api/v1/opds/catalog?q=Turco";
 const PREFIXED_URL = "https://booklore.example/atom/catalog";
 const AUTHORS_URL = "https://booklore.example/api/v1/opds/authors";
+const UNSAFE_HREFS_URL =
+  "https://booklore.example/api/v1/opds/unsafe-hrefs";
 
 describe("F5.1c parseOpdsFeed — live root catalog", () => {
   const feed = () => parseOpdsFeed(readFixture("root-catalog.xml"), ROOT_URL);
@@ -480,6 +482,34 @@ describe("F5.1 parseOpdsFeed — author coverage", () => {
   });
 });
 
+describe("F5.1 parseOpdsFeed — unsafe href schemes", () => {
+  const feed = () =>
+    parseOpdsFeed(readFixture("unsafe-hrefs.xml"), UNSAFE_HREFS_URL);
+
+  it.each([
+    ["javascript:", 0],
+    ["data:", 1],
+  ])("drops %s acquisition and image links without dropping the entry", (_scheme, index) => {
+    const entry = feed().entries[index];
+
+    expect(entry.links).toEqual([]);
+    expect(entry.acquisitions).toEqual([]);
+    expect(entry.images).toEqual([]);
+    expect(entry.kind).toBe("navigation");
+  });
+
+  it("keeps http and https acquisition and image links", () => {
+    const entry = feed().entries[2];
+
+    expect(entry.acquisitions.map((link) => link.href)).toEqual([
+      "https://booklore.example/api/v1/opds/books/3.epub",
+    ]);
+    expect(entry.images.map((link) => link.href)).toEqual([
+      "http://booklore.example/covers/3.jpg",
+    ]);
+  });
+});
+
 describe("F5.1 parseOpdsFeed — summary text decoding", () => {
   const entryFeed = (summary: string): string =>
     `<feed xmlns="http://www.w3.org/2005/Atom">
@@ -557,6 +587,25 @@ describe("F5.1 parseOpdsFeed — non-OPDS responses", () => {
       expect.unreachable("expected an OpdsError");
     } catch (error) {
       expect(error).toBeInstanceOf(OpdsError);
+      expect((error as OpdsError).kind).toBe("not-opds");
+    }
+  });
+
+  it("rejects a parsererror nested under the expected feed root", () => {
+    expect(() =>
+      parseOpdsFeed(
+        "<feed><title>Partial feed</title><parsererror>truncated</parsererror></feed>",
+        ROOT_URL,
+      ),
+    ).toThrowError(OpdsError);
+
+    try {
+      parseOpdsFeed(
+        "<feed><title>Partial feed</title><parsererror>truncated</parsererror></feed>",
+        ROOT_URL,
+      );
+      expect.unreachable("expected an OpdsError");
+    } catch (error) {
       expect((error as OpdsError).kind).toBe("not-opds");
     }
   });

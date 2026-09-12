@@ -56,6 +56,18 @@ export interface OpdsClientOptions {
   transport?: OpdsTransport;
 }
 
+function isConfiguredOrigin(feedUrl: string, baseUrl: string): boolean {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  if (normalizedBaseUrl === "") {
+    return false;
+  }
+  try {
+    return new URL(feedUrl).origin === new URL(normalizedBaseUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
 export class OpdsClient {
   private readonly settings: () => ObservationCarSettings;
   private readonly transport: OpdsTransport;
@@ -94,7 +106,10 @@ export class OpdsClient {
     const headers: Record<string, string> = {
       Accept: "application/atom+xml",
     };
-    if (credentials.opdsUsername !== "" || credentials.opdsPassword !== "") {
+    if (
+      isConfiguredOrigin(feedUrl, credentials.bookloreBaseUrl) &&
+      (credentials.opdsUsername !== "" || credentials.opdsPassword !== "")
+    ) {
       headers.Authorization = basicAuthHeader(
         credentials.opdsUsername,
         credentials.opdsPassword,

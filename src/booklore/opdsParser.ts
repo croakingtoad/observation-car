@@ -66,9 +66,9 @@ export function parseOpdsFeed(xml: string, feedUrl: string): OpdsFeed {
   if (root === null) {
     throw notOpds("the response is empty");
   }
-  // Both browser DOMParsers and jsdom mark a failed XML parse with a
-  // `<parsererror>` root element; treat it like any other non-Atom body.
-  if (root.localName === "parsererror") {
+  // DOMParser engines disagree on whether malformed XML produces a
+  // `<parsererror>` root or nests one under the document's original root.
+  if (hasParserError(doc)) {
     throw notOpds("the response is not well-formed XML");
   }
   if (root.localName !== "feed") {
@@ -97,7 +97,7 @@ export function parseOpenSearchDescription(
   if (root === null) {
     throw notOpds("the response is empty");
   }
-  if (root.localName === "parsererror") {
+  if (hasParserError(doc)) {
     throw notOpds("the response is not well-formed XML");
   }
   if (root.localName !== "OpenSearchDescription") {
@@ -112,9 +112,13 @@ export function parseOpenSearchDescription(
     if (template === "") {
       continue;
     }
+    const resolvedTemplate = resolveHref(template, docUrl);
+    if (resolvedTemplate === null) {
+      continue;
+    }
     urls.push({
       type: attrOf(urlElement, "type"),
-      template: resolveHref(template, docUrl),
+      template: resolvedTemplate,
     });
   }
   return {
@@ -126,6 +130,12 @@ export function parseOpenSearchDescription(
 
 function notOpds(reason: string): OpdsError {
   return new OpdsError("not-opds", `Not an OPDS feed: ${reason}.`);
+}
+
+function hasParserError(doc: Document): boolean {
+  return Array.from(doc.getElementsByTagName("*")).some(
+    (element) => element.localName === "parsererror",
+  );
 }
 
 /** Direct children of `parent` whose local name is `name` (prefix-insensitive). */
@@ -191,36 +201,42 @@ function parseCount(text: string): number | null {
 }
 
 /**
- * Resolve a link `href` against the feed URL. Absolute hrefs pass through
- * unchanged; if `baseUrl` itself cannot be parsed as a URL (the client only
- * ever passes absolute URLs, so this is defensive), the raw href is kept
- * rather than dropping the whole feed.
+ * Resolve a link `href` against the feed URL. Only HTTP(S) links are safe for
+ * downstream navigation, image, and download consumers; everything else is
+ * dropped without rejecting the surrounding feed or entry.
  */
-function resolveHref(href: string, baseUrl: string): string {
+function resolveHref(href: string, baseUrl: string): string | null {
   if (href === "") {
-    return href;
+    return null;
   }
   try {
-    return new URL(href, baseUrl).toString();
+    const resolved = new URL(href, baseUrl);
+    return resolved.protocol === "http:" || resolved.protocol === "https:"
+      ? resolved.toString()
+      : null;
   } catch {
-    return href;
+    return null;
   }
 }
 
-function parseLink(element: Element, baseUrl: string): OpdsLink {
+function parseLink(element: Element, baseUrl: string): OpdsLink | null {
+  const href = resolveHref(attrOf(element, "href"), baseUrl);
+  if (href === null) {
+    return null;
+  }
   return {
     // Atom (RFC 4287 §4.2.7) defaults a missing rel to "alternate".
     rel: attrOf(element, "rel") || "alternate",
     type: attrOf(element, "type"),
-    href: resolveHref(attrOf(element, "href"), baseUrl),
+    href,
     title: attrOf(element, "title"),
   };
 }
 
 function parseEntry(element: Element, baseUrl: string): OpdsEntry {
-  const links = directChildren(element, "link").map((link) =>
-    parseLink(link, baseUrl),
-  );
+  const links = directChildren(element, "link")
+    .map((link) => parseLink(link, baseUrl))
+    .filter((link): link is OpdsLink => link !== null);
   const acquisitions = links.filter((link) =>
     link.rel.startsWith(ACQUISITION_REL_PREFIX),
   );
@@ -277,9 +293,9 @@ function firstHrefAny(links: OpdsLink[], rels: string[]): string | null {
 }
 
 function parseFeed(root: Element, feedUrl: string): OpdsFeed {
-  const links = directChildren(root, "link").map((link) =>
-    parseLink(link, feedUrl),
-  );
+  const links = directChildren(root, "link")
+    .map((link) => parseLink(link, feedUrl))
+    .filter((link): link is OpdsLink => link !== null);
 
   // The OpenSearch description link is matched by rel, tolerating a missing
   // type (OPDS 1.2 §3.1.1 names both; strict servers send both).
