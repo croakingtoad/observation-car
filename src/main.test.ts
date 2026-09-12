@@ -46,7 +46,9 @@ const FIRST_CFI = "#epubcfi(/6/2!/4/2/1:0)";
 const SECOND_CFI = "#epubcfi(/6/8!/4/2/1:0)";
 
 interface PluginHarness {
-  readonly plugin: ObservationCarPlugin;
+  readonly plugin: ObservationCarPlugin & {
+    readonly registeredCleanups: Array<() => void>;
+  };
   readonly saves: unknown[];
 }
 
@@ -63,7 +65,8 @@ function makePlugin(stored: unknown = undefined): PluginHarness {
       openLinkText: vi.fn(),
     },
   } as unknown as App;
-  const plugin = new ObservationCarPlugin(app, {} as PluginManifest);
+  const plugin = new ObservationCarPlugin(app, {} as PluginManifest) as
+    PluginHarness["plugin"];
   const saves: unknown[] = [];
   vi.spyOn(plugin, "loadData").mockResolvedValue(stored);
   vi.spyOn(plugin, "saveData").mockImplementation(async (data: unknown) => {
@@ -96,14 +99,55 @@ describe("manifest.json", () => {
 });
 
 describe("F2.4 plugin host persistence", () => {
-  it("registers the EPUB link handler cleanup during load", async () => {
+  it("installs the EPUB link handler and registers its cleanup during load", async () => {
     const { plugin } = makePlugin();
-    const register = vi.spyOn(plugin, "register");
+    const originalOpenLinkText = plugin.app.workspace.openLinkText;
 
     await plugin.onload();
 
-    expect(register).toHaveBeenCalledOnce();
-    expect(register).toHaveBeenCalledWith(expect.any(Function));
+    expect(plugin.app.workspace.openLinkText).not.toBe(originalOpenLinkText);
+    expect(plugin.registeredCleanups).toHaveLength(1);
+    plugin.registeredCleanups[0]();
+    expect(plugin.app.workspace.openLinkText).toBe(originalOpenLinkText);
+  });
+
+  it("writes a fresh snapshot when state changes during an in-flight save", async () => {
+    let releaseFirstSave: (() => void) | undefined;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    const { plugin, saves } = makePlugin();
+    vi.mocked(plugin.saveData).mockImplementation(async (data: unknown) => {
+      saves.push(JSON.parse(JSON.stringify(data)) as unknown);
+      if (saves.length === 1) {
+        await firstSaveGate;
+      }
+    });
+    await plugin.onload();
+
+    const firstRemember = plugin.rememberEpubLocation(
+      "Books/One.epub",
+      FIRST_CFI,
+    );
+    await vi.waitFor(() => expect(saves).toHaveLength(1));
+    const secondRemember = plugin.rememberEpubLocation(
+      "Books/Two.epub",
+      SECOND_CFI,
+    );
+
+    if (releaseFirstSave === undefined) {
+      throw new Error("The first save did not start");
+    }
+    releaseFirstSave();
+    await Promise.all([firstRemember, secondRemember]);
+
+    expect(saves).toHaveLength(2);
+    expect(saves[1]).toMatchObject({
+      epubLastLocations: {
+        "Books/One.epub": FIRST_CFI,
+        "Books/Two.epub": SECOND_CFI,
+      },
+    });
   });
 
   it("round-trips a remembered CFI through the serialized data.json shape", async () => {

@@ -24,6 +24,7 @@ import {
 
 const epub = vi.hoisted(() => {
   const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+  let displayImpl: (target?: string) => Promise<void> = async () => {};
 
   const rendition = {
     themes: { register: () => {}, select: () => {} },
@@ -36,7 +37,7 @@ const epub = vi.hoisted(() => {
         (fn) => fn !== callback,
       );
     },
-    display: async () => {},
+    display: (target?: string) => displayImpl(target),
     destroy: () => {},
   };
 
@@ -61,6 +62,11 @@ const epub = vi.hoisted(() => {
     book,
     reset() {
       for (const key of Object.keys(listeners)) delete listeners[key];
+      displayImpl = async () => {};
+      rendition.location = null;
+    },
+    setDisplay(implementation: (target?: string) => Promise<void>) {
+      displayImpl = implementation;
     },
     emit(event: string, ...args: unknown[]) {
       if (event === "relocated") {
@@ -141,6 +147,38 @@ afterEach(() => {
 });
 
 describe("EpubView location events (F2.5)", () => {
+  it("does not persist the book start when a flow-mode redisplay fails", async () => {
+    vi.useFakeTimers();
+    const rememberEpubLocation = vi.fn(async () => undefined);
+    const view = new EpubView(makeLeaf(), makeHost({ rememberEpubLocation }));
+    const file = makeFile("Books/Test.epub");
+    await view.onLoadFile(file);
+
+    epub.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    rememberEpubLocation.mockClear();
+
+    epub.setDisplay(async (target) => {
+      if (target === undefined) {
+        epub.emit(
+          "relocated",
+          relocatedAt("epubcfi(/6/2!/4/2/1:0)", "chapters/start.xhtml"),
+        );
+        return;
+      }
+      throw new Error("redisplay failed");
+    });
+
+    await expect(view.setFlowMode("scrolled")).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(rememberEpubLocation).not.toHaveBeenCalled();
+    await view.onClose();
+  });
+
   it("records the last CFI under the current book's vault path", async () => {
     vi.useFakeTimers();
     const rememberEpubLocation = vi.fn(async () => undefined);

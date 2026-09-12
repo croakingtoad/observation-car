@@ -348,10 +348,14 @@ export class EpubView extends FileView {
     generation: number,
   ): PreparedLocationEvents {
     const tracker = new EpubLocationTracker();
+    let persistPendingLocation = true;
     const onRelocated = (
       loc: EpubRenditionLocation | null | undefined,
     ): void => {
       const start = loc?.start;
+      if (start !== undefined) {
+        persistPendingLocation = this.restoringFile !== file;
+      }
       tracker.onRelocated(
         start === undefined ? null : { cfi: start.cfi, href: start.href },
       );
@@ -371,7 +375,7 @@ export class EpubView extends FileView {
         return;
       }
       const event: EpubLocationEvent = { ...loc, file };
-      if (this.restoringFile !== file) {
+      if (persistPendingLocation && this.restoringFile !== file) {
         void this.persistCurrentLocation(file.path, event.fragment);
       }
       for (const listener of [...this.locationListeners]) {
@@ -479,6 +483,7 @@ export class EpubView extends FileView {
     previousMode: EpubFlowMode,
     cfi: string | null,
   ): Promise<void> {
+    this.restoringFile = file;
     try {
       await this.host.updateSettings({ epubFlowMode: mode });
       await this.renderBook(file, mode);
@@ -509,6 +514,10 @@ export class EpubView extends FileView {
         throw error;
       }
       throw new AggregateError(failures, "Could not switch or restore the EPUB flow mode");
+    } finally {
+      if (this.restoringFile === file) {
+        this.restoringFile = null;
+      }
     }
   }
 
