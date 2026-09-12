@@ -109,7 +109,7 @@ export function buildEpubCfiFragment(cfi: string): string {
  */
 export function spineIndexFromCfi(cfi: string): number | null {
   let bare = cfi;
-  while (bare.startsWith(EPUBCFI_PREFIX) && bare.endsWith(")")) {
+  if (bare.startsWith(EPUBCFI_PREFIX) && bare.endsWith(")")) {
     bare = bare.slice(EPUBCFI_PREFIX.length, -1);
   }
   const spineEnd = bare.indexOf("!");

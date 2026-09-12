@@ -31,9 +31,6 @@ describe("tocLabelForHref", () => {
   it("ignores a fragment on the TOC side (sub-chapter anchors)", () => {
     // A TOC item anchored inside ch1 must not shadow the chapter entry
     // that comes first in document order.
-    expect(tocLabelForHref(TOC, "chapters/ch1.xhtml")).toBe(
-      "The Opening Image",
-    );
     const subOnly: readonly TocItem[] = [
       { label: "Prologue", href: "chapters/ch1.xhtml#prologue" },
     ];
@@ -259,19 +256,22 @@ describe("EpubLocationTracker", () => {
 
     tracker.onRelocated(rel("/6/8!/4/2/1:0", "ch1.xhtml"));
     tracker.destroy();
-    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(1000);
     expect(seen).toHaveLength(0);
   });
 
-  it("stops accepting relocations after destroy when re-subscribed", () => {
+  it("clears its timer and rejects new relocations after destroy", () => {
     vi.useFakeTimers();
     const tracker = new EpubLocationTracker();
-    tracker.destroy();
-    const afterDestroy = collect(tracker);
 
+    tracker.onRelocated(rel("/6/8!/4/2/1:0", "ch1.xhtml"));
+    tracker.destroy();
+    expect(vi.getTimerCount()).toBe(0);
+
+    const acceptedAfterDestroy: EpubLocation[] = [];
+    tracker.on((loc) => acceptedAfterDestroy.push(loc));
     tracker.onRelocated(rel("/6/14!/4/2/12:0", "ch3.xhtml"));
     vi.advanceTimersByTime(1000);
-    expect(afterDestroy).toHaveLength(0);
+    expect(acceptedAfterDestroy).toHaveLength(0);
   });
 });

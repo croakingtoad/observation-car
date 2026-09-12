@@ -12,9 +12,9 @@ import { EpubView, type EpubLocationEvent } from "./EpubView";
  * `obsidian` resolves to the test stub (see `vitest.config.ts`);
  * `epubjs` is mocked below: the view under test is the wiring and
  * lifetime, not epub.js's rendering or Obsidian's view framework. The
- * fake rendition keeps its listeners per event, including on `destroy()`,
- * matching epub.js's rendition lifetime so explicit `off()` calls remain
- * observable.
+ * fake rendition keeps its listeners per event. Like epub.js 0.3.x,
+ * `destroy()` does not clear the rendition emitter's listeners, making
+ * explicit `off()` calls observable here.
  */
 
 const epub = vi.hoisted(() => {
@@ -57,12 +57,11 @@ const epub = vi.hoisted(() => {
       for (const key of Object.keys(listeners)) delete listeners[key];
     },
     emit(event: string, ...args: unknown[]) {
-      for (const callback of [...(listeners[event] ?? [])]) {
+      const callbacks = [...(listeners[event] ?? [])];
+      for (const callback of callbacks) {
         callback(...args);
       }
-    },
-    listenerCount(event: string) {
-      return listeners[event]?.length ?? 0;
+      return callbacks.length;
     },
   };
 });
@@ -72,6 +71,10 @@ vi.mock("epubjs", () => ({
   Book: class {},
   EpubCFI: class {},
   Rendition: class {},
+}));
+
+vi.mock("./epubNavigationTools", () => ({
+  EpubNavigationTools: class {},
 }));
 
 /** A relocated payload shaped like epub.js's `Location`. */
@@ -207,7 +210,7 @@ describe("EpubView location events (F2.5)", () => {
     await view.onClose();
   });
 
-  it("cancels a pending event and detaches the rendition listener on close", async () => {
+  it("cancels a pending event on close", async () => {
     vi.useFakeTimers();
     const view = new EpubView(makeLeaf());
     await view.onLoadFile(makeFile("Books/Test.epub"));
@@ -219,20 +222,30 @@ describe("EpubView location events (F2.5)", () => {
       "relocated",
       relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
     );
-    const listenersBeforeClose = epub.listenerCount("relocated");
 
     // The event is pending in its 150 ms window when the leaf closes.
     await view.onClose();
-    expect(epub.listenerCount("relocated")).toBe(listenersBeforeClose - 1);
     await vi.advanceTimersByTimeAsync(1000);
     expect(events).toHaveLength(0);
+  });
+
+  it("detaches the rendition listener on close", async () => {
+    vi.useFakeTimers();
+    const view = new EpubView(makeLeaf());
+    const events: EpubLocationEvent[] = [];
+    view.on("location", (loc) => events.push(loc));
+    await view.onLoadFile(makeFile("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    await view.onClose();
 
     // The relocated listener is detached, so a late event from a dying
     // book never reaches the view.
-    epub.emit(
-      "relocated",
-      relocatedAt("epubcfi(/6/14!/4/2/12:0)", "chapters/ch3.xhtml"),
-    );
+    expect(
+      epub.emit(
+        "relocated",
+        relocatedAt("epubcfi(/6/14!/4/2/12:0)", "chapters/ch3.xhtml"),
+      ),
+    ).toBe(0);
     await vi.advanceTimersByTimeAsync(1000);
     expect(events).toHaveLength(0);
   });
