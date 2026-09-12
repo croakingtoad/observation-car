@@ -559,6 +559,41 @@ describe("EpubView reader replacement", () => {
     expect(oldRendition.activeHandlerCount("rendered")).toBe(0);
     await view.onClose();
   });
+
+  it("destroys navigation tools before the rendition and book", async () => {
+    const { EpubView } = await import("./EpubView");
+    const oldRendition = new FakeRendition();
+    const replacementRendition = new FakeRendition();
+    const oldBook = fakeBook("Book A", oldRendition);
+    runtime.createEpub
+      .mockReturnValueOnce(oldBook)
+      .mockReturnValueOnce(fakeBook("Book B", replacementRendition));
+    const view = new EpubView({} as WorkspaceLeaf);
+
+    await view.onLoadFile(bookFile("Books/A.epub"));
+    const navigationTools = (
+      view as unknown as {
+        navigationTools: { destroy(): void };
+      }
+    ).navigationTools;
+    const destroyNavigationTools = navigationTools.destroy.bind(navigationTools);
+    const destroyOrder: string[] = [];
+    vi.spyOn(navigationTools, "destroy").mockImplementation(() => {
+      destroyOrder.push("navigationTools");
+      destroyNavigationTools();
+    });
+    oldRendition.destroy.mockImplementation(() => {
+      destroyOrder.push("rendition");
+    });
+    vi.mocked(oldBook.destroy).mockImplementation(() => {
+      destroyOrder.push("book");
+    });
+
+    await view.onLoadFile(bookFile("Books/B.epub"));
+
+    expect(destroyOrder).toEqual(["navigationTools", "rendition", "book"]);
+    await view.onClose();
+  });
 });
 
 describe("forwarded EPUB hotkey integration", () => {

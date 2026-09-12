@@ -446,13 +446,22 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const book = fake.files.get(SOURCE);
     expect(book).toBeDefined();
     if (book === undefined) return;
+    const loadAndWriteOrder: string[] = [];
+    const vault = (fake.app as App).vault;
+    const createFile = vault.create.bind(vault);
+    vi.spyOn(vault, "create").mockImplementation(async (path, text, options) => {
+      loadAndWriteOrder.push("vault write");
+      return createFile(path, text, options);
+    });
     const leaf: FakeEpubLeaf = {
       view: {},
       getViewState: () => ({ type: "observation-car-epub" }),
       loadIfDeferred: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
         const view = new EpubViewDouble();
         view.file = book;
         leaf.view = view;
+        loadAndWriteOrder.push("deferred load completed");
       }),
     };
     fake.runtime.epubLeaves.push(leaf);
@@ -461,6 +470,10 @@ describe("plugin wiring (substituted obsidian module)", () => {
     await settleCommand();
 
     expect(leaf.loadIfDeferred).toHaveBeenCalledOnce();
+    expect(loadAndWriteOrder).toEqual([
+      "deferred load completed",
+      "vault write",
+    ]);
     expect(fake.createdFiles).toEqual(["Reading/Surprised by Grace.md"]);
   });
 
