@@ -24,7 +24,7 @@ import type Locations from "epubjs/types/locations";
 import { type Location } from "epubjs/types/rendition";
 import { buildEpubCfiFragment } from "../model/anchor";
 import type { EpubFlowMode } from "../settings";
-import { decidePagingAction } from "./pagingGestures";
+import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 
 /**
  * F2.2 — flow-mode controls handed in by the view. The button shows the
@@ -48,6 +48,100 @@ interface PointerPress {
   distance: number;
 }
 
+/** Attach F2.2 pointer paging to one rendered EPUB document. */
+export function addPagingListeners(
+  doc: Document,
+  mode: EpubFlowMode,
+  page: (direction: "prev" | "next") => void,
+): void {
+  // Scrolled mode is vertical: tap zones and horizontal swipe are inert,
+  // so it needs neither pointer listeners nor a touch-action override.
+  if (mode !== "paginated") {
+    return;
+  }
+
+  // Keep native vertical pan while handing horizontal gestures to the
+  // pointer handlers below.
+  doc.documentElement.style.touchAction = "pan-y";
+
+  let press: PointerPress | null = null;
+
+  doc.addEventListener("pointerdown", (event: PointerEvent) => {
+    if (event.button !== 0) {
+      return; // primary button only; touch and pen report 0 too
+    }
+    press = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startStamp: event.timeStamp,
+      distance: 0,
+    };
+  });
+
+  doc.addEventListener("pointermove", (event: PointerEvent) => {
+    if (press === null) {
+      return;
+    }
+    const travelled = Math.hypot(event.clientX - press.startX, event.clientY - press.startY);
+    if (travelled > press.distance) {
+      press.distance = travelled;
+    }
+  });
+
+  // A native pan or scroll cancels the press; it must not page.
+  doc.addEventListener("pointercancel", () => {
+    press = null;
+  });
+
+  doc.addEventListener("pointerup", (event: PointerEvent) => {
+    if (press === null) {
+      return;
+    }
+    const down = press;
+    press = null;
+
+    const selection = doc.defaultView?.getSelection();
+    const hasSelection =
+      selection !== null && selection !== undefined && selection.toString().length > 0;
+
+    const deltaX = event.clientX - down.startX;
+    const deltaY = event.clientY - down.startY;
+    const distance = Math.max(down.distance, Math.hypot(deltaX, deltaY));
+    const pageWidth = doc.body.clientWidth;
+    const pageX = pageWidth > 0
+      ? ((event.clientX % pageWidth) + pageWidth) % pageWidth
+      : event.clientX;
+
+    const action = decidePagingAction({
+      flowMode: mode,
+      hasSelection,
+      deltaX,
+      deltaY,
+      distance,
+      durationMs: event.timeStamp - down.startStamp,
+      // epub.js makes the iframe/document span every column in a section,
+      // while body.clientWidth remains one visible page. Reduce the
+      // document-relative pointer coordinate into that page.
+      endX: pageX,
+      contentWidth: pageWidth,
+    });
+
+    if (action.kind === "page") {
+      const ElementType = doc.defaultView?.Element;
+      const endsOnLink =
+        ElementType !== undefined &&
+        event.target instanceof ElementType &&
+        event.target.closest("a[href]") !== null;
+      // epub.js owns link taps, but a swipe that happens to end over a
+      // link is still a paging gesture.
+      if (endsOnLink && distance <= TAP_SLOP_PX) {
+        return;
+      }
+      page(action.direction);
+    }
+  });
+}
+
 export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
   private isTocOpen = false;
@@ -67,7 +161,7 @@ export class EpubNavigationTools {
     this.createNavigationButton(viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
     this.createNavigationButton(viewerEl, "epub-nav-next", "❯", () => this.rendition.next());
     this.createFlowButton(viewerEl);
-    this.addPagingListeners();
+    this.registerPagingListeners();
     void this.createTocPanel(viewerEl);
     this.addKeyListeners();
     void this.addSelectionListener(viewerEl);
@@ -123,81 +217,15 @@ export class EpubNavigationTools {
    * when the pointer moved past the slop, when the press was long, or
    * when it lands on an in-content link (epub.js owns those).
    */
-  private addPagingListeners(): void {
+  private registerPagingListeners(): void {
     const mode = this.flow?.mode;
-    if (mode === undefined) {
+    if (mode !== "paginated") {
       return;
     }
 
     this.rendition.on("rendered", (_section: unknown, view: { document: Document }) => {
-      const doc = view.document;
-
-      // In paginated mode the document must not pan horizontally, so let
-      // the browser keep vertical pan and hand the horizontal gestures to
-      // the pointer handlers below. Scrolled mode scrolls vertically
-      // natively; leave touch-action alone.
-      doc.documentElement.style.touchAction = mode === "paginated" ? "pan-y" : "";
-
-      let press: PointerPress | null = null;
-
-      doc.addEventListener("pointerdown", (event: PointerEvent) => {
-        if (event.button !== 0) {
-          return; // primary button only; touch and pen report 0 too
-        }
-        press = {
-          startX: event.clientX,
-          startY: event.clientY,
-          startStamp: event.timeStamp,
-          distance: 0,
-        };
-      });
-
-      doc.addEventListener("pointermove", (event: PointerEvent) => {
-        if (press === null) {
-          return;
-        }
-        const travelled = Math.hypot(event.clientX - press.startX, event.clientY - press.startY);
-        if (travelled > press.distance) {
-          press.distance = travelled;
-        }
-      });
-
-      // A native pan or scroll cancels the press; it must not page.
-      doc.addEventListener("pointercancel", () => {
-        press = null;
-      });
-
-      doc.addEventListener("pointerup", (event: PointerEvent) => {
-        if (press === null) {
-          return;
-        }
-        const down = press;
-        press = null;
-
-        // In-content links are epub.js's to navigate; a tap on one must
-        // not also turn a page.
-        if (event.target instanceof Element && event.target.closest("a[href]") !== null) {
-          return;
-        }
-
-        const selection = doc.defaultView?.getSelection();
-        const hasSelection =
-          selection !== null && selection !== undefined && selection.toString().length > 0;
-
-        const action = decidePagingAction({
-          flowMode: mode,
-          hasSelection,
-          deltaX: event.clientX - down.startX,
-          deltaY: event.clientY - down.startY,
-          distance: down.distance,
-          durationMs: event.timeStamp - down.startStamp,
-          endX: event.clientX,
-          contentWidth: doc.documentElement.clientWidth,
-        });
-
-        if (action.kind === "page") {
-          void (action.direction === "next" ? this.rendition.next() : this.rendition.prev());
-        }
+      addPagingListeners(view.document, mode, (direction) => {
+        void (direction === "next" ? this.rendition.next() : this.rendition.prev());
       });
     });
   }
