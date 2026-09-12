@@ -61,16 +61,16 @@ describe("F2.2 paging event wiring", () => {
     expect(page).toHaveBeenCalledWith("next");
   });
 
-  it("reduces a later-page pointer coordinate into the visible page", () => {
+  it("maps a later-page left-third tap into the visible page", () => {
     const doc = renderedDocument(300, 900);
     const page = vi.fn();
     addPagingListeners(doc, "paginated", page);
 
-    dispatchPointer(doc.body, "pointerdown", { clientX: 590, timeStamp: 100 });
-    dispatchPointer(doc.body, "pointerup", { clientX: 590, timeStamp: 150 });
+    dispatchPointer(doc.body, "pointerdown", { clientX: 620, timeStamp: 100 });
+    dispatchPointer(doc.body, "pointerup", { clientX: 620, timeStamp: 150 });
 
     expect(page).toHaveBeenCalledOnce();
-    expect(page).toHaveBeenCalledWith("next");
+    expect(page).toHaveBeenCalledWith("prev");
   });
 
   it("uses the scaled viewport width for fixed-layout EPUB tap zones", () => {
