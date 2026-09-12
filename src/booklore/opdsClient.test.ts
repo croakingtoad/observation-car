@@ -123,7 +123,7 @@ describe("F5.1 OpdsClient — root catalog", () => {
 
 describe("F5.1 OpdsClient — live settings reads", () => {
   it("re-reads the base URL and credentials on every call, never a snapshot", async () => {
-    const settings = makeSettings({
+    let settings = makeSettings({
       bookloreBaseUrl: "https://first.example",
       opdsUsername: "first-user",
       opdsPassword: "first-pass",
@@ -134,10 +134,17 @@ describe("F5.1 OpdsClient — live settings reads", () => {
     await client.getRootFeed();
 
     // The user edits the settings tab mid-session; the same client must
-    // pick the new values up on the next call.
-    settings.bookloreBaseUrl = "https://second.example";
-    settings.opdsUsername = "second-user";
-    settings.opdsPassword = "p@sswörd-ñ";
+    // pick the new values up on the next call. `main.ts` `updateSettings`
+    // replaces the settings object wholesale (a spread into a new object),
+    // so reassign here rather than mutating in place — a client that
+    // snapshots the old object must miss the edit, and this test is the
+    // one that catches it.
+    settings = {
+      ...settings,
+      bookloreBaseUrl: "https://second.example",
+      opdsUsername: "second-user",
+      opdsPassword: "p@sswörd-ñ",
+    };
 
     await client.getRootFeed();
 

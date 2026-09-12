@@ -21,6 +21,8 @@ const PAGE1_URL = "https://booklore.example/api/v1/opds/catalog?page=1&size=3";
 const PAGE2_URL = "https://booklore.example/api/v1/opds/catalog?page=2&size=3";
 const PAGE17_URL =
   "https://booklore.example/api/v1/opds/catalog?page=17&size=3";
+const PAGE23_URL =
+  "https://booklore.example/api/v1/opds/catalog?page=23&size=3";
 const OSD_URL = "https://booklore.example/api/v1/opds/search.opds";
 const SEARCH_URL = "https://booklore.example/api/v1/opds/catalog?q=Turco";
 const PREFIXED_URL = "https://booklore.example/atom/catalog";
@@ -254,6 +256,50 @@ describe("F5.1c parseOpdsFeed — live acquisition feed, MOBI/AZW3 page", () => 
   });
 });
 
+describe("F5.1c parseOpdsFeed — live acquisition feed, page 23 (final page)", () => {
+  const feed = () =>
+    parseOpdsFeed(readFixture("catalog-page23.xml"), PAGE23_URL);
+
+  it("parses the last two entries of the library with startIndex 67 and no next link", () => {
+    expect(feed().entries).toHaveLength(2);
+    expect(feed().opensearch).toEqual({
+      totalResults: 68,
+      startIndex: 67,
+      itemsPerPage: 3,
+    });
+    expect(feed().pagination.next).toBeNull();
+    expect(feed().pagination.prev).toBe(
+      "https://booklore.example/api/v1/opds/catalog?page=22&size=3",
+    );
+    expect(feed().pagination.last).toBe(PAGE23_URL);
+    expect(feed().pagination.self).toBe(PAGE23_URL);
+  });
+
+  it("passes the junk dc:publisher value through unchanged", () => {
+    const entry = feed().entries[1];
+    expect(entry.id).toBe("urn:booklore:book:2");
+    expect(entry.title).toBe(
+      "Fred Rogers: A Captivating Guide to the Man Behind Mister Rogers' Neighborhood",
+    );
+    expect(entry.publisher).toBe("#PrB.rating#4.31");
+    expect(entry.language).toBe("en");
+  });
+
+  it("classifies the zero-acquisition entry with a null navigation link", () => {
+    const entry = feed().entries[1];
+    expect(entry.acquisitions).toHaveLength(0);
+    expect(entry.navigation).toBeNull();
+    // Its only links are the image and thumbnail; with no acquisition
+    // link at all the parser's rule labels it "navigation" — the shape
+    // F5.4 must cope with (see OpdsEntry.kind).
+    expect(entry.links.map((link) => link.rel)).toEqual([
+      "http://opds-spec.org/image",
+      "http://opds-spec.org/image/thumbnail",
+    ]);
+    expect(entry.kind).toBe("navigation");
+  });
+});
+
 describe("F5.1c parseOpdsFeed — live OpenSearch result feed (q=Turco)", () => {
   const feed = () =>
     parseOpdsFeed(readFixture("catalog-search-turco.xml"), SEARCH_URL);
@@ -411,6 +457,66 @@ describe("F5.1 parseOpdsFeed — author coverage", () => {
 
   it("yields an empty author list for an entry with none", () => {
     expect(feed().entries[1].authors).toEqual([]);
+  });
+});
+
+describe("F5.1 parseOpdsFeed — summary text decoding", () => {
+  const entryFeed = (summary: string): string =>
+    `<feed xmlns="http://www.w3.org/2005/Atom">
+      <id>urn:booklore:summary-test</id>
+      <title>Summary decode</title>
+      <entry>
+        <id>urn:booklore:book:1</id>
+        <title>Summary probe</title>
+        <summary>${summary}</summary>
+      </entry>
+    </feed>`;
+
+  it("keeps bare angle brackets that are not tags (1 < 2 and 3 > 2)", () => {
+    const entry = parseOpdsFeed(
+      entryFeed("Compare 1 &lt; 2 and 3 &gt; 2 carefully."),
+      "https://booklore.example/api/v1/opds/catalog",
+    ).entries[0];
+    expect(entry.summary).toBe("Compare 1 < 2 and 3 > 2 carefully.");
+  });
+
+  it("keeps an angle-bracket pair with no tag content (Vols. I<>III)", () => {
+    const entry = parseOpdsFeed(
+      entryFeed("Vols. I&lt;&gt;III"),
+      "https://booklore.example/api/v1/opds/catalog",
+    ).entries[0];
+    expect(entry.summary).toBe("Vols. I<>III");
+  });
+
+  it("reduces escaped HTML markup to its text, decoding entities", () => {
+    const entry = parseOpdsFeed(
+      entryFeed("&lt;p&gt;Hello, &amp; welcome.&lt;/p&gt;"),
+      "https://booklore.example/api/v1/opds/catalog",
+    ).entries[0];
+    expect(entry.summary).toBe("Hello, & welcome.");
+  });
+});
+
+describe("F5.1 parseOpdsFeed — OpenSearch count validation", () => {
+  const countFeed = (totalResults: string): string =>
+    `<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+      <id>urn:booklore:count-test</id>
+      <title>Count validation</title>
+      <opensearch:totalResults>${totalResults}</opensearch:totalResults>
+    </feed>`;
+
+  it("reads plain non-negative integers, including zero", () => {
+    expect(parseOpdsFeed(countFeed("68"), ROOT_URL).opensearch.totalResults).toBe(68);
+    expect(parseOpdsFeed(countFeed("0"), ROOT_URL).opensearch.totalResults).toBe(0);
+  });
+
+  it("falls back to null for negatives, hex, exponents, and other Number() quirks", () => {
+    for (const value of ["-1", "0x10", "1.5e2", "3.0", "+5", "abc"]) {
+      expect(
+        parseOpdsFeed(countFeed(value), ROOT_URL).opensearch.totalResults,
+        value,
+      ).toBeNull();
+    }
   });
 });
 

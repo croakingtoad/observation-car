@@ -3,8 +3,9 @@
   Fixture: malformed — an Atom feed cut off mid-element, as a truncated
   or interrupted response would look. Intentionally NOT well-formed XML.
   SPEC-DERIVED: hand-authored. NOT captured from a live Booklore
-  instance. Live-captured, redacted fixtures replace this whole set in
-  LOCO-101 (F5.1c).
+  instance: live captures record complete response bodies, so a
+  mid-element truncation (a network interruption in transit) has no live
+  equivalent.
 -->
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>urn:uuid:broken-feed</id>

@@ -3,8 +3,10 @@
   Fixture: entry-authors — one entry with two authors (feed order) and
   one entry with no author elements at all.
   SPEC-DERIVED: hand-authored from OPDS 1.2 (catalog module) and Atom
-  (RFC 4287). NOT captured from a live Booklore instance. Live-captured,
-  redacted fixtures replace this whole set in LOCO-101 (F5.1c).
+  (RFC 4287). NOT captured from a live Booklore instance: the LOCO-101
+  survey of all 68 books found no entry carrying two distinct authors
+  (the live library's only multi-author entry duplicates one name,
+  pinned in catalog-page1.xml), so that case has no live equivalent.
 -->
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>urn:uuid:44ee55ff-authors</id>

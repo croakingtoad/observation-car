@@ -150,16 +150,24 @@ function textOf(element: Element | null): string {
 
 /**
  * Trimmed text of an element reduced to displayable prose. `textContent`
- * already flattens real markup (`<summary type="html"><p>…</p></summary>`);
- * Booklore instead escapes its markup into the text
- * (`<summary>&lt;p&gt;…&lt;/p&gt;</summary>`), so residual `<…>` tag text is
- * stripped as well.
+ * already flattens real markup inside the element; Booklore instead
+ * escapes its markup into the text
+ * (`<summary>&lt;p&gt;…&lt;/p&gt;</summary>`), so the decoded text still
+ * carries tag-like sequences. Those are decoded for real — the markup is
+ * parsed as HTML into a throwaway document and its body's text read back —
+ * rather than stripped by a `<…>` regex, which cannot tell markup from
+ * prose around bare angle brackets (`"1 < 2"`, `"I<>III"`) and deletes it.
  */
 function summaryText(element: Element | null): string {
   if (element === null) {
     return "";
   }
-  return (element.textContent ?? "").replace(/<[^>]*>/g, "").trim();
+  const markup = element.textContent ?? "";
+  if (markup === "") {
+    return "";
+  }
+  const probe = new DOMParser().parseFromString(markup, "text/html");
+  return (probe.body?.textContent ?? "").trim();
 }
 
 function attrOf(element: Element, name: string): string {
@@ -168,15 +176,16 @@ function attrOf(element: Element, name: string): string {
 
 /**
  * Parse OpenSearch metadata numbers; `null` when the element is missing,
- * empty, or not a finite number (Booklore sends plain integers).
+ * empty, or not a non-negative integer. These values come from an untrusted
+ * server, so `Number()`'s tolerance for hex, exponents, and signs is
+ * deliberately not extended to them (Booklore sends plain integers).
  */
 function parseCount(text: string): number | null {
   const trimmed = text.trim();
-  if (trimmed === "") {
+  if (!/^\d+$/.test(trimmed)) {
     return null;
   }
-  const value = Number(trimmed);
-  return Number.isFinite(value) ? value : null;
+  return Number(trimmed);
 }
 
 /**

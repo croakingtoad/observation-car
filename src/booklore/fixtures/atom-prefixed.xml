@@ -4,8 +4,9 @@
   Atom namespace is declared with an "atom:" prefix instead of as the
   default namespace.
   SPEC-DERIVED: hand-authored from OPDS 1.2 (catalog module) and Atom
-  (RFC 4287). NOT captured from a live Booklore instance. Live-captured,
-  redacted fixtures replace this whole set in LOCO-101 (F5.1c).
+  (RFC 4287). NOT captured from a live Booklore instance: every LOCO-101
+  capture declares the Atom namespace as the default, unprefixed one, so
+  the live instance cannot produce this shape.
 -->
 <atom:feed xmlns:atom="http://www.w3.org/2005/Atom">
   <atom:id>urn:uuid:55cc66dd-prefixed</atom:id>

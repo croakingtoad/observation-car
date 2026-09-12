@@ -16,6 +16,6 @@ function notAvailable(member: string): never {
   );
 }
 
-export function requestUrl(_options: unknown): Promise<never> {
-  return Promise.reject(notAvailable("requestUrl"));
+export function requestUrl(_options: unknown): never {
+  throw notAvailable("requestUrl");
 }
