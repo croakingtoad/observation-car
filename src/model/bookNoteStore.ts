@@ -54,6 +54,10 @@ export class BookNoteStore {
    */
   private runPromise: Promise<void> | null = null;
   private rerunRequested = false;
+  /**
+   * Invalidation generation for re-parse runs. `clear()` advances it so
+   * orphaned runs stop reading and cannot publish into the cleared store.
+   */
   private epoch = 0;
 
   constructor(deps: BookNoteStoreDeps) {
@@ -105,7 +109,10 @@ export class BookNoteStore {
     }
   }
 
-  /** Drop everything and cancel a pending re-parse (plugin unload). */
+  /**
+   * Drop everything, cancel pending work, and invalidate in-flight re-parses
+   * (plugin unload).
+   */
   clear(): void {
     this.epoch += 1;
     this.pending.clear();
@@ -190,6 +197,9 @@ export class BookNoteStore {
             await this.reparsePath(path, epoch);
           }
         } while (
+          // Deliberate defence-in-depth: the hoisted guard currently makes
+          // this epoch check redundant, but this loop has produced a renderer
+          // freeze and two orphan defects. No test can distinguish its presence.
           this.epoch === epoch &&
           (this.rerunRequested || this.pending.size > 0)
         );
@@ -207,6 +217,7 @@ export class BookNoteStore {
    * batch or silently discarding state.
    */
   private async reparsePath(path: string, epoch: number): Promise<void> {
+    if (this.epoch !== epoch) return;
     let text: string | null;
     try {
       text = await this.deps.readText(path);
