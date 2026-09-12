@@ -7,6 +7,7 @@ import {
 } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../manifest.json";
+import { parseBookNote } from "./model/bookNote";
 import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
 
@@ -122,7 +123,7 @@ interface FakeVault {
   createdFiles: string[];
   generatedLinks: { filePath: string; sourcePath: string }[];
   openedFiles: string[];
-  runtime: { activeView: unknown };
+  runtime: { activeView: unknown; useMarkdownLinks: boolean };
 }
 
 function makeFakeVault(): FakeVault {
@@ -136,7 +137,10 @@ function makeFakeVault(): FakeVault {
   const createdFiles: string[] = [];
   const generatedLinks: { filePath: string; sourcePath: string }[] = [];
   const openedFiles: string[] = [];
-  const runtime = { activeView: null as unknown };
+  const runtime = {
+    activeView: null as unknown,
+    useMarkdownLinks: false,
+  };
 
   const app = {
     vault: {
@@ -191,7 +195,9 @@ function makeFakeVault(): FakeVault {
     fileManager: {
       generateMarkdownLink: (file: TFile, sourcePath: string): string => {
         generatedLinks.push({ filePath: file.path, sourcePath });
-        return `[[${file.name}]]`;
+        return runtime.useMarkdownLinks
+          ? `[${file.basename}](${file.path})`
+          : `[[${file.name}]]`;
       },
     },
     workspace: {
@@ -325,6 +331,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const file = new TFileDouble(path, "epub");
     fake.files.set(path, file);
     fake.linkDests.set(path.toLowerCase(), path);
+    fake.linkDests.set(file.name.toLowerCase(), path);
     return file;
   }
 
@@ -395,7 +402,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
       [
         "---",
         "type: book-note",
-        'source: "[[Surprised by Grace.epub]]"',
+        'source: "[[Books/Surprised by Grace.epub]]"',
         "format: epub",
         'title: "Surprised by Grace"',
         'author: ""',
@@ -403,10 +410,89 @@ describe("plugin wiring (substituted obsidian module)", () => {
         "",
       ].join("\n"),
     );
-    expect(fake.generatedLinks).toEqual([
-      { filePath: SOURCE, sourcePath: notePath },
-    ]);
+    expect(fake.generatedLinks).toEqual([]);
     expect(fake.openedFiles).toEqual([notePath]);
+  });
+
+  it.each([
+    { mode: "wikilinks on", useMarkdownLinks: false },
+    { mode: "wikilinks off", useMarkdownLinks: true },
+  ])(
+    "writes a resolvable vault-path source with $mode",
+    async ({ useMarkdownLinks }) => {
+      fake.runtime.useMarkdownLinks = useMarkdownLinks;
+      const book = fake.files.get(SOURCE);
+      expect(book).toBeDefined();
+      fake.runtime.activeView = { file: book };
+
+      const command = getCreateBookNoteCommand();
+      expect(command).toBeDefined();
+      if (command === undefined) return;
+      expect(command.checkCallback?.(false)).toBe(true);
+      await settleCommand();
+
+      const notePath = "Reading/Surprised by Grace.md";
+      const content = fake.contents.get(notePath);
+      expect(content).toBeDefined();
+      if (content === undefined) return;
+      const source = parseBookNote(content).frontmatter.source;
+      expect(source).toBe(SOURCE);
+      expect(
+        source === null ? null : fake.linkDests.get(source.toLowerCase()),
+      ).toBe(SOURCE);
+    },
+  );
+
+  it("preserves a literal author placeholder in the book filename", async () => {
+    const source = "Books/Foo {{author}} Bar.epub";
+    const book = addBookFile(source);
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const notePath = "Reading/Foo {{author}} Bar.md";
+    expect(fake.contents.get(notePath)).toBe(
+      [
+        "---",
+        "type: book-note",
+        'source: "[[Books/Foo {{author}} Bar.epub]]"',
+        "format: epub",
+        'title: "Foo {{author}} Bar"',
+        'author: ""',
+        "---",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves a literal format placeholder in the book filename", async () => {
+    const source = "Books/Foo {{format}} Bar.epub";
+    const book = addBookFile(source);
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const notePath = "Reading/Foo {{format}} Bar.md";
+    expect(fake.contents.get(notePath)).toBe(
+      [
+        "---",
+        "type: book-note",
+        'source: "[[Books/Foo {{format}} Bar.epub]]"',
+        "format: epub",
+        'title: "Foo {{format}} Bar"',
+        'author: ""',
+        "---",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("opens an existing note without overwriting it", async () => {
