@@ -160,8 +160,8 @@ describe("sortSectionsByBookPosition", () => {
       parsed[1],
     ];
 
-    expect(() => sortSectionsByBookPosition(input, sections)).toThrow(
-      RangeError,
+    expect(() => sortSectionsByBookPosition(input, sections)).toThrowError(
+      /Invalid book-note section range/,
     );
   });
 

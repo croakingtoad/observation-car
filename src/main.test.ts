@@ -1244,6 +1244,27 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
+  it("releases scroll sync and its pending timer when a reader leaf closes", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { leaf, view } = openEpubReader(book);
+
+    view.emitLocation(`#${CFI_1}`);
+    expect(vi.getTimerCount()).toBe(1);
+
+    fake.leaves.delete(leaf);
+    fire("workspace", "layout-change", []);
+
+    expect(vi.getTimerCount()).toBe(0);
+    view.emitLocation(`#${CFI_2}`);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each(["layout-change", "file-open", "active-leaf-change"])(
     "refreshes reader pairings when workspace fires %s",
     async (eventName) => {

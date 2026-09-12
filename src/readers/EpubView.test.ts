@@ -19,6 +19,14 @@ import { EpubView, type EpubLocationEvent } from "./EpubView";
 
 const epub = vi.hoisted(() => {
   const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+  const toc = [
+    {
+      id: "toc-ch1",
+      label: "The Opening Image",
+      href: "chapters/ch1.xhtml",
+    },
+  ];
+  let navigation: Promise<{ toc: typeof toc }>;
 
   const rendition = {
     themes: { register: () => {}, select: () => {} },
@@ -37,15 +45,9 @@ const epub = vi.hoisted(() => {
   const book = {
     renderTo: () => rendition,
     loaded: {
-      navigation: Promise.resolve({
-        toc: [
-          {
-            id: "toc-ch1",
-            label: "The Opening Image",
-            href: "chapters/ch1.xhtml",
-          },
-        ],
-      }),
+      get navigation() {
+        return navigation;
+      },
       metadata: Promise.resolve({ title: "A Test Book" }),
     },
     destroy: () => {},
@@ -55,6 +57,10 @@ const epub = vi.hoisted(() => {
     book,
     reset() {
       for (const key of Object.keys(listeners)) delete listeners[key];
+      navigation = Promise.resolve({ toc });
+    },
+    rejectNavigation(error: unknown) {
+      navigation = Promise.reject(error);
     },
     emit(event: string, ...args: unknown[]) {
       const callbacks = [...(listeners[event] ?? [])];
@@ -123,6 +129,31 @@ afterEach(() => {
 });
 
 describe("EpubView location events (F2.5)", () => {
+  it("logs navigation failures and keeps chapter-label fallback", async () => {
+    vi.useFakeTimers();
+    const failure = new Error("malformed navigation document");
+    epub.rejectNavigation(failure);
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const view = new EpubView(makeLeaf());
+    const events: EpubLocationEvent[] = [];
+    view.on("location", (loc) => events.push(loc));
+
+    await view.onLoadFile(makeFile("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    epub.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[observation-car] could not resolve EPUB navigation",
+      failure,
+    );
+    expect(events[0]?.label).toBe("Ch. 3");
+    await view.onClose();
+  });
+
   it("emits a debounced LocationChanged with {file, fragment, chapter, label}", async () => {
     vi.useFakeTimers();
     const view = new EpubView(makeLeaf());
