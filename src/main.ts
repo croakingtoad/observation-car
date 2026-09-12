@@ -10,14 +10,16 @@ import {
   type BookNote,
 } from "./model/bookNote";
 import { BookNoteStore } from "./model/bookNoteStore";
+import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
 
 /**
  * Observation Car — plugin entry point.
  *
- * F1.1 scaffold + F1.4 settings + F1.2 book-note model: on load the settings
- * are merged from `data.json`, the settings tab is registered, and a
- * debounced `metadataCache` listener keeps the book-note cache up to date so
- * the sync layer (E004) always reads a fresh parse.
+ * F1.1 scaffold + F1.4 settings + F1.2 book-note model + F2.1 EPUB view:
+ * on load the settings are merged from `data.json`, the settings tab is
+ * registered, `.epub` is routed to the in-plugin `EpubView`, and a
+ * debounced `metadataCache` listener keeps the book-note cache up to date
+ * so the sync layer (E004) always reads a fresh parse.
  *
  * `anchorHeadingLevel` is read from `this.settings` at parse time — never
  * snapshot the settings object: `updateSettings` replaces it wholesale, and
@@ -33,6 +35,11 @@ export default class ObservationCarPlugin extends Plugin {
   async onload(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
     this.addSettingTab(new ObservationCarSettingTab(this.app, this));
+
+    // F2.1: `.epub` opens in the in-plugin reader view; no external
+    // reader is involved. The view-type factory is called once per leaf.
+    this.registerView(EPUB_VIEW_TYPE, (leaf) => new EpubView(leaf));
+    this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
