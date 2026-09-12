@@ -429,6 +429,65 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     await openA;
   });
 
+  it("does not let a superseded relocation re-arm persistence during a book swap", async () => {
+    const fileA = file("library/a.epub");
+    const fileB = file("library/b.epub");
+    const savedCfiB = "#epubcfi(/6/22!/4/2/9:0)";
+    const renderStartCfi = "epubcfi(/6/2!/4/2/1:0)";
+    const locations: Record<string, string> = { [fileB.path]: savedCfiB };
+    const rememberEpubLocation = vi.fn(async (path: string, fragment: string) => {
+      locations[path] = fragment;
+    });
+    const host: EpubViewHost = {
+      ...makeHost(),
+      getLastEpubLocation: (path) => locations[path] ?? null,
+      rememberEpubLocation,
+    };
+    const displayGate = deferred();
+    state.currentDisplayGate = displayGate.promise;
+    const view = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+      host,
+    );
+
+    const openA = view.onLoadFile(fileA);
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[0].display).toHaveBeenCalledOnce();
+    });
+    const renditionA = FakeRendition.instances[0];
+
+    const restoreGate = deferred();
+    const openAtFragment = vi
+      .spyOn(view, "openAtFragment")
+      .mockImplementation(() => restoreGate.promise);
+    state.currentDisplayGate = null;
+    const openB = view.onLoadFile(fileB);
+    await vi.waitFor(() => {
+      expect(openAtFragment).toHaveBeenCalledWith(savedCfiB);
+    });
+    FakeRendition.instances[1].location = {
+      start: { cfi: renderStartCfi },
+    };
+
+    renditionA.emit("relocated", {
+      start: {
+        cfi: "epubcfi(/6/8!/4/2/1:0)",
+        href: "chapters/ch1.xhtml",
+      },
+    });
+    restoreGate.resolve();
+    await openB;
+    displayGate.resolve();
+    await openA;
+    await view.onClose();
+
+    expect(locations[fileB.path]).toBe(savedCfiB);
+    expect(rememberEpubLocation).not.toHaveBeenCalledWith(
+      fileB.path,
+      `#${renderStartCfi}`,
+    );
+  });
+
   it("detaches location events when a superseded render finally settles", async () => {
     const displayGate = deferred();
     state.currentDisplayGate = displayGate.promise;

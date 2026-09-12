@@ -69,6 +69,9 @@ const epub = vi.hoisted(() => {
     setDisplay(implementation: (target?: string) => Promise<void>) {
       displayImpl = implementation;
     },
+    setLocation(location: unknown) {
+      rendition.location = location;
+    },
     emit(event: string, ...args: unknown[]) {
       if (event === "relocated") {
         rendition.location = args[0];
@@ -148,6 +151,31 @@ afterEach(() => {
 });
 
 describe("EpubView location events (F2.5)", () => {
+  it("does not persist a render position when restoration emits no relocation", async () => {
+    const savedCfi = "#epubcfi(/6/8!/4/2/1:0)";
+    let storedLocation = savedCfi;
+    const rememberEpubLocation = vi.fn(async (_path: string, fragment: string) => {
+      storedLocation = fragment;
+    });
+    const view = new EpubView(
+      makeLeaf(),
+      makeHost({
+        getLastEpubLocation: () => savedCfi,
+        rememberEpubLocation,
+      }),
+    );
+    vi.spyOn(view, "openAtFragment").mockResolvedValue(undefined);
+    epub.setLocation(
+      relocatedAt("epubcfi(/6/2!/4/2/1:0)", "chapters/start.xhtml"),
+    );
+
+    await view.onLoadFile(makeFile("Books/Test.epub"));
+    await view.onClose();
+
+    expect(storedLocation).toBe(savedCfi);
+    expect(rememberEpubLocation).not.toHaveBeenCalled();
+  });
+
   // PROBE-AC1b
   it("does not persist the book start when a flow-mode redisplay fails", async () => {
     vi.useFakeTimers();
