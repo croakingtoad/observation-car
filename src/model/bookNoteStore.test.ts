@@ -284,8 +284,21 @@ describe("BookNoteStore", () => {
     const first = store.flush();
     store.scheduleReparse("b.md");
     const second = store.flush();
+    let secondFinished = false;
+    const observeSecond = async (): Promise<void> => {
+      await second;
+      secondFinished = true;
+    };
+    const observation = observeSecond();
+
+    // Let every currently runnable microtask settle while a.md remains
+    // blocked. The second flush must still be waiting for the shared run.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(secondFinished).toBe(false);
+
     releaseFirst(NOTE_TEXT);
-    await Promise.all([first, second]);
+    await Promise.all([first, second, observation]);
+    expect(secondFinished).toBe(true);
     expect(store.has("a.md")).toBe(true);
     expect(store.has("b.md")).toBe(true);
   });
