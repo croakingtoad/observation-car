@@ -148,10 +148,12 @@ interface FakeVault {
   generatedLinks: { filePath: string; sourcePath: string }[];
   openedFiles: string[];
   rootSplit: object;
+  sidebarRoot: object;
   createdSplitLeaves: FakeLeaf[];
   runtime: {
     activeView: unknown;
     mostRecentMainLeaf: FakeLeaf | null;
+    splitRootOverride: object | null;
     useMarkdownLinks: boolean;
   };
 }
@@ -161,6 +163,8 @@ interface FakeLeaf {
   area: "main" | "sidebar";
   splitDirection?: "vertical" | "horizontal";
   splitFrom?: FakeLeaf;
+  detached: boolean;
+  detach(): void;
   getRoot(): object;
   openFile(file: TFile): Promise<void>;
 }
@@ -186,6 +190,7 @@ function makeFakeVault(): FakeVault {
   const runtime = {
     activeView: null as unknown,
     mostRecentMainLeaf: null as FakeLeaf | null,
+    splitRootOverride: null as object | null,
     useMarkdownLinks: false,
   };
 
@@ -194,15 +199,20 @@ function makeFakeVault(): FakeVault {
     root: object,
     view: unknown = null,
   ): FakeLeaf {
-    return {
+    const leaf: FakeLeaf = {
       view,
       area,
+      detached: false,
+      detach: () => {
+        leaf.detached = true;
+      },
       getRoot: () => root,
       openFile: async (file: TFile): Promise<void> => {
         openedFiles.push(file.path);
         workspaceHandlers.get("file-open")?.(file);
       },
     };
+    return leaf;
   }
 
   const app = {
@@ -301,8 +311,11 @@ function makeFakeVault(): FakeVault {
         sourceLeaf: FakeLeaf,
         direction: "vertical" | "horizontal",
       ): FakeLeaf => {
-        const root = sourceLeaf.area === "main" ? rootSplit : sidebarRoot;
-        const leaf = makeLeaf(sourceLeaf.area, root);
+        const root =
+          runtime.splitRootOverride ??
+          (sourceLeaf.area === "main" ? rootSplit : sidebarRoot);
+        const area = root === rootSplit ? "main" : "sidebar";
+        const leaf = makeLeaf(area, root);
         leaf.splitDirection = direction;
         leaf.splitFrom = sourceLeaf;
         createdSplitLeaves.push(leaf);
@@ -329,6 +342,7 @@ function makeFakeVault(): FakeVault {
     generatedLinks,
     openedFiles,
     rootSplit,
+    sidebarRoot,
     createdSplitLeaves,
     runtime,
   };
@@ -462,16 +476,24 @@ describe("plugin wiring (substituted obsidian module)", () => {
     handler(...args);
   }
 
-  function openEpubReader(book: TFile): {
+  function openEpubReader(
+    book: TFile,
+    area: "main" | "sidebar" = "main",
+  ): {
     leaf: FakeLeaf;
     view: { file: TFile | null; getViewType(): string };
   } {
     const factory = fake.registeredViews.get("observation-car-epub");
     if (factory === undefined) throw new Error("EPUB view was not registered");
+    const root = area === "main" ? fake.rootSplit : fake.sidebarRoot;
     const leaf: FakeLeaf = {
       view: null,
-      area: "main",
-      getRoot: () => fake.rootSplit,
+      area,
+      detached: false,
+      detach: () => {
+        leaf.detached = true;
+      },
+      getRoot: () => root,
       openFile: async (file: TFile): Promise<void> => {
         fake.openedFiles.push(file.path);
       },
@@ -685,6 +707,53 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noteLeaf.getRoot()).toBe(fake.rootSplit);
     expect(noteLeaf.splitDirection).toBe("vertical");
     expect(noteLeaf.splitFrom).toBe(reader.leaf);
+  });
+
+  it("rejects a registered reader outside the main workspace root", async () => {
+    await plugin.updateSettings({ autoOpenBookNote: true });
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+
+    openEpubReader(book, "sidebar");
+    await settleCommand();
+
+    expect(getOpenBookNoteCommand()?.checkCallback?.(true)).toBe(false);
+    expect(fake.createdFiles).toEqual([]);
+    expect(fake.createdSplitLeaves).toEqual([]);
+    expect(fake.openedFiles).toEqual([]);
+  });
+
+  it("detaches a note split that resolves outside the main workspace root", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    openEpubReader(book);
+    fake.runtime.splitRootOverride = fake.sidebarRoot;
+
+    expect(getOpenBookNoteCommand()?.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    expect(fake.createdSplitLeaves).toHaveLength(1);
+    const rejectedLeaf = fake.createdSplitLeaves[0];
+    expect(rejectedLeaf.getRoot()).toBe(fake.sidebarRoot);
+    expect(rejectedLeaf.detached).toBe(true);
+    expect(fake.openedFiles).toEqual([]);
+    expect(consoleError).toHaveBeenCalledWith(
+      "[observation-car] could not open book note",
+      expect.any(Error),
+    );
+  });
+
+  it("hides the open-note command when the recent leaf is not a live reader", () => {
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const reader = openEpubReader(book);
+    fake.leaves.delete(reader.leaf);
+
+    expect(getOpenBookNoteCommand()?.checkCallback?.(true)).toBe(false);
+    expect(fake.createdSplitLeaves).toEqual([]);
   });
 
   it("uses F1.5 creation when the reader has no existing note", async () => {
