@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../manifest.json";
 import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
+import { ReaderRegistry } from "./sync/ReaderRegistry";
 
 /**
  * The plugin wiring is the seam with the Obsidian runtime, so this suite
@@ -109,6 +110,7 @@ interface FakeVault {
   workspaceHandlers: Map<string, Handler>;
   registeredViews: Map<string, (leaf: unknown) => unknown>;
   leaves: Set<unknown>;
+  leafQueries: { count: number };
 }
 
 function makeFakeVault(): FakeVault {
@@ -121,6 +123,7 @@ function makeFakeVault(): FakeVault {
   const workspaceHandlers = new Map<string, Handler>();
   const registeredViews = new Map<string, (leaf: unknown) => unknown>();
   const leaves = new Set<unknown>();
+  const leafQueries = { count: 0 };
 
   const app = {
     vault: {
@@ -159,8 +162,9 @@ function makeFakeVault(): FakeVault {
         workspaceHandlers.set(name, callback);
         return { name };
       },
-      getLeavesOfType: (viewType: string): unknown[] =>
-        [...leaves].filter((leaf) => {
+      getLeavesOfType: (viewType: string): unknown[] => {
+        leafQueries.count += 1;
+        return [...leaves].filter((leaf) => {
           if (
             typeof leaf !== "object" ||
             leaf === null ||
@@ -176,7 +180,8 @@ function makeFakeVault(): FakeVault {
             typeof view.getViewType === "function" &&
             view.getViewType() === viewType
           );
-        }),
+        });
+      },
     },
     registeredViews,
   };
@@ -192,6 +197,7 @@ function makeFakeVault(): FakeVault {
     workspaceHandlers,
     registeredViews,
     leaves,
+    leafQueries,
   };
 }
 
@@ -265,6 +271,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -472,11 +479,23 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     const file = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
     fire("metadata", "changed", [file]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { leaf } = openEpubReader(book);
+    expect(plugin.getReaderPairingForNote("Reading/A.md")?.leaf).toBe(leaf);
+
+    fire("metadata", "changed", [file]);
     expect(vi.getTimerCount()).toBe(1); // the debounce window is pending
+    const clear = vi.spyOn(ReaderRegistry.prototype, "clear");
 
     plugin.onunload();
+
+    expect(clear).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
     expect(plugin.getBookNotePaths()).toEqual([]);
+    expect(plugin.getReaderPairingForNote("Reading/A.md")).toBeUndefined();
   });
 
   it("matches shortest-path anchor links against the source via the metadata cache", async () => {
@@ -606,4 +625,23 @@ describe("plugin wiring (substituted obsidian module)", () => {
     fire("workspace", "layout-change", []);
     expect(plugin.getReaderPairingForNote("Reading/A.md")).toBeUndefined();
   });
+
+  it.each(["layout-change", "file-open", "active-leaf-change"])(
+    "refreshes reader pairings when workspace fires %s",
+    async (eventName) => {
+      fake.linkDests.set("surprised by grace.epub", SOURCE);
+      const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+      fire("metadata", "changed", [noteFile]);
+      await settle();
+
+      const book = fake.files.get(SOURCE);
+      if (book === undefined) throw new Error("book fixture is missing");
+      openEpubReader(book);
+      const queriesBeforeEvent = fake.leafQueries.count;
+
+      fire("workspace", eventName, []);
+
+      expect(fake.leafQueries.count).toBe(queriesBeforeEvent + 1);
+    },
+  );
 });

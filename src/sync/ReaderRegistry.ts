@@ -69,12 +69,6 @@ export class ReaderRegistry {
     });
   }
 
-  /** Explicitly forget a reader leaf. Closed leaves are also pruned by refresh. */
-  unregister(leaf: WorkspaceLeaf): void {
-    this.readers.delete(leaf);
-    this.rebuildPairings();
-  }
-
   /**
    * Reconcile reader lifecycle, current files, and the live book-note cache.
    * Layout moves and re-focus leave both leaf and file identity unchanged,
