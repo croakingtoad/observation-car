@@ -162,31 +162,35 @@ export class BookNoteStore {
     return run;
   }
 
-  private async runPending(): Promise<void> {
-    // `ensureRun` must publish this promise before any path, including an
-    // empty pending set, can reach the finally block that clears it.
-    await Promise.resolve();
-    try {
-      do {
-        this.rerunRequested = false;
-        // Absorb the debounce timer: its paths are already in the pending
-        // set this loop drains, so the timer must not fire a second pass
-        // for work this pass has taken over.
-        if (this.timer !== null) {
-          clearTimeout(this.timer);
-          this.timer = null;
-        }
-        const paths = [...this.pending];
-        this.pending.clear();
-        for (const path of paths) {
-          // Per-path containment: a read or parse failure logs and moves
-          // on, so one bad note can never drop its batch siblings.
-          await this.reparsePath(path);
-        }
-      } while (this.rerunRequested || this.pending.size > 0);
-    } finally {
-      this.runPromise = null;
-    }
+  private runPending(): Promise<void> {
+    let thisRun: Promise<void> | null = null;
+    thisRun = (async (): Promise<void> => {
+      // `ensureRun` must publish this promise before any path, including an
+      // empty pending set, can reach the finally block that clears it.
+      await Promise.resolve();
+      try {
+        do {
+          this.rerunRequested = false;
+          // Absorb the debounce timer: its paths are already in the pending
+          // set this loop drains, so the timer must not fire a second pass
+          // for work this pass has taken over.
+          if (this.timer !== null) {
+            clearTimeout(this.timer);
+            this.timer = null;
+          }
+          const paths = [...this.pending];
+          this.pending.clear();
+          for (const path of paths) {
+            // Per-path containment: a read or parse failure logs and moves
+            // on, so one bad note can never drop its batch siblings.
+            await this.reparsePath(path);
+          }
+        } while (this.rerunRequested || this.pending.size > 0);
+      } finally {
+        if (this.runPromise === thisRun) this.runPromise = null;
+      }
+    })();
+    return thisRun;
   }
 
   /**

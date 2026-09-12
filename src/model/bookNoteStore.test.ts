@@ -222,6 +222,61 @@ describe("BookNoteStore", () => {
     );
   });
 
+  it("an orphaned run cannot clear its successor after clear()", async () => {
+    let releaseFirst: (text: string) => void = () => {};
+    let releaseSecond: (text: string) => void = () => {};
+    let markFirstStarted: () => void = () => {};
+    let markSecondStarted: () => void = () => {};
+    const firstRead = new Promise<string>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondRead = new Promise<string>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      markSecondStarted = resolve;
+    });
+    const { store } = makeStore({
+      readText: async (path) => {
+        if (path === "a.md") {
+          markFirstStarted();
+          return await firstRead;
+        }
+        markSecondStarted();
+        return await secondRead;
+      },
+    });
+
+    store.scheduleReparse("a.md");
+    const firstFlush = store.flush();
+    const orphanedRun = Reflect.get(store, "runPromise") as Promise<void>;
+    await firstStarted;
+
+    store.clear();
+    store.scheduleReparse("b.md");
+    const successorFlush = store.flush();
+    const successorRun = Reflect.get(store, "runPromise") as Promise<void>;
+    await secondStarted;
+
+    releaseFirst(NOTE_TEXT);
+    await orphanedRun;
+    expect(Reflect.get(store, "runPromise")).toBe(successorRun);
+
+    let lateFlushFinished = false;
+    const lateFlush = store.flush().then(() => {
+      lateFlushFinished = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lateFlushFinished).toBe(false);
+
+    releaseSecond(NOTE_TEXT);
+    await Promise.all([firstFlush, successorFlush, lateFlush]);
+    expect(store.has("b.md")).toBe(true);
+  });
+
   it("reads anchorHeadingLevel at parse time, never from a snapshot", async () => {
     let level = 2;
     const { store } = makeStore({
