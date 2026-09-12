@@ -19,6 +19,8 @@ import {
   type LocationChanged,
 } from "./sync/scrollSync";
 
+const noticeMessages = vi.hoisted((): string[] => []);
+
 interface RecordedCommand {
   id: string;
   name: string;
@@ -125,7 +127,9 @@ vi.mock("obsidian", () => {
     }
   }
   class Notice {
-    constructor(_message: string) {}
+    constructor(message: string) {
+      noticeMessages.push(message);
+    }
   }
   const normalizePath = (path: string): string =>
     path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\//, "");
@@ -145,6 +149,7 @@ vi.mock("./readers/EpubView", () => ({
   EPUB_VIEW_TYPE: "observation-car-epub",
   EpubView: class {
     file: TFile | null = null;
+    openedFragments: string[] = [];
     private readonly listeners = new Set<
       (location: LocationChanged) => void
     >();
@@ -167,6 +172,9 @@ vi.mock("./readers/EpubView", () => ({
         label: "Chapter",
       };
       for (const listener of [...this.listeners]) listener(location);
+    }
+    async openAtFragment(fragment: string): Promise<void> {
+      this.openedFragments.push(fragment);
     }
   },
 }));
@@ -475,6 +483,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
+    noticeMessages.length = 0;
     fake = makeFakeVault();
     addBookFile(SOURCE);
     plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
@@ -549,6 +558,8 @@ describe("plugin wiring (substituted obsidian module)", () => {
       file: TFile | null;
       getViewType(): string;
       emitLocation(fragment: string): void;
+      openAtFragment(fragment: string): Promise<void>;
+      openedFragments: string[];
     };
   } {
     const factory = fake.registeredViews.get("observation-car-epub");
@@ -570,6 +581,8 @@ describe("plugin wiring (substituted obsidian module)", () => {
       file: TFile | null;
       getViewType(): string;
       emitLocation(fragment: string): void;
+      openAtFragment(fragment: string): Promise<void>;
+      openedFragments: string[];
     };
     leaf.view = view;
     view.file = book;
@@ -591,6 +604,10 @@ describe("plugin wiring (substituted obsidian module)", () => {
     return commands.find(
       (command) => command.id === "open-book-note-beside-reader",
     );
+  }
+
+  function getJumpToSectionCommand(): RecordedCommand | undefined {
+    return fake.registeredCommands.get("jump-book-to-this-section");
   }
 
   async function settleCommand(): Promise<void> {
@@ -843,6 +860,129 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(fake.openedFiles).toEqual(["Reading/Surprised by Grace.md"]);
     expect(fake.createdSplitLeaves[0]?.splitFrom).toBe(reader.leaf);
     expect(fake.createdSplitLeaves[0]?.getRoot()).toBe(fake.rootSplit);
+  });
+
+  it("jumps the paired reader to the live editor section containing the cursor", async () => {
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { view } = openEpubReader(book);
+    const liveCfi = "epubcfi(/6/10!/4/2/4:0)";
+    const liveText = NOTE_TEXT.replace(CFI_1, liveCfi);
+    const command = getJumpToSectionCommand();
+
+    expect(command?.name).toBe("Jump book to this section");
+    if (command?.editorCallback === undefined) {
+      throw new Error("jump-to-section editor command was not registered");
+    }
+    for (const line of [6, 8, 9, 10]) {
+      command.editorCallback(
+        {
+          getCursor: () => ({ line, ch: 0 }),
+          getValue: () => liveText,
+        },
+        { file: noteFile },
+      );
+      await settleCommand();
+    }
+
+    expect(view.openedFragments).toEqual([
+      liveCfi,
+      liveCfi,
+      CFI_2,
+      CFI_2,
+    ]);
+    expect(noticeMessages).toEqual([]);
+  });
+
+  it("shows a readable notice when the cursor is outside every section", async () => {
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { view } = openEpubReader(book);
+    const command = getJumpToSectionCommand();
+    if (command?.editorCallback === undefined) {
+      throw new Error("jump-to-section editor command was not registered");
+    }
+
+    command.editorCallback(
+      {
+        getCursor: () => ({ line: 5, ch: 0 }),
+        getValue: () => NOTE_TEXT,
+      },
+      { file: noteFile },
+    );
+    await settleCommand();
+
+    expect(view.openedFragments).toEqual([]);
+    expect(noticeMessages).toEqual([
+      "The cursor is not inside an anchored book-note section.",
+    ]);
+  });
+
+  it("shows a readable notice when the note has no paired reader", async () => {
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const command = getJumpToSectionCommand();
+    if (command?.editorCallback === undefined) {
+      throw new Error("jump-to-section editor command was not registered");
+    }
+    command.editorCallback(
+      {
+        getCursor: () => ({ line: 7, ch: 0 }),
+        getValue: () => NOTE_TEXT,
+      },
+      { file: noteFile },
+    );
+    await settleCommand();
+
+    expect(noticeMessages).toEqual([
+      "Open the book paired with this note before jumping to its section.",
+    ]);
+  });
+
+  it("contains a paired reader navigation failure at the command boundary", async () => {
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { view } = openEpubReader(book);
+    const navigationError = new Error("reader failed");
+    view.openAtFragment = vi.fn().mockRejectedValue(navigationError);
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const command = getJumpToSectionCommand();
+    if (command?.editorCallback === undefined) {
+      throw new Error("jump-to-section editor command was not registered");
+    }
+
+    command.editorCallback(
+      {
+        getCursor: () => ({ line: 7, ch: 0 }),
+        getValue: () => NOTE_TEXT,
+      },
+      { file: noteFile },
+    );
+    await settleCommand();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "[observation-car] could not jump book to note section",
+      navigationError,
+    );
+    expect(noticeMessages).toEqual([
+      "Could not jump to this section. Check the developer console for details.",
+    ]);
   });
 
   it("registers an explicit, idempotent section-sort editor command", () => {
