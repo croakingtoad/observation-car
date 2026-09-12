@@ -54,7 +54,7 @@ async function createOrOpenBookNote(
     }
 
     await ensureFolder(plugin, folderPath);
-    // F1.2 resolves vault-path wikilinks regardless of the user's link style.
+    // F1.2 emits a wikilink directly instead of adapting to the user's link style.
     const source = `[[${book.path}]]`;
     const content = renderTemplate(plugin.settings.noteTemplate, {
       source,

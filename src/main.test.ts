@@ -331,7 +331,6 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const file = new TFileDouble(path, "epub");
     fake.files.set(path, file);
     fake.linkDests.set(path.toLowerCase(), path);
-    fake.linkDests.set(file.name.toLowerCase(), path);
     return file;
   }
 
@@ -357,9 +356,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
   }
 
   async function settleCommand(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
-      await Promise.resolve();
-    }
+    await settle();
   }
 
   it("registers the mobile-capable command without writing on plugin load", async () => {
@@ -445,8 +442,21 @@ describe("plugin wiring (substituted obsidian module)", () => {
     },
   );
 
-  it("preserves a literal author placeholder in the book filename", async () => {
-    const source = "Books/Foo {{author}} Bar.epub";
+  it("quotes a single-quoted source containing an apostrophe", async () => {
+    plugin.settings = {
+      ...plugin.settings,
+      noteTemplate: [
+        "---",
+        "type: book-note",
+        "source: '{{source}}'",
+        "format: {{format}}",
+        "title: {{title}}",
+        "author: {{author}}",
+        "---",
+        "",
+      ].join("\n"),
+    };
+    const source = "Books/Foo {{author}} O'Brien.epub";
     const book = addBookFile(source);
     fake.runtime.activeView = { file: book };
 
@@ -456,14 +466,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(command.checkCallback?.(false)).toBe(true);
     await settleCommand();
 
-    const notePath = "Reading/Foo {{author}} Bar.md";
+    const notePath = "Reading/Foo {{author}} O'Brien.md";
     expect(fake.contents.get(notePath)).toBe(
       [
         "---",
         "type: book-note",
-        'source: "[[Books/Foo {{author}} Bar.epub]]"',
+        "source: '[[Books/Foo {{author}} O''Brien.epub]]'",
         "format: epub",
-        'title: "Foo {{author}} Bar"',
+        `title: "Foo {{author}} O'Brien"`,
         'author: ""',
         "---",
         "",
@@ -472,6 +482,13 @@ describe("plugin wiring (substituted obsidian module)", () => {
   });
 
   it("preserves a literal format placeholder in the book filename", async () => {
+    plugin.settings = {
+      ...plugin.settings,
+      noteTemplate: plugin.settings.noteTemplate.replace(
+        "format: {{format}}",
+        "format: '{{format}}'",
+      ),
+    };
     const source = "Books/Foo {{format}} Bar.epub";
     const book = addBookFile(source);
     fake.runtime.activeView = { file: book };
@@ -488,7 +505,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
         "---",
         "type: book-note",
         'source: "[[Books/Foo {{format}} Bar.epub]]"',
-        "format: epub",
+        "format: 'epub'",
         'title: "Foo {{format}} Bar"',
         'author: ""',
         "---",
