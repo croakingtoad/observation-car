@@ -126,7 +126,6 @@ interface FakeVault {
   linkDests: Map<string, string>;
   metadataHandlers: Map<string, Handler>;
   vaultHandlers: Map<string, Handler>;
-  workspaceHandlers: Map<string, Handler>;
   createdFiles: string[];
   generatedLinks: { filePath: string; sourcePath: string }[];
   openedFiles: string[];
@@ -151,7 +150,6 @@ function makeFakeVault(): FakeVault {
   const linkDests = new Map<string, string>();
   const metadataHandlers = new Map<string, Handler>();
   const vaultHandlers = new Map<string, Handler>();
-  const workspaceHandlers = new Map<string, Handler>();
   const createdFiles: string[] = [];
   const generatedLinks: { filePath: string; sourcePath: string }[] = [];
   const openedFiles: string[] = [];
@@ -222,10 +220,6 @@ function makeFakeVault(): FakeVault {
     workspace: {
       getActiveViewOfType: (): unknown => runtime.activeView,
       getLeavesOfType: (): FakeEpubLeaf[] => runtime.epubLeaves,
-      on: (name: string, callback: Handler): { name: string } => {
-        workspaceHandlers.set(name, callback);
-        return { name };
-      },
       getLeaf: (): { openFile: (file: TFile) => Promise<void> } => ({
         openFile: async (file: TFile): Promise<void> => {
           openedFiles.push(file.path);
@@ -243,7 +237,6 @@ function makeFakeVault(): FakeVault {
     linkDests,
     metadataHandlers,
     vaultHandlers,
-    workspaceHandlers,
     createdFiles,
     generatedLinks,
     openedFiles,
