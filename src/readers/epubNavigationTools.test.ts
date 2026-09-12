@@ -533,9 +533,11 @@ describe("EpubView reader replacement", () => {
     const replacementListeners = trackEventListeners(replacementDocument);
     const oldRendition = new FakeRendition(oldDocument);
     const replacementRendition = new FakeRendition(replacementDocument);
+    const oldBook = fakeBook("Book A", oldRendition);
+    const replacementBook = fakeBook("Book B", replacementRendition);
     runtime.createEpub
-      .mockReturnValueOnce(fakeBook("Book A", oldRendition))
-      .mockReturnValueOnce(fakeBook("Book B", replacementRendition));
+      .mockReturnValueOnce(oldBook)
+      .mockReturnValueOnce(replacementBook);
     const view = new EpubView({} as WorkspaceLeaf);
 
     await view.onLoadFile(bookFile("Books/A.epub"));
@@ -557,6 +559,10 @@ describe("EpubView reader replacement", () => {
     expect(replacementListeners.activeCount("mousedown")).toBe(1);
     expect(oldRendition.removedHandlerCount("rendered")).toBe(2);
     expect(oldRendition.activeHandlerCount("rendered")).toBe(0);
+    expect(oldBook.spine.hooks.content.deregister).toHaveBeenCalledOnce();
+    expect(oldRendition.hooks.content.deregister).toHaveBeenCalledOnce();
+    expect(replacementBook.spine.hooks.content.register).toHaveBeenCalledOnce();
+    expect(replacementRendition.hooks.content.register).toHaveBeenCalledOnce();
     await view.onClose();
   });
 
@@ -571,16 +577,26 @@ describe("EpubView reader replacement", () => {
     const view = new EpubView({} as WorkspaceLeaf);
 
     await view.onLoadFile(bookFile("Books/A.epub"));
-    const navigationTools = (
-      view as unknown as {
-        navigationTools: { destroy(): void };
-      }
-    ).navigationTools;
+    const { navigationTools, themes, styles } = view as unknown as {
+      navigationTools: { destroy(): void };
+      themes: { destroy(): void };
+      styles: { destroy(): void };
+    };
     const destroyNavigationTools = navigationTools.destroy.bind(navigationTools);
+    const destroyThemes = themes.destroy.bind(themes);
+    const destroyStyles = styles.destroy.bind(styles);
     const destroyOrder: string[] = [];
     vi.spyOn(navigationTools, "destroy").mockImplementation(() => {
       destroyOrder.push("navigationTools");
       destroyNavigationTools();
+    });
+    vi.spyOn(themes, "destroy").mockImplementation(() => {
+      destroyOrder.push("themes");
+      destroyThemes();
+    });
+    vi.spyOn(styles, "destroy").mockImplementation(() => {
+      destroyOrder.push("styles");
+      destroyStyles();
     });
     oldRendition.destroy.mockImplementation(() => {
       destroyOrder.push("rendition");
@@ -591,7 +607,13 @@ describe("EpubView reader replacement", () => {
 
     await view.onLoadFile(bookFile("Books/B.epub"));
 
-    expect(destroyOrder).toEqual(["navigationTools", "rendition", "book"]);
+    expect(destroyOrder).toEqual([
+      "navigationTools",
+      "themes",
+      "styles",
+      "rendition",
+      "book",
+    ]);
     await view.onClose();
   });
 });
@@ -626,7 +648,6 @@ describe("forwarded EPUB hotkey integration", () => {
         setActiveLeaf: vi.fn((leaf: TestLeaf) => {
           activeView = leaf.view;
         }),
-        on: vi.fn(() => ({ name: "active-leaf-change" })),
         getLeaf: vi.fn(() => ({
           openFile: vi.fn(async (): Promise<void> => undefined),
         })),
