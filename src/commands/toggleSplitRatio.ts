@@ -4,7 +4,7 @@ import type ObservationCarPlugin from "../main";
 export const SPLIT_RATIO_TOGGLE_COMMAND_ID =
   "toggle-reader-note-split-ratio";
 
-/** The Fold is ~830 CSS px wide; 900 px leaves headroom for browser/UI chrome. */
+/** A split up to 900 CSS px is Fold-sized around its ~830 px unfolded width. */
 export const NARROW_TABLET_MAX_WIDTH_PX = 900;
 export const NARROW_TABLET_READER_RATIO_PERCENT = 80;
 

@@ -231,6 +231,51 @@ describe("split-ratio toggle command", () => {
     expect(harness.noteTabs.dimensions).toEqual([60]);
   });
 
+  it("resets when the measured ratio is just outside the configured tolerance", () => {
+    const harness = makeHarness();
+    const split = harness.readerTabs.parent;
+    if (split === undefined) throw new Error("parent split fixture is missing");
+    split.width = 100;
+    harness.readerTabs.width = 61;
+    harness.noteTabs.width = 39;
+
+    invoke(harness);
+
+    expect(harness.readerTabs.dimensions).toEqual([60]);
+    expect(harness.noteTabs.dimensions).toEqual([40]);
+  });
+
+  it("uses the window width and percentage dimensions when child widths are unmeasurable", () => {
+    const harness = makeHarness();
+    const innerWidth = vi.fn(() => 1200);
+    Object.defineProperty(harness.readerLeaf.getContainer().win, "innerWidth", {
+      configurable: true,
+      get: innerWidth,
+    });
+    harness.readerTabs.width = 0;
+
+    invoke(harness);
+
+    expect(innerWidth).toHaveBeenCalledTimes(2);
+    expect(harness.readerTabs.dimensions).toEqual([60]);
+    expect(harness.noteTabs.dimensions).toEqual([40]);
+  });
+
+  it("is unavailable when one of more than two child widths is unmeasurable", () => {
+    const harness = makeHarness();
+    const split = harness.readerTabs.parent;
+    if (split === undefined) throw new Error("parent split fixture is missing");
+    const otherTabs = makeTabs(100);
+    otherTabs.parent = split;
+    harness.readerTabs.width = 0;
+    split.children = [harness.readerTabs, harness.noteTabs, otherTabs];
+
+    expect(harness.command.checkCallback?.(true)).toBe(false);
+    expect(harness.readerTabs.dimensions).toEqual([]);
+    expect(harness.noteTabs.dimensions).toEqual([]);
+    expect(otherTabs.dimensions).toEqual([]);
+  });
+
   it("cycles directly to 80/20 when the read and write ratios match", () => {
     const harness = makeHarness({
       splitReadRatioPercent: 60,
