@@ -52,6 +52,15 @@ async function jumpToCursorSection(
       );
       return;
     }
+    const liveSource = bookNote.frontmatter.source;
+    const liveBookFile =
+      liveSource === null
+        ? null
+        : plugin.app.metadataCache.getFirstLinkpathDest(liveSource, notePath);
+    if (liveBookFile !== pairing.bookFile) {
+      new Notice("The note's current source does not match the paired reader.");
+      return;
+    }
     if (canOpenFragment(pairing.reader) === false) {
       new Notice("The paired reader cannot open anchored sections.");
       return;
@@ -70,7 +79,7 @@ async function jumpToCursorSection(
 }
 
 /** Find the section whose inclusive body range contains an editor line. */
-export function findEnclosingSection(
+function findEnclosingSection(
   sections: readonly BookNoteSection[],
   line: number,
 ): BookNoteSection | undefined {

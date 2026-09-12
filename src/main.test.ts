@@ -862,6 +862,20 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(fake.createdSplitLeaves[0]?.getRoot()).toBe(fake.rootSplit);
   });
 
+  it("shows a readable notice when no book note is open", async () => {
+    const command = getJumpToSectionCommand();
+    if (command?.editorCallback === undefined) {
+      throw new Error("jump-to-section editor command was not registered");
+    }
+
+    command.editorCallback({}, { file: null });
+    await settleCommand();
+
+    expect(noticeMessages).toEqual([
+      "Open a book note before jumping to one of its sections.",
+    ]);
+  });
+
   it("jumps the paired reader to the live editor section containing the cursor", async () => {
     const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
     fire("metadata", "changed", [noteFile]);
@@ -896,6 +910,37 @@ describe("plugin wiring (substituted obsidian module)", () => {
       CFI_2,
     ]);
     expect(noticeMessages).toEqual([]);
+  });
+
+  it("refuses to navigate when the live source differs from the pairing", async () => {
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { view } = openEpubReader(book);
+    const retargetedSource = "Books/Retargeted.epub";
+    addBookFile(retargetedSource);
+    const liveText = NOTE_TEXT.replaceAll(SOURCE, retargetedSource);
+    const command = getJumpToSectionCommand();
+    if (command?.editorCallback === undefined) {
+      throw new Error("jump-to-section editor command was not registered");
+    }
+
+    command.editorCallback(
+      {
+        getCursor: () => ({ line: 7, ch: 0 }),
+        getValue: () => liveText,
+      },
+      { file: noteFile },
+    );
+    await settleCommand();
+
+    expect(view.openedFragments).toEqual([]);
+    expect(noticeMessages).toEqual([
+      "The note's current source does not match the paired reader.",
+    ]);
   });
 
   it("shows a readable notice when the cursor is outside every section", async () => {
@@ -946,6 +991,35 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     expect(noticeMessages).toEqual([
       "Open the book paired with this note before jumping to its section.",
+    ]);
+  });
+
+  it("shows a readable notice when the paired reader cannot open fragments", async () => {
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { view } = openEpubReader(book);
+    Object.defineProperty(view, "openAtFragment", { value: undefined });
+    const command = getJumpToSectionCommand();
+    if (command?.editorCallback === undefined) {
+      throw new Error("jump-to-section editor command was not registered");
+    }
+
+    command.editorCallback(
+      {
+        getCursor: () => ({ line: 7, ch: 0 }),
+        getValue: () => NOTE_TEXT,
+      },
+      { file: noteFile },
+    );
+    await settleCommand();
+
+    expect(view.openedFragments).toEqual([]);
+    expect(noticeMessages).toEqual([
+      "The paired reader cannot open anchored sections.",
     ]);
   });
 
