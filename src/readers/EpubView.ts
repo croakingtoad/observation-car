@@ -18,9 +18,25 @@
 import { FileView, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
 import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
+import { type Location as EpubRenditionLocation } from "epubjs/types/rendition";
 import { EpubThemes } from "./epubThemes";
+import { EpubLocationTracker, type EpubLocation } from "./epubLocation";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
+
+/**
+ * A LocationChanged event (F2.5): PRD §8's Location plus the file the
+ * location belongs to, so the sync layer never needs to look it up.
+ */
+export interface EpubLocationEvent extends EpubLocation {
+  readonly file: TFile;
+}
+
+interface PreparedLocationEvents {
+  tracker: EpubLocationTracker;
+  relocatedHandler: (loc: EpubRenditionLocation | null | undefined) => void;
+  forward: () => void;
+}
 
 export class EpubView extends FileView {
   /** The book currently loaded in this leaf, or null before first open. */
@@ -36,6 +52,14 @@ export class EpubView extends FileView {
    */
   private renderGeneration = 0;
   private selectionTracker: EpubSelectionTracker | null = null;
+
+  /** F2.5: debounce + emit engine for the currently rendered book. */
+  private locationTracker: EpubLocationTracker | null = null;
+  private locationRelocatedHandler:
+    | ((loc: EpubRenditionLocation | null | undefined) => void)
+    | null = null;
+  private locationForward: (() => void) | null = null;
+  private locationListeners = new Set<(loc: EpubLocationEvent) => void>();
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -58,6 +82,23 @@ export class EpubView extends FileView {
    */
   getSelection(): { text: string; fragment: string } | null {
     return this.selectionTracker?.getSelection() ?? null;
+  }
+
+  /**
+   * Subscribe to LocationChanged events (F2.5; PRD §8 Reader contract).
+   *
+   * The subscription outlives re-renders: a subscriber attached before
+   * a book loads still receives the first relocation once the book
+   * displays. Returns the unsubscribe function.
+   */
+  on(
+    _event: "location",
+    listener: (loc: EpubLocationEvent) => void,
+  ): () => void {
+    this.locationListeners.add(listener);
+    return () => {
+      this.locationListeners.delete(listener);
+    };
   }
 
   async onLoadFile(file: TFile): Promise<void> {
@@ -93,6 +134,7 @@ export class EpubView extends FileView {
     let book: Book | null = null;
     let rendition: Rendition | null = null;
     let themes: EpubThemes | null = null;
+    let locationEvents: PreparedLocationEvents | null = null;
     const selectionTracker = new EpubSelectionTracker();
     try {
       book = ePub(bytes);
@@ -108,12 +150,13 @@ export class EpubView extends FileView {
         selectionTracker,
       );
       themes = new EpubThemes(rendition);
+      locationEvents = this.prepareLocationEvents(book, rendition);
       await rendition.display();
     } catch (error) {
       // A bad book can fail anywhere in the build; dispose what was
       // created before the failure propagates, so no partial reader
       // survives.
-      this.disposeCreated(viewerEl, book, rendition, themes);
+      this.disposeCreated(viewerEl, book, rendition, themes, locationEvents);
       throw error;
     }
 
@@ -121,7 +164,7 @@ export class EpubView extends FileView {
       // Superseded while display was in flight: the newer render's
       // disposeReader emptied the content element but could not reach
       // these locals — dispose them here, exactly once.
-      this.disposeCreated(viewerEl, book, rendition, themes);
+      this.disposeCreated(viewerEl, book, rendition, themes, locationEvents);
       return;
     }
 
@@ -129,6 +172,9 @@ export class EpubView extends FileView {
     this.rendition = rendition;
     this.themes = themes;
     this.selectionTracker = selectionTracker;
+    this.locationTracker = locationEvents.tracker;
+    this.locationRelocatedHandler = locationEvents.relocatedHandler;
+    this.locationForward = locationEvents.forward;
   }
 
   /** Tear down a reader a render built locally, possibly only partially. */
@@ -137,11 +183,75 @@ export class EpubView extends FileView {
     book: Book | null,
     rendition: Rendition | null,
     themes: EpubThemes | null,
+    locationEvents: PreparedLocationEvents | null,
   ): void {
+    locationEvents?.forward();
+    if (rendition !== null && locationEvents !== null) {
+      rendition.off("relocated", locationEvents.relocatedHandler);
+    }
+    locationEvents?.tracker.destroy();
     themes?.destroy();
     rendition?.destroy();
     book?.destroy();
     viewerEl.remove();
+  }
+
+  /**
+   * Wire F2.5 location events to a freshly rendered rendition.
+   *
+   * The relocated listener is registered on the rendition itself — not
+   * on document or window — so its lifetime is bounded by the
+   * rendition's: the leaked-first-book defect (LOCO-153) keeps the old
+   * book's listener with the old rendition and can never feed this
+   * tracker, because the closure captures the tracker, not
+   * `this.locationTracker`.
+   */
+  private prepareLocationEvents(
+    book: Book,
+    rendition: Rendition,
+  ): PreparedLocationEvents {
+    const tracker = new EpubLocationTracker();
+    const onRelocated = (
+      loc: EpubRenditionLocation | null | undefined,
+    ): void => {
+      const start = loc?.start;
+      tracker.onRelocated(
+        start === undefined ? null : { cfi: start.cfi, href: start.href },
+      );
+    };
+    rendition.on("relocated", onRelocated);
+
+    // Label resolution: once the TOC loads, chapter labels come from it;
+    // a book without one keeps the "Ch. N" fallback.
+    void book.loaded.navigation
+      .then((navigation) => tracker.setToc(navigation.toc))
+      .catch(() => {
+        // An unresolvable TOC is not fatal; labels stay "Ch. N".
+      });
+
+    const forward = tracker.on((loc) => {
+      const file = this.file;
+      if (file === null) {
+        return;
+      }
+      const event: EpubLocationEvent = { ...loc, file };
+      for (const listener of [...this.locationListeners]) {
+        listener(event);
+      }
+    });
+    return { tracker, relocatedHandler: onRelocated, forward };
+  }
+
+  /** Detach F2.5 location events from the current rendition. */
+  private detachLocationEvents(): void {
+    this.locationForward?.();
+    this.locationForward = null;
+    if (this.locationRelocatedHandler !== null) {
+      this.rendition?.off("relocated", this.locationRelocatedHandler);
+      this.locationRelocatedHandler = null;
+    }
+    this.locationTracker?.destroy();
+    this.locationTracker = null;
   }
 
   private disposeReader(): void {
@@ -151,6 +261,7 @@ export class EpubView extends FileView {
     // A selection only lives inside a rendition's iframe; with the
     // reader gone, the retained one is stale by definition.
     this.selectionTracker = null;
+    this.detachLocationEvents();
     this.themes?.destroy();
     this.themes = null;
     this.rendition?.destroy();

@@ -44,6 +44,7 @@
 import {
   AnchorError,
   parseFragment,
+  spineIndexFromCfi,
   type AnchorKind,
   type AnchorPosition,
 } from "./anchor";
@@ -327,21 +328,15 @@ function extractWikilinks(text: string): readonly Wikilink[] {
 }
 
 /**
- * 0-based spine item index from a bare CFI, or null when the chapter
- * component is not the canonical two-component form.
+ * 0-based spine item index from a CFI anchor, or null when the chapter
+ * component is not the canonical two-component form (parsing shared
+ * with the reader's LocationChanged events, F2.5, in `anchor.ts`).
  */
 function chapterOf(position: AnchorPosition): number | null {
-  if (position.kind !== "epub-cfi") return null;
-  const spineEnd = position.cfi.indexOf("!");
-  if (spineEnd === -1) return null;
-  const match = /^\/(\d+)(?:\[[^\][]*\])?\/(\d+)(?:\[[^\][]*\])?$/.exec(
-    position.cfi.slice(0, spineEnd),
-  );
-  if (match === null) return null;
-  const second = Number(match[2]);
-  if (second < 2 || second % 2 !== 0) return null;
-  const index = second / 2 - 1;
-  return Number.isSafeInteger(index) ? index : null;
+  if (position.kind !== "epub-cfi") {
+    return null;
+  }
+  return spineIndexFromCfi(position.cfi);
 }
 
 const FRONTMATTER_DELIMITER = /^---[ \t]*$/;

@@ -7,11 +7,26 @@
  * is modelled. The real workspace injects the `App` into a view after
  * construction; tests mirror that with `Object.assign(view, { app })`.
  */
-export class FileView {
+export class TFile {
+  path = "";
+  basename = "";
+}
+
+export class ItemView {
+  app: unknown;
+  leaf: unknown;
+  containerEl: HTMLElement = document.createElement("div");
   contentEl: HTMLElement = document.createElement("div");
-  app: unknown = null;
 
   constructor(leaf: unknown) {
-    void leaf;
+    this.leaf = leaf;
+    this.app =
+      typeof leaf === "object" && leaf !== null && "app" in leaf
+        ? leaf.app
+        : null;
+    this.containerEl.appendChild(this.contentEl);
   }
 }
+
+/** Obsidian's FileView is an ItemView that receives `onLoadFile`. */
+export class FileView extends ItemView {}
