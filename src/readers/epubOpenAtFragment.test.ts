@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Book, Rendition } from "epubjs";
 import type { Location } from "epubjs/types/rendition";
 import type { WorkspaceLeaf } from "obsidian";
@@ -137,6 +137,10 @@ describe("EpubView.openAtFragment", () => {
     vi.restoreAllMocks();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("opens a CFI and waits for the stabilizing relocation", async () => {
     const { view, rendition } = harness();
 
@@ -198,7 +202,7 @@ describe("EpubView.openAtFragment", () => {
     ).resolves.toBeUndefined();
 
     expect(rendition.displayedTargets).toEqual([]);
-    expect(notices[0]).toContain("epubcfi(nonsense)");
+    expect(notices[0]).toContain('CFI is missing the "!" spine separator');
     expect(consoleError).toHaveBeenCalledWith(
       "Unable to open EPUB fragment",
       "epubcfi(nonsense)",
@@ -213,7 +217,7 @@ describe("EpubView.openAtFragment", () => {
     await expect(view.openAtFragment("missing.xhtml")).resolves.toBeUndefined();
 
     expect(rendition.displayedTargets).toEqual([]);
-    expect(notices[0]).toContain("missing.xhtml");
+    expect(notices[0]).toContain("the EPUB spine does not contain");
   });
 
   it("shows a notice and resolves when no book is loaded", async () => {
@@ -245,6 +249,8 @@ describe("EpubView.openAtFragment", () => {
 
   it("keeps the fragment jump after a pending resize correction", async () => {
     const { view, rendition } = harness();
+    rendition.holdRelocations = true;
+    let settled = false;
     let needsCorrection = false;
     let currentLocation = FIRST_LOCATION;
     rendition.on("resized", () => {
@@ -260,9 +266,42 @@ describe("EpubView.openAtFragment", () => {
     });
 
     rendition.emit("resized");
-    await view.openAtFragment(CHAPTER_TWO);
+    const pending = view.openAtFragment(CHAPTER_TWO).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    rendition.emit("relocated", SECOND_LOCATION);
+    await Promise.resolve();
+
+    rendition.emit("relocated", FIRST_LOCATION);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    rendition.releaseRelocation();
+    await Promise.resolve();
+    rendition.releaseRelocation();
+    await Promise.resolve();
+    rendition.releaseRelocation();
+    await pending;
 
     expect(rendition.location).toBe(SECOND_LOCATION);
     expect(rendition.displayedTargets.at(-1)).toBe(CHAPTER_TWO);
+  });
+
+  it("resolves with a notice when the rendition never reports the new location", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { view, rendition } = harness();
+    rendition.holdRelocations = true;
+
+    const pending = view.openAtFragment(CHAPTER_TWO);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(notices[0]).toContain("the reader did not report the new location");
   });
 });
