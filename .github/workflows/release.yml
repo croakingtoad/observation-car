@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      # Plugin version tags, with or without a leading 'v' — normalized by
+      # stripping the 'v' in the version-consistency guard below.
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: ci
+    # Reuse the standard checks (install, build, test) instead of duplicating
+    # them here.
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: release
+    needs: [ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (typecheck + bundle)
+        run: npm run build
+
+      - name: Guard version consistency
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${TAG}' is not a plugin version (expected '1.2.3' or 'v1.2.3')."
+            exit 1
+          fi
+          MANIFEST_VERSION="$(jq -er '.version | select(type == "string" and length > 0)' manifest.json)"
+          MIN_APP_VERSION="$(jq -er '.minAppVersion | select(type == "string" and length > 0)' manifest.json)"
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::manifest.json version '${MANIFEST_VERSION}' does not match tag '${TAG}' (normalized version '${VERSION}'). Bump manifest.json before tagging, or retag."
+            exit 1
+          fi
+          # versions.json must be exactly one top-level JSON object: without
+          # this, an empty, non-object, or multi-document file would reach the
+          # version lookup below and fail with a misleading 'no entry' (or
+          # mangled multi-value) diagnostic instead of this one.
+          if ! jq -er -s 'select(length == 1 and (.[0] | type == "object"))' versions.json > /dev/null; then
+            echo "::error::versions.json must contain exactly one top-level JSON object."
+            exit 1
+          fi
+          # Obsidian's community-plugin format: keys are plugin versions,
+          # values are the minAppVersion that version requires. The shape
+          # guard above makes a direct key lookup sufficient.
+          ENTRY_MIN_APP="$(jq -er --arg v "$VERSION" '.[$v] // empty' versions.json || true)"
+          if [ -z "$ENTRY_MIN_APP" ]; then
+            echo "::error::versions.json has no entry for plugin version '${VERSION}'. Add it (keyed by plugin version, with minAppVersion as the value) before tagging."
+            exit 1
+          fi
+          if [ "$ENTRY_MIN_APP" != "$MIN_APP_VERSION" ]; then
+            echo "::error::versions.json lists minAppVersion '${ENTRY_MIN_APP}' for plugin version '${VERSION}' but manifest.json minAppVersion is '${MIN_APP_VERSION}'."
+            exit 1
+          fi
+          echo "Version consistency OK: tag '${TAG}' -> version '${VERSION}', minAppVersion '${MIN_APP_VERSION}'."
+
+      - name: Verify release assets
+        run: |
+          set -euo pipefail
+          for file in main.js manifest.json styles.css versions.json; do
+            if [ ! -f "$file" ]; then
+              echo "::error::Missing release asset: ${file}"
+              exit 1
+            fi
+          done
+          if [ ! -s main.js ]; then
+            echo "::error::main.js is zero bytes; refusing to publish an empty bundle."
+            exit 1
+          fi
+          for file in manifest.json styles.css versions.json; do
+            if [ ! -s "$file" ]; then
+              echo "::error::${file} is zero bytes; refusing to publish an empty release asset."
+              exit 1
+            fi
+          done
+          ls -la main.js manifest.json styles.css versions.json
+
+      - name: Create GitHub release
+        # Publishes the four assets individually at the top level — BRAT
+        # downloads them by file name, so they must not be zipped or nested.
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            main.js
+            manifest.json
+            styles.css
+            versions.json

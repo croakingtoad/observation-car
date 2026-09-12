@@ -13,7 +13,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Fixed prefix rather than github.workflow: when ci.yml runs via
+  # workflow_call, github.workflow resolves to the caller's name, which
+  # would put caller and callee in the same group and deadlock them
+  # under cancel-in-progress: false.
+  group: ci.yml-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
