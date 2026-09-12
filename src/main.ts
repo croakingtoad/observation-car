@@ -11,6 +11,7 @@ import {
 import { BookNoteStore } from "./model/bookNoteStore";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
 import { loadPluginData, serializePluginData } from "./pluginData";
+import { installEpubLinkHandler } from "./epubLinkHandler";
 
 /**
  * Observation Car — plugin entry point.
@@ -49,6 +50,7 @@ export default class ObservationCarPlugin extends Plugin {
     // F2.2 flow toggle can read and persist `epubFlowMode`.
     this.registerView(EPUB_VIEW_TYPE, (leaf) => new EpubView(leaf, this));
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
+    this.register(installEpubLinkHandler(this.app));
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
