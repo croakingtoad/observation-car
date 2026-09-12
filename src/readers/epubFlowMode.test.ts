@@ -147,6 +147,7 @@ const FILE_B = makeFile("Books/B.epub");
 const CFI_A = "epubcfi(/6/8!/4/2/1:0)";
 const CFI_B = "epubcfi(/6/22!/4/2/9:0)";
 const CFI_TURN = "epubcfi(/6/14!/4/2/12:0)";
+const CFI_UNENCODABLE = "epubcfi(/6/8[kapitel-ü]!/4/2/1:0)";
 
 interface FlowHost extends EpubViewHost {
   beforeSettingsWrite: (
@@ -326,6 +327,7 @@ describe("F2.2 flow-mode recovery", () => {
       expect(host.updateSettings).toHaveBeenCalledTimes(2);
     });
     expect(host.settings.epubFlowMode).toBe("scrolled");
+    expect(FakeBook.instances[1].flow).toBe("scrolled");
 
     await view.onLoadFile(FILE_B);
     const bookB = FakeBook.instances[2];
@@ -351,6 +353,32 @@ describe("F2.2 flow-mode recovery", () => {
     expect(host.locations[FILE_A.path]).toBe(`#${CFI_TURN}`);
   });
 
+  it("keeps a successful toggle when its CFI cannot be encoded", async () => {
+    const { host, view } = await openInitialBook();
+    FakeRendition.instances[0].location = {
+      start: { cfi: CFI_UNENCODABLE, href: "chapter.xhtml" },
+    };
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    (view as unknown as { toggleFlowMode(): void }).toggleFlowMode();
+    await vi.waitFor(() => {
+      expect(consoleError.mock.calls.length + showNotice.mock.calls.length)
+        .toBeGreaterThan(0);
+    });
+
+    expect(host.settings.epubFlowMode).toBe("scrolled");
+    expect(FakeBook.instances).toHaveLength(2);
+    expect(FakeBook.instances[1].flow).toBe("scrolled");
+    expect(showNotice).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Observation Car: could not save EPUB location",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
   // QC-PROBE-X plus the existing toggle-vs-toggle mutex pin.
   it("keeps a second toggle from driving a replacement book", async () => {
     const host = createHost();
@@ -373,6 +401,7 @@ describe("F2.2 flow-mode recovery", () => {
     await race.toggle;
 
     expect(host.updateSettings).toHaveBeenCalledOnce();
+    expect(FakeBook.instances[1].flow).toBe("scrolled");
     expect(race.renditionB.display).not.toHaveBeenCalledWith(CFI_A);
   });
 

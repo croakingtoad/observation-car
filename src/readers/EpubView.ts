@@ -583,7 +583,11 @@ export class EpubView extends FileView {
     ) {
       return false;
     }
-    await this.persistCurrentLocation(file.path, buildEpubCfiFragment(cfi));
+    try {
+      await this.persistCurrentLocation(file.path, buildEpubCfiFragment(cfi));
+    } catch (error: unknown) {
+      console.error("Observation Car: could not save EPUB location", error);
+    }
     return true;
   }
 
