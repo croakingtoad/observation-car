@@ -1,6 +1,6 @@
 import { Notice, normalizePath, TFile, TFolder } from "obsidian";
 import type ObservationCarPlugin from "../main";
-import { EpubView } from "../readers/EpubView";
+import { EpubView, EPUB_VIEW_TYPE } from "../readers/EpubView";
 
 export const CREATE_BOOK_NOTE_COMMAND_ID =
   "create-book-note-for-current-book";
@@ -13,20 +13,59 @@ export function registerCreateBookNoteCommand(
     id: CREATE_BOOK_NOTE_COMMAND_ID,
     name: "Create book note for current book",
     icon: "book-open",
-    checkCallback: (checking) => {
-      const book = currentBook(plugin);
-      if (book === null) return false;
-
-      if (checking === false) {
-        void createOrOpenBookNote(plugin, book);
-      }
-      return true;
+    callback: () => {
+      void resolveAndCreateBookNote(plugin);
     },
   });
 }
 
-function currentBook(plugin: ObservationCarPlugin): TFile | null {
-  return plugin.app.workspace.getActiveViewOfType(EpubView)?.file ?? null;
+type BookResolution =
+  | { kind: "book"; book: TFile }
+  | { kind: "none" }
+  | { kind: "ambiguous" };
+
+async function resolveAndCreateBookNote(
+  plugin: ObservationCarPlugin,
+): Promise<void> {
+  try {
+    const resolution = await currentBook(plugin);
+    if (resolution.kind === "none") {
+      new Notice("Open a book in Observation Car first");
+      return;
+    }
+    if (resolution.kind === "ambiguous") {
+      new Notice("Choose which open book to create a note for");
+      return;
+    }
+    await createOrOpenBookNote(plugin, resolution.book);
+  } catch (error) {
+    console.error("[observation-car] could not resolve the current book", error);
+    new Notice("Could not create book note. Check the developer console for details.");
+  }
+}
+
+async function currentBook(
+  plugin: ObservationCarPlugin,
+): Promise<BookResolution> {
+  const activeBook = plugin.app.workspace.getActiveViewOfType(EpubView)?.file;
+  if (activeBook !== null && activeBook !== undefined) {
+    return { kind: "book", book: activeBook };
+  }
+
+  const openLeaves = plugin.app.workspace
+    .getLeavesOfType(EPUB_VIEW_TYPE)
+    .filter((leaf) => leaf.getViewState().type === EPUB_VIEW_TYPE);
+  if (openLeaves.length === 0) {
+    return { kind: "none" };
+  }
+  if (openLeaves.length > 1) {
+    return { kind: "ambiguous" };
+  }
+
+  const leaf = openLeaves[0];
+  await leaf.loadIfDeferred();
+  const book = leaf.view instanceof EpubView ? leaf.view.file : null;
+  return book === null ? { kind: "none" } : { kind: "book", book };
 }
 
 /**

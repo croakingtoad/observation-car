@@ -10,6 +10,9 @@ import manifest from "../manifest.json";
 import { parseBookNote } from "./model/bookNote";
 import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
+import { EpubView } from "./readers/EpubView";
+
+const obsidianMock = vi.hoisted(() => ({ noticeMessages: [] as string[] }));
 
 /**
  * The plugin wiring is the seam with the Obsidian runtime, so this suite
@@ -76,7 +79,9 @@ vi.mock("obsidian", () => {
     }
   }
   class Notice {
-    constructor(_message: string) {}
+    constructor(message: string) {
+      obsidianMock.noticeMessages.push(message);
+    }
   }
   const normalizePath = (path: string): string =>
     path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\//, "");
@@ -109,6 +114,7 @@ const TFileDouble = TFile as unknown as new (
   extension: string,
 ) => TFile;
 const TFolderDouble = TFolder as unknown as new (path: string) => TFolder;
+const EpubViewDouble = EpubView as unknown as new () => EpubView;
 
 interface FakeVault {
   app: unknown;
@@ -120,10 +126,21 @@ interface FakeVault {
   linkDests: Map<string, string>;
   metadataHandlers: Map<string, Handler>;
   vaultHandlers: Map<string, Handler>;
+  workspaceHandlers: Map<string, Handler>;
   createdFiles: string[];
   generatedLinks: { filePath: string; sourcePath: string }[];
   openedFiles: string[];
-  runtime: { activeView: unknown; useMarkdownLinks: boolean };
+  runtime: {
+    activeView: unknown;
+    epubLeaves: FakeEpubLeaf[];
+    useMarkdownLinks: boolean;
+  };
+}
+
+interface FakeEpubLeaf {
+  view: unknown;
+  getViewState(): { type: string };
+  loadIfDeferred(): Promise<void>;
 }
 
 function makeFakeVault(): FakeVault {
@@ -134,11 +151,13 @@ function makeFakeVault(): FakeVault {
   const linkDests = new Map<string, string>();
   const metadataHandlers = new Map<string, Handler>();
   const vaultHandlers = new Map<string, Handler>();
+  const workspaceHandlers = new Map<string, Handler>();
   const createdFiles: string[] = [];
   const generatedLinks: { filePath: string; sourcePath: string }[] = [];
   const openedFiles: string[] = [];
   const runtime = {
     activeView: null as unknown,
+    epubLeaves: [] as FakeEpubLeaf[],
     useMarkdownLinks: false,
   };
 
@@ -202,6 +221,11 @@ function makeFakeVault(): FakeVault {
     },
     workspace: {
       getActiveViewOfType: (): unknown => runtime.activeView,
+      getLeavesOfType: (): FakeEpubLeaf[] => runtime.epubLeaves,
+      on: (name: string, callback: Handler): { name: string } => {
+        workspaceHandlers.set(name, callback);
+        return { name };
+      },
       getLeaf: (): { openFile: (file: TFile) => Promise<void> } => ({
         openFile: async (file: TFile): Promise<void> => {
           openedFiles.push(file.path);
@@ -219,6 +243,7 @@ function makeFakeVault(): FakeVault {
     linkDests,
     metadataHandlers,
     vaultHandlers,
+    workspaceHandlers,
     createdFiles,
     generatedLinks,
     openedFiles,
@@ -289,6 +314,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
+    obsidianMock.noticeMessages.length = 0;
     fake = makeFakeVault();
     addBookFile(SOURCE);
     plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
@@ -334,6 +360,18 @@ describe("plugin wiring (substituted obsidian module)", () => {
     return file;
   }
 
+  function openBookLeaf(book: TFile): FakeEpubLeaf {
+    const view = new EpubViewDouble();
+    view.file = book;
+    const leaf = {
+      view,
+      getViewState: () => ({ type: "observation-car-epub" }),
+      loadIfDeferred: vi.fn(async (): Promise<void> => undefined),
+    };
+    fake.runtime.epubLeaves.push(leaf);
+    return leaf;
+  }
+
   function fire(
     where: "metadata" | "vault",
     name: string,
@@ -359,7 +397,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     await settle();
   }
 
-  it("registers the mobile-capable command without writing on plugin load", async () => {
+  it("always registers the mobile-capable command without writing on plugin load", async () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
@@ -367,15 +405,72 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(command.name).toBe("Create book note for current book");
     expect(command.icon).toBe("book-open");
     expect(command.hotkeys).toBeUndefined();
-    expect(command.checkCallback?.(true)).toBe(false);
+    expect(command.callback).toBeTypeOf("function");
+    expect(command.checkCallback).toBeUndefined();
     await settleCommand();
     expect(fake.createdFiles).toEqual([]);
+  });
 
+  it("creates the open EPUB's note when a different leaf is active", async () => {
     const book = fake.files.get(SOURCE);
     expect(book).toBeDefined();
-    fake.runtime.activeView = { file: book };
-    expect(command.checkCallback?.(true)).toBe(true);
+    if (book === undefined) return;
+    openBookLeaf(book);
+    fake.runtime.activeView = { file: null };
+
+    getCreateBookNoteCommand()?.callback?.();
     await settleCommand();
+
+    expect(fake.createdFiles).toEqual(["Reading/Surprised by Grace.md"]);
+  });
+
+  it("shows an ambiguity notice and writes nothing when multiple books are open", async () => {
+    const firstBook = fake.files.get(SOURCE);
+    expect(firstBook).toBeDefined();
+    if (firstBook === undefined) return;
+    const secondBook = addBookFile("Books/Second Book.epub");
+    openBookLeaf(firstBook);
+    openBookLeaf(secondBook);
+    fake.runtime.activeView = null;
+
+    getCreateBookNoteCommand()?.callback?.();
+    await settleCommand();
+
+    expect(obsidianMock.noticeMessages).toEqual([
+      "Choose which open book to create a note for",
+    ]);
+    expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("loads a deferred EPUB leaf before resolving its book", async () => {
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    if (book === undefined) return;
+    const leaf: FakeEpubLeaf = {
+      view: {},
+      getViewState: () => ({ type: "observation-car-epub" }),
+      loadIfDeferred: vi.fn(async () => {
+        const view = new EpubViewDouble();
+        view.file = book;
+        leaf.view = view;
+      }),
+    };
+    fake.runtime.epubLeaves.push(leaf);
+
+    getCreateBookNoteCommand()?.callback?.();
+    await settleCommand();
+
+    expect(leaf.loadIfDeferred).toHaveBeenCalledOnce();
+    expect(fake.createdFiles).toEqual(["Reading/Surprised by Grace.md"]);
+  });
+
+  it("shows a notice and writes nothing when no EPUB is open", async () => {
+    getCreateBookNoteCommand()?.callback?.();
+    await settleCommand();
+
+    expect(obsidianMock.noticeMessages).toEqual([
+      "Open a book in Observation Car first",
+    ]);
     expect(fake.createdFiles).toEqual([]);
   });
 
@@ -391,7 +486,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     const notePath = "Notes/Reading/Surprised by Grace.md";
@@ -427,7 +522,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
       const command = getCreateBookNoteCommand();
       expect(command).toBeDefined();
       if (command === undefined) return;
-      expect(command.checkCallback?.(false)).toBe(true);
+      command.callback?.();
       await settleCommand();
 
       const notePath = "Reading/Surprised by Grace.md";
@@ -463,7 +558,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     const notePath = "Reading/Foo {{author}} O'Brien.md";
@@ -496,7 +591,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     const notePath = "Reading/Foo {{format}} Bar.md";
@@ -524,7 +619,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     expect(fake.createdFiles).toEqual([]);
