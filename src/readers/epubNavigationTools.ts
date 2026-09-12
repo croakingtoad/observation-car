@@ -23,6 +23,30 @@ import { type Book, type Contents, type Rendition } from "epubjs";
 import type Locations from "epubjs/types/locations";
 import { type Location } from "epubjs/types/rendition";
 import { buildEpubCfiFragment } from "../model/anchor";
+import type { EpubFlowMode } from "../settings";
+import { decidePagingAction } from "./pagingGestures";
+
+/**
+ * F2.2 — flow-mode controls handed in by the view. The button shows the
+ * reader's current mode; `onToggle` persists the other mode and re-renders
+ * through the view's existing render path.
+ */
+export interface EpubFlowControls {
+  /** Flow mode the current rendition was rendered with. */
+  readonly mode: EpubFlowMode;
+  /** Switch the reader to the other flow mode. */
+  readonly onToggle: () => void;
+}
+
+/** A press in progress inside the rendered document (F2.2). */
+interface PointerPress {
+  startX: number;
+  startY: number;
+  /** pointerdown timeStamp, in the document's own time origin. */
+  startStamp: number;
+  /** Farthest the pointer has moved from the start, in px. */
+  distance: number;
+}
 
 export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
@@ -37,10 +61,13 @@ export class EpubNavigationTools {
     private readonly bookPath: string,
     private readonly book: Book,
     private readonly rendition: Rendition,
+    private readonly flow: EpubFlowControls | undefined,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
     this.createNavigationButton(viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
     this.createNavigationButton(viewerEl, "epub-nav-next", "❯", () => this.rendition.next());
+    this.createFlowButton(viewerEl);
+    this.addPagingListeners();
     void this.createTocPanel(viewerEl);
     this.addKeyListeners();
     void this.addSelectionListener(viewerEl);
@@ -79,6 +106,124 @@ export class EpubNavigationTools {
       (contents.document.body as HTMLElement).setAttribute("tabindex", "0");
       (contents.document.body as HTMLElement).focus();
     });
+  }
+
+  /**
+   * F2.2 — tap-zone and swipe paging. The gesture is decided by
+   * `pagingGestures` (pure, unit-tested); this is the capture side.
+   *
+   * Listeners live on the rendered document — pointer events in the
+   * iframe never reach the host element — and are torn down with the
+   * rendition: a mode toggle or a second book in the same leaf destroys
+   * the rendition, which destroys these documents with them.
+   *
+   * Zones are decided from the pointer's x inside the document, never
+   * from an overlay div: an overlay over the page is exactly what swallows
+   * text selection. A tap is ignored when a non-empty selection exists,
+   * when the pointer moved past the slop, when the press was long, or
+   * when it lands on an in-content link (epub.js owns those).
+   */
+  private addPagingListeners(): void {
+    const mode = this.flow?.mode;
+    if (mode === undefined) {
+      return;
+    }
+
+    this.rendition.on("rendered", (_section: unknown, view: { document: Document }) => {
+      const doc = view.document;
+
+      // In paginated mode the document must not pan horizontally, so let
+      // the browser keep vertical pan and hand the horizontal gestures to
+      // the pointer handlers below. Scrolled mode scrolls vertically
+      // natively; leave touch-action alone.
+      doc.documentElement.style.touchAction = mode === "paginated" ? "pan-y" : "";
+
+      let press: PointerPress | null = null;
+
+      doc.addEventListener("pointerdown", (event: PointerEvent) => {
+        if (event.button !== 0) {
+          return; // primary button only; touch and pen report 0 too
+        }
+        press = {
+          startX: event.clientX,
+          startY: event.clientY,
+          startStamp: event.timeStamp,
+          distance: 0,
+        };
+      });
+
+      doc.addEventListener("pointermove", (event: PointerEvent) => {
+        if (press === null) {
+          return;
+        }
+        const travelled = Math.hypot(event.clientX - press.startX, event.clientY - press.startY);
+        if (travelled > press.distance) {
+          press.distance = travelled;
+        }
+      });
+
+      // A native pan or scroll cancels the press; it must not page.
+      doc.addEventListener("pointercancel", () => {
+        press = null;
+      });
+
+      doc.addEventListener("pointerup", (event: PointerEvent) => {
+        if (press === null) {
+          return;
+        }
+        const down = press;
+        press = null;
+
+        // In-content links are epub.js's to navigate; a tap on one must
+        // not also turn a page.
+        if (event.target instanceof Element && event.target.closest("a[href]") !== null) {
+          return;
+        }
+
+        const selection = doc.defaultView?.getSelection();
+        const hasSelection =
+          selection !== null && selection !== undefined && selection.toString().length > 0;
+
+        const action = decidePagingAction({
+          flowMode: mode,
+          hasSelection,
+          deltaX: event.clientX - down.startX,
+          deltaY: event.clientY - down.startY,
+          distance: down.distance,
+          durationMs: event.timeStamp - down.startStamp,
+          endX: event.clientX,
+          contentWidth: doc.documentElement.clientWidth,
+        });
+
+        if (action.kind === "page") {
+          void (action.direction === "next" ? this.rendition.next() : this.rendition.prev());
+        }
+      });
+    });
+  }
+
+  /**
+   * F2.2 — flow-mode toggle in the reader's own chrome (the settings tab
+   * is F1.4's enumeration; no command-palette entry until E006/E007).
+   * The icon and label always describe the action available: in
+   * paginated mode it offers scrolled, and vice versa.
+   */
+  private createFlowButton(viewerEl: HTMLElement): void {
+    if (this.flow === undefined) {
+      return;
+    }
+    const toScrolled = this.flow.mode === "paginated";
+    const label = toScrolled ? "Switch to scrolled mode" : "Switch to paginated mode";
+    const btn = document.createElement("button");
+    btn.className = "epub-button epub-flow-button";
+    btn.textContent = toScrolled ? "≡" : "▭";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      this.flow?.onToggle();
+    };
+    viewerEl.appendChild(btn);
   }
 
   /** Chapter-level jump: PageUp = next chapter, PageDown = previous. */

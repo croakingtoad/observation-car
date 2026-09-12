@@ -17,8 +17,19 @@ import { FileView, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
 import { EpubNavigationTools } from "./epubNavigationTools";
 import { EpubThemes } from "./epubThemes";
+import type { EpubFlowMode, ObservationCarSettings } from "../settings";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
+
+/**
+ * The slice of the plugin the EPUB view reads and writes (F2.2 flow mode).
+ * Kept as a narrow structural interface so the view never imports
+ * `main.ts` (which imports it).
+ */
+export interface EpubViewHost {
+  settings: ObservationCarSettings;
+  updateSettings(patch: Partial<ObservationCarSettings>): Promise<void>;
+}
 
 export class EpubView extends FileView {
   /** The book currently loaded in this leaf, or null before first open. */
@@ -28,7 +39,7 @@ export class EpubView extends FileView {
   private rendition: Rendition | null = null;
   private themes: EpubThemes | null = null;
 
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(leaf: WorkspaceLeaf, private readonly host: EpubViewHost) {
     super(leaf);
   }
 
@@ -65,15 +76,52 @@ export class EpubView extends FileView {
     this.rendition = this.book.renderTo(viewerEl, {
       width: "100%",
       height: "100%",
+      // F2.2: flow mode from the (global) plugin setting; the toggle in
+      // the reader chrome re-renders through this path with the new value.
+      flow: this.host.settings.epubFlowMode,
     });
     new EpubNavigationTools(
       viewerEl,
       file.path,
       this.book,
       this.rendition,
+      {
+        mode: this.host.settings.epubFlowMode,
+        onToggle: () => this.toggleFlowMode(),
+      },
     );
     this.themes = new EpubThemes(this.rendition);
     await this.rendition.display();
+  }
+
+  /**
+   * F2.2 — the on-screen flow toggle: switch to the other mode.
+   */
+  private toggleFlowMode(): void {
+    const next: EpubFlowMode =
+      this.host.settings.epubFlowMode === "paginated" ? "scrolled" : "paginated";
+    void this.setFlowMode(next).catch((error: unknown) => {
+      console.error("Observation Car: could not switch EPUB flow mode", error);
+    });
+  }
+
+  /**
+   * F2.2 — switch the reader's flow mode and persist it as a global
+   * plugin setting. Re-renders through the existing render path (which
+   * disposes the current reader first); the current CFI is re-displayed
+   * afterwards so the reader does not lose its place on a toggle.
+   */
+  async setFlowMode(mode: EpubFlowMode): Promise<void> {
+    const file = this.file;
+    if (file === null || this.rendition === null || this.host.settings.epubFlowMode === mode) {
+      return;
+    }
+    const cfi = this.rendition.location?.start?.cfi ?? null;
+    await this.host.updateSettings({ epubFlowMode: mode });
+    await this.renderBook(file);
+    if (cfi !== null && this.rendition !== null) {
+      await this.rendition.display(cfi);
+    }
   }
 
   private disposeReader(): void {

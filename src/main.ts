@@ -38,7 +38,9 @@ export default class ObservationCarPlugin extends Plugin {
 
     // F2.1: `.epub` opens in the in-plugin reader view; no external
     // reader is involved. The view-type factory is called once per leaf.
-    this.registerView(EPUB_VIEW_TYPE, (leaf) => new EpubView(leaf));
+    // The view holds the plugin (as the narrow EpubViewHost slice) so the
+    // F2.2 flow toggle can read and persist `epubFlowMode`.
+    this.registerView(EPUB_VIEW_TYPE, (leaf) => new EpubView(leaf, this));
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
 
     this.bookNoteStore = new BookNoteStore({
