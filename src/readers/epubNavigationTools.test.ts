@@ -212,12 +212,24 @@ describe("EpubNavigationTools — rendition event wiring", () => {
     const tracker = new EpubSelectionTracker();
     const { emit } = await makeTools(tracker);
     const contents = makeContents({ text: "quoted words" });
+
+    emit("rendered", undefined, contents);
     emit("selected", CFI_RANGE, contents);
     expect(tracker.getSelection()).not.toBeNull();
 
-    emit("rendered", undefined, contents);
     contents.state.collapsed = true;
     contents.events.get("selectionchange")?.();
+
+    expect(tracker.getSelection()).toBeNull();
+  });
+
+  it("clears an attached selection when a fresh view is rendered", async () => {
+    const tracker = new EpubSelectionTracker();
+    const { emit } = await makeTools(tracker);
+    emit("selected", CFI_RANGE, makeContents({ text: "quoted words" }));
+    expect(tracker.getSelection()).not.toBeNull();
+
+    emit("rendered", undefined, makeContents());
 
     expect(tracker.getSelection()).toBeNull();
   });
