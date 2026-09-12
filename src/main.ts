@@ -1,4 +1,5 @@
 import { Plugin, TFile } from "obsidian";
+import { registerCreateBookNoteCommand } from "./commands/createBookNote";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -88,6 +89,7 @@ export default class ObservationCarPlugin extends Plugin {
       return reader;
     });
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
+    registerCreateBookNoteCommand(this);
 
     // Obsidian has no leaf-close event. `layout-change` covers closes and
     // moves; the other events make a newly loaded reader visible quickly.
