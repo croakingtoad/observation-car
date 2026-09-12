@@ -98,6 +98,10 @@ export class BookNoteStore {
   remove(path: string): void {
     this.pending.delete(path);
     this.notes.delete(path);
+    if (this.pending.size === 0 && this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
   }
 
   /** Drop everything and cancel a pending re-parse (plugin unload). */
@@ -116,6 +120,8 @@ export class BookNoteStore {
    * Resolves only when every scheduled path has been re-parsed —
    * including paths scheduled while this flush is in flight. A consumer
    * that does `await flush(); read()` must never read a half-built cache.
+   * If an invariant violation leaves a settled run published, the
+   * progress guard logs and clears it instead of spinning the renderer.
    */
   async flush(): Promise<void> {
     for (;;) {
@@ -124,7 +130,14 @@ export class BookNoteStore {
         this.timer = null;
       }
       if (this.runPromise === null && this.pending.size === 0) return;
-      await this.ensureRun();
+      const run = this.ensureRun();
+      await run;
+      if (this.runPromise === run) {
+        console.error(
+          "[observation-car] book-note flush made no progress",
+        );
+        this.runPromise = null;
+      }
     }
   }
 
@@ -133,7 +146,9 @@ export class BookNoteStore {
    * return its promise. When a pass is already running, the flag it
    * checks before exiting — together with the pending set itself, which
    * it re-checks on every loop — makes it pick up whatever was scheduled
-   * after its last snapshot; no second pass, no dropped paths.
+   * after its last snapshot. An initial microtask yield ensures the new
+   * promise is published before its empty-pending path can settle and
+   * clear itself; one run drains the set without dropping paths.
    */
   private ensureRun(): Promise<void> {
     if (this.runPromise !== null) {
@@ -146,6 +161,9 @@ export class BookNoteStore {
   }
 
   private async runPending(): Promise<void> {
+    // `ensureRun` must publish this promise before any path, including an
+    // empty pending set, can reach the finally block that clears it.
+    await Promise.resolve();
     try {
       do {
         this.rerunRequested = false;

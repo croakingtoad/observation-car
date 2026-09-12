@@ -145,12 +145,47 @@ describe("BookNoteStore", () => {
     expect(store.has("Reading/Book.md")).toBe(false);
   });
 
+  it("keeps working after a pending changed path is deleted", async () => {
+    const { store, reads } = makeStore();
+
+    // `changed`, then `deleted` inside the debounce window: removing the
+    // only pending path must disarm the otherwise-empty timer callback.
+    store.scheduleReparse("Reading/Deleted.md");
+    expect(vi.getTimerCount()).toBe(1);
+    store.remove("Reading/Deleted.md");
+    expect(vi.getTimerCount()).toBe(0);
+    await elapse();
+
+    // A later ordinary edit still parses, and flush still terminates.
+    store.scheduleReparse("Reading/B.md");
+    await store.flush();
+    expect(reads).toEqual(["Reading/B.md"]);
+    expect(store.paths()).toEqual(["Reading/B.md"]);
+  });
+
   it("flush() runs pending re-parses without waiting for the window", async () => {
     const { store, reads } = makeStore();
     store.scheduleReparse("Reading/Book.md");
     await store.flush();
     expect(reads).toEqual(["Reading/Book.md"]);
     expect(store.has("Reading/Book.md")).toBe(true);
+  });
+
+  it("flush() logs and returns if a settled run remains published", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const { store } = makeStore();
+
+    // Recreate the pathological state defensively guarded by flush. The
+    // field is private to production callers, so Reflect is used only by
+    // this white-box regression probe.
+    Reflect.set(store, "runPromise", Promise.resolve());
+    await store.flush();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "[observation-car] book-note flush made no progress",
+    );
   });
 
   it("clear() empties the cache and cancels the pending re-parse", async () => {
