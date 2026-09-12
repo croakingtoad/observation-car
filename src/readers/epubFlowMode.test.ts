@@ -433,9 +433,12 @@ describe("F2.2 flow-mode recovery", () => {
     expect(race.renditionB.display).not.toHaveBeenCalledWith(CFI_A);
   });
 
-  // No parked continuation can observe one ownership half moving alone:
-  // EpubView.ts:131 reaches :250 synchronously, while the rendition assignment
-  // at :308 follows the sole render-generation bump at :608.
+  // The ownership conjuncts are equivalent only while EpubView.ts:131 is
+  // `this.file`'s single writer, :608 in disposeReader is renderGeneration's
+  // single bump, and the path between them cannot suspend: renderBook reaches
+  // the void disposeReader at :250 before its first suspension at readBinary
+  // (:253). If any fact changes, both conjunct pins become independently
+  // observable and must be revisited.
   // QC-PROBE-Y: a stale redisplay must not overwrite a newer write for A.
   it("keeps book A's newer CFI when its stale redisplay finishes", async () => {
     const targetedDisplay = gateTargetedDisplay(CFI_A);
