@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fixture: catalog-page1 — first page of the acquisition feed (size=3):
+  two EPUB entries and one PDF entry. Carries opensearch:totalResults /
+  startIndex / itemsPerPage and the rel=self/start/search/first/next/last
+  links, with no previous link (it is the first page). Also shows a title
+  with an ISBN appended in parentheses, an entry whose author is repeated
+  twice in the source, an entry with no author, and an entry with no
+  dc:publisher/dc:language.
+  LIVE CAPTURE (LOCO-101, 2026-09-12 UTC): verbatim response from a real
+  Booklore instance (the requester's self-hosted library), fetched over
+  OPDS Basic Auth.
+  Request: GET /api/v1/opds/catalog?page=1&size=3
+  Redaction: the instance host (a tailnet address) was substituted with
+  booklore.example. Booklore serves only site-relative hrefs, so no host
+  string appears in the body — substitution verified at capture.
+--><feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/terms/" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <id>urn:booklore:catalog</id>
+  <title>Booklore Catalog</title>
+  <updated>2026-09-12T01:18:35.117320590Z</updated>
+  <opensearch:totalResults>68</opensearch:totalResults>
+  <opensearch:startIndex>1</opensearch:startIndex>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <link rel="self" href="/api/v1/opds/catalog?page=1&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="start" href="/api/v1/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="search" type="application/opensearchdescription+xml" title="Search" href="/api/v1/opds/search.opds"/>
+  <link rel="first" href="/api/v1/opds/catalog?page=1&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="next" href="/api/v1/opds/catalog?page=2&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="last" href="/api/v1/opds/catalog?page=23&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <entry>
+    <title>Book of Literary Terms : The Genres of Fiction, Drama, Nonfiction, Literary Criticism, and Scholarship (9780826361936)</title>
+    <id>urn:booklore:book:92</id>
+    <updated>2026-09-09T16:58:31Z</updated>
+    <author><name>Turco, Lewis</name></author>
+    <dc:publisher>Lightning Source Inc</dc:publisher>
+    <dc:language>en</dc:language>
+    <link href="/api/v1/opds/92/download?fileId=93" rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/92/cover?2026-09-09T16:58:31Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/92/cover?2026-09-09T16:58:31Z" type="image/jpeg"/>
+  </entry>
+  <entry>
+    <title>Courting the Wild Twin</title>
+    <id>urn:booklore:book:91</id>
+    <updated>2026-09-09T16:51:37Z</updated>
+    <author><name>Shaw, Martin</name></author>
+    <author><name>Shaw, Martin</name></author>
+    <dc:publisher>Chelsea Green Publishing</dc:publisher>
+    <dc:language>en</dc:language>
+    <link href="/api/v1/opds/91/download?fileId=92" rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/91/cover?2026-09-09T16:51:38Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/91/cover?2026-09-09T16:51:38Z" type="image/jpeg"/>
+  </entry>
+  <entry>
+    <title>Poetic meter and poetic form</title>
+    <id>urn:booklore:book:90</id>
+    <updated>2026-09-02T18:59:10Z</updated>
+    <category term="Poetry"/>
+    <link href="/api/v1/opds/90/download?fileId=91" rel="http://opds-spec.org/acquisition" type="application/pdf" title="PDF"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/90/cover?2026-09-02T18:59:12Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/90/cover?2026-09-02T18:59:12Z" type="image/jpeg"/>
+  </entry>
+</feed>

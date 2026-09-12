@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fixture: opensearch-description — the OpenSearch description
+  document every feed advertises via rel="search". Its single <Url> carries
+  a RELATIVE template; it must be resolved against the document's own URL.
+  LIVE CAPTURE (LOCO-101, 2026-09-12 UTC): verbatim response from a real
+  Booklore instance (the requester's self-hosted library), fetched over
+  OPDS Basic Auth.
+  Request: GET /api/v1/opds/search.opds
+  Redaction: the instance host (a tailnet address) was substituted with
+  booklore.example. Booklore serves only site-relative hrefs, so no host
+  string appears in the body — substitution verified at capture.
+--><OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+  <ShortName>Booklore</ShortName>
+  <Description>Search Booklore catalog</Description>
+  <Url type="application/atom+xml;profile=opds-catalog;kind=acquisition"
+       template="/api/v1/opds/catalog?q={searchTerms}"/>
+</OpenSearchDescription>

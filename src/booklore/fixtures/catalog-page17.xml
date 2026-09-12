@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fixture: catalog-page17 — the page of the same feed (size=3) that
+  holds the library's MOBI and AZW3 books: two entries with
+  application/x-mobipocket-ebook and one with application/vnd.amazon.ebook.
+  The plugin supports neither format; F5.4/F5.5 must handle these entries.
+  Also shows the dc:language value "en-us".
+  LIVE CAPTURE (LOCO-101, 2026-09-12 UTC): verbatim response from a real
+  Booklore instance (the requester's self-hosted library), fetched over
+  OPDS Basic Auth.
+  Request: GET /api/v1/opds/catalog?page=17&size=3
+  Redaction: the instance host (a tailnet address) was substituted with
+  booklore.example. Booklore serves only site-relative hrefs, so no host
+  string appears in the body — substitution verified at capture.
+--><feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/terms/" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <id>urn:booklore:catalog</id>
+  <title>Booklore Catalog</title>
+  <updated>2026-09-12T01:57:31.884287645Z</updated>
+  <opensearch:totalResults>68</opensearch:totalResults>
+  <opensearch:startIndex>49</opensearch:startIndex>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <link rel="self" href="/api/v1/opds/catalog?page=17&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="start" href="/api/v1/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="search" type="application/opensearchdescription+xml" title="Search" href="/api/v1/opds/search.opds"/>
+  <link rel="first" href="/api/v1/opds/catalog?page=1&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="previous" href="/api/v1/opds/catalog?page=16&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="next" href="/api/v1/opds/catalog?page=18&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="last" href="/api/v1/opds/catalog?page=23&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <entry>
+    <title>The Aeneid</title>
+    <id>urn:booklore:book:39</id>
+    <updated>2026-02-26T20:38:22Z</updated>
+    <author><name>Virgil</name></author>
+    <dc:publisher>Penguin Classic</dc:publisher>
+    <dc:language>en</dc:language>
+    <category term="European Literary Fiction"/>
+    <summary>&lt;div&gt;With his translations of Homer&apos;s classic poems, Robert Fagles gave new life to seminal works of the Western canon and became one of the preeminent translators of our time. His latest achievement completes the magnificent triptych of Western epics. A sweeping story of arms and heroism, &lt;i&gt;The Aeneid&lt;/i&gt; follows the adventures of Aeneas, who flees the ashes of Troy to embark upon a tortuous course that brings him to Italy and fulfills his destiny as founder of the Roman people. Retaining all of the gravitas and humanity of the original, this powerful blend of poetry and myth remains as relevant today as when it was first written. &lt;/div&gt;</summary>
+    <link href="/api/v1/opds/39/download?fileId=39" rel="http://opds-spec.org/acquisition" type="application/x-mobipocket-ebook" title="MOBI"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/39/cover?2026-02-26T20:38:22Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/39/cover?2026-02-26T20:38:22Z" type="image/jpeg"/>
+  </entry>
+  <entry>
+    <title>The Iliad</title>
+    <id>urn:booklore:book:38</id>
+    <updated>2026-02-26T20:21:23Z</updated>
+    <author><name>Homer</name></author>
+    <dc:publisher>Penguin USA, Inc.</dc:publisher>
+    <dc:language>en</dc:language>
+    <link href="/api/v1/opds/38/download?fileId=38" rel="http://opds-spec.org/acquisition" type="application/x-mobipocket-ebook" title="MOBI"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/38/cover?2026-02-26T20:34:11Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/38/cover?2026-02-26T20:34:11Z" type="image/jpeg"/>
+  </entry>
+  <entry>
+    <title>The Odyssey</title>
+    <id>urn:booklore:book:37</id>
+    <updated>2026-02-26T20:08:17Z</updated>
+    <author><name>Homer</name></author>
+    <dc:publisher>Penguin Publishing Group</dc:publisher>
+    <dc:language>en-us</dc:language>
+    <link href="/api/v1/opds/37/download?fileId=37" rel="http://opds-spec.org/acquisition" type="application/vnd.amazon.ebook" title="AZW3"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/37/cover?2026-02-26T20:08:17Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/37/cover?2026-02-26T20:08:17Z" type="image/jpeg"/>
+  </entry>
+</feed>

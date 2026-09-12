@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fixture: catalog-page23 — the final page of the same feed (size=3):
+  entries 67-68 of 68, with no rel="next". The Fred Rogers entry
+  (urn:booklore:book:2) has no acquisition link and no navigation link -
+  a catalog entry whose file is not downloadable - and carries the junk
+  dc:publisher value #PrB.rating#4.31 cited in the opdsTypes docs.
+  LIVE CAPTURE (LOCO-101 lineage, 2026-09-12 UTC): verbatim response from
+  a real Booklore instance (the requester's self-hosted library), fetched
+  over OPDS Basic Auth.
+  Request: GET /api/v1/opds/catalog?page=23&size=3
+  Redaction: the instance host (a tailnet address) was substituted with
+  booklore.example. Booklore serves only site-relative hrefs, so no host
+  string appears in the body — substitution verified at capture.
+--><feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/terms/" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <id>urn:booklore:catalog</id>
+  <title>Booklore Catalog</title>
+  <updated>2026-09-12T06:42:46.564027521Z</updated>
+  <opensearch:totalResults>68</opensearch:totalResults>
+  <opensearch:startIndex>67</opensearch:startIndex>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <link rel="self" href="/api/v1/opds/catalog?page=23&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="start" href="/api/v1/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="search" type="application/opensearchdescription+xml" title="Search" href="/api/v1/opds/search.opds"/>
+  <link rel="first" href="/api/v1/opds/catalog?page=1&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="previous" href="/api/v1/opds/catalog?page=22&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="last" href="/api/v1/opds/catalog?page=23&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <entry>
+    <title>Created for Connection</title>
+    <id>urn:booklore:book:24</id>
+    <updated>2026-02-24T21:41:56Z</updated>
+    <author><name>Sue Johnson</name></author>
+    <dc:publisher>Little, Brown and Company</dc:publisher>
+    <dc:language>en</dc:language>
+    <category term="Family &amp; Relationships / Marriage, Religion / Christian Life / Family, Religion / Christian Life / Love &amp; Marriage"/>
+    <summary>&lt;b&gt;&quot;Whoever does not love does not know God, because God is love.&quot;&amp;#8212;1 John 4:8&lt;/b&gt;&lt;br&gt;Are you looking to enrich a healthy relationship, revitalize a tired one, or rescue one gone awry? Do you yearn to grow closer to God, and to further incorporate Him and His teachings into your marriage? We all want a lifetime of love, support, and faith. But sometimes we need a little help.&lt;br&gt;Enter Dr. Sue Johnson, developer of Emotionally Focused Therapy (EFT) and &quot;the best couple therapist in the world,&quot; according to bestselling relationship expert Dr. John Gottman. In CREATED FOR CONNECTION, Dr. Johnson and Kenneth Sanderfer, a leading EFT practitioner in the Christian community, share Johnson&apos;s groundbreaking and remarkably successful program for creating stronger, more secure relationships not only between partners, but between us and God.&lt;br&gt;The message of CREATED FOR CONNECTION is simple: Forget about learning how to argue better, analyzing your early childhood, or making grand...</summary>
+    <link href="/api/v1/opds/24/download?fileId=24" rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/24/cover?2026-02-24T21:41:57Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/24/cover?2026-02-24T21:41:57Z" type="image/jpeg"/>
+  </entry>
+  <entry>
+    <title>Fred Rogers: A Captivating Guide to the Man Behind Mister Rogers&apos; Neighborhood</title>
+    <id>urn:booklore:book:2</id>
+    <updated>2026-02-23T21:42:17Z</updated>
+    <author><name>Captivating History</name></author>
+    <dc:publisher>#PrB.rating#4.31</dc:publisher>
+    <dc:language>en</dc:language>
+    <category term="Biography"/>
+    <summary>&lt;p&gt;If you want to discover the captivating life of Fred Rogers, then keep reading... &lt;br /&gt;
+&lt;strong&gt;Free History BONUS Inside!&lt;/strong&gt;   &lt;/p&gt;
+&lt;p&gt;Mister Rogers was more than just a puppeteer, a teacher, or an entertainer, though he was all those things; he was also a trusted friend and advisor. Rogers spoke personably with kids and helped them identify and organize their emotions. He explained how to deal with anger in simple, relatable terms and sang songs to help his guests and viewers cope with their feelings. He told generations of young people that it was okay to cry and show emotion since these are feelings every person experiences.   &lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;In &lt;em&gt;Fred Rogers: A Captivating Guide to the Man Behind Mister Rogers&apos; Neighborhood&lt;/em&gt; , you will discover topics such as&lt;/strong&gt; &lt;br /&gt;
+A Boy with a Name That Said It All The College Years Family Life Working for NBC Public Television and The Children’s Corner Misterogers and the Canadian Broadcasting Corporation Mister Rogers’ Neighborhood Program Themes and Distribution Celebrity Sightings in the Neighborhood The Assassination of Robert Kennedy The Famous Foot Bath PBS Funding and the Supreme Court I Don’t Want to Eat Anything That Has a Mother Mister Rogers Goes to Sesame Street Mister Rogers the Composer The Conflict Series When Fred Met Koko Fred Retires from the Neighborhood Satire and Criticism Illness and Death Awards and Legacy Daniel Tiger’s Neighborhood And much, much more! &lt;strong&gt;So if you want to learn more about Fred Rogers, scroll up and click the &quot;add to cart&quot; button!&lt;/strong&gt;&lt;/p&gt;</summary>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/2/cover?2026-02-23T21:42:17Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/2/cover?2026-02-23T21:42:17Z" type="image/jpeg"/>
+  </entry>
+</feed>
