@@ -206,6 +206,34 @@ describe("EpubView location events (F2.5)", () => {
     consoleError.mockRestore();
   });
 
+  it("logs a rejected data.json location write", async () => {
+    vi.useFakeTimers();
+    const saveError = new Error("disk full");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const rememberEpubLocation = vi
+      .fn()
+      .mockRejectedValueOnce(saveError)
+      .mockResolvedValue(undefined);
+    const view = new EpubView(makeLeaf(), makeHost({ rememberEpubLocation }));
+    await view.onLoadFile(makeFile("Books/Test.epub"));
+
+    epub.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Observation Car: could not save EPUB location",
+      saveError,
+    );
+    await view.onClose();
+    consoleError.mockRestore();
+  });
+
   it("emits a debounced LocationChanged with {file, fragment, chapter, label}", async () => {
     vi.useFakeTimers();
     const view = new EpubView(makeLeaf(), makeHost());
