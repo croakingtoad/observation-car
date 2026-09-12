@@ -1,6 +1,8 @@
 import {
   TFile,
+  TFolder,
   type App,
+  type Command,
   type PluginManifest,
 } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +21,7 @@ import ObservationCarPlugin from "./main";
 vi.mock("obsidian", () => {
   class Plugin {
     app: unknown;
+    commands: unknown[] = [];
     savedData: unknown[] = [];
     constructor(app: unknown) {
       this.app = app;
@@ -31,6 +34,10 @@ vi.mock("obsidian", () => {
     registerView(_viewType: string, _factory: unknown): void {}
     registerExtensions(_extensions: string[], _viewType: string): void {}
     addSettingTab(_tab: unknown): void {}
+    addCommand(command: unknown): unknown {
+      this.commands.push(command);
+      return command;
+    }
     async loadData(): Promise<unknown> {
       return {};
     }
@@ -52,12 +59,35 @@ vi.mock("obsidian", () => {
   class TFile {
     path: string;
     extension: string;
+    name: string;
+    basename: string;
     constructor(path: string, extension: string) {
       this.path = path;
       this.extension = extension;
+      this.name = path.split("/").at(-1) ?? path;
+      this.basename = this.name.slice(0, -(extension.length + 1));
     }
   }
-  return { Plugin, PluginSettingTab, Setting, TFile };
+  class TFolder {
+    path: string;
+    constructor(path: string) {
+      this.path = path;
+    }
+  }
+  class Notice {
+    constructor(_message: string) {}
+  }
+  const normalizePath = (path: string): string =>
+    path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\//, "");
+  return {
+    Notice,
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TFile,
+    TFolder,
+    normalizePath,
+  };
 });
 
 vi.mock("./readers/EpubView", () => ({
@@ -77,30 +107,59 @@ const TFileDouble = TFile as unknown as new (
   path: string,
   extension: string,
 ) => TFile;
+const TFolderDouble = TFolder as unknown as new (path: string) => TFolder;
 
 interface FakeVault {
   app: unknown;
   files: Map<string, TFile>;
+  folders: Set<string>;
   contents: Map<string, string>;
   caches: Map<string, { frontmatter: Record<string, unknown> | null }>;
   /** Lowercased linkpath → vault path of the file it resolves to. */
   linkDests: Map<string, string>;
   metadataHandlers: Map<string, Handler>;
   vaultHandlers: Map<string, Handler>;
+  createdFiles: string[];
+  generatedLinks: { filePath: string; sourcePath: string }[];
+  openedFiles: string[];
+  runtime: { activeView: unknown };
 }
 
 function makeFakeVault(): FakeVault {
   const files = new Map<string, TFile>();
+  const folders = new Set<string>();
   const contents = new Map<string, string>();
   const caches = new Map<string, { frontmatter: Record<string, unknown> | null }>();
   const linkDests = new Map<string, string>();
   const metadataHandlers = new Map<string, Handler>();
   const vaultHandlers = new Map<string, Handler>();
+  const createdFiles: string[] = [];
+  const generatedLinks: { filePath: string; sourcePath: string }[] = [];
+  const openedFiles: string[] = [];
+  const runtime = { activeView: null as unknown };
 
   const app = {
     vault: {
-      getAbstractFileByPath: (path: string): TFile | null =>
-        files.get(path) ?? null,
+      getAbstractFileByPath: (path: string): TFile | TFolder | null =>
+        files.get(path) ?? (folders.has(path) ? new TFolderDouble(path) : null),
+      create: async (path: string, text: string): Promise<TFile> => {
+        if (files.has(path) || folders.has(path)) {
+          throw new Error(`${path} already exists`);
+        }
+        const extension = path.split(".").at(-1) ?? "";
+        const file = new TFileDouble(path, extension);
+        files.set(path, file);
+        contents.set(path, text);
+        createdFiles.push(path);
+        return file;
+      },
+      createFolder: async (path: string): Promise<TFolder> => {
+        if (files.has(path) || folders.has(path)) {
+          throw new Error(`${path} already exists`);
+        }
+        folders.add(path);
+        return new TFolderDouble(path);
+      },
       // Timer-based on purpose: under fake timers every async step of a
       // parse pass is a timer, so advanceTimersByTimeAsync tracks the
       // whole chain deterministically.
@@ -129,16 +188,35 @@ function makeFakeVault(): FakeVault {
         return { name };
       },
     },
+    fileManager: {
+      generateMarkdownLink: (file: TFile, sourcePath: string): string => {
+        generatedLinks.push({ filePath: file.path, sourcePath });
+        return `[[${file.name}]]`;
+      },
+    },
+    workspace: {
+      getActiveViewOfType: (): unknown => runtime.activeView,
+      getLeaf: (): { openFile: (file: TFile) => Promise<void> } => ({
+        openFile: async (file: TFile): Promise<void> => {
+          openedFiles.push(file.path);
+        },
+      }),
+    },
   };
 
   return {
     app,
     files,
+    folders,
     contents,
     caches,
     linkDests,
     metadataHandlers,
     vaultHandlers,
+    createdFiles,
+    generatedLinks,
+    openedFiles,
+    runtime,
   };
 }
 
@@ -263,6 +341,92 @@ describe("plugin wiring (substituted obsidian module)", () => {
     }
     handler(...args);
   }
+
+  function getCreateBookNoteCommand(): Command | undefined {
+    const commands = (plugin as unknown as { commands: Command[] }).commands;
+    return commands.find(
+      (command) => command.id === "create-book-note-for-current-book",
+    );
+  }
+
+  async function settleCommand(): Promise<void> {
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  it("registers the mobile-capable command without writing on plugin load", () => {
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+
+    expect(command.name).toBe("Create book note for current book");
+    expect(command.icon).toBe("book-open");
+    expect(command.hotkeys).toBeUndefined();
+    expect(command.checkCallback?.(true)).toBe(false);
+    expect(fake.createdFiles).toEqual([]);
+
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    fake.runtime.activeView = { file: book };
+    expect(command.checkCallback?.(true)).toBe(true);
+    expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("creates a templated note in the configured folder only when invoked", async () => {
+    plugin.settings = {
+      ...plugin.settings,
+      notesFolder: "Notes/Reading",
+    };
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const notePath = "Notes/Reading/Surprised by Grace.md";
+    expect(fake.folders).toEqual(new Set(["Notes", "Notes/Reading"]));
+    expect(fake.createdFiles).toEqual([notePath]);
+    expect(fake.contents.get(notePath)).toBe(
+      [
+        "---",
+        "type: book-note",
+        'source: "[[Surprised by Grace.epub]]"',
+        "format: epub",
+        'title: "Surprised by Grace"',
+        'author: ""',
+        "---",
+        "",
+      ].join("\n"),
+    );
+    expect(fake.generatedLinks).toEqual([
+      { filePath: SOURCE, sourcePath: notePath },
+    ]);
+    expect(fake.openedFiles).toEqual([notePath]);
+  });
+
+  it("opens an existing note without overwriting it", async () => {
+    const notePath = "Reading/Surprised by Grace.md";
+    addMdFile(notePath, "sentinel — keep me", null);
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    expect(fake.createdFiles).toEqual([]);
+    expect(fake.contents.get(notePath)).toBe("sentinel — keep me");
+    expect(fake.openedFiles).toEqual([notePath]);
+    expect(fake.generatedLinks).toEqual([]);
+  });
 
   it("a changed event caches a candidate note after the debounce window", async () => {
     const file = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);

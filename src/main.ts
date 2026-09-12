@@ -1,4 +1,5 @@
 import { Plugin, TFile } from "obsidian";
+import { registerCreateBookNoteCommand } from "./commands/createBookNote";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -42,6 +43,7 @@ export default class ObservationCarPlugin extends Plugin {
     // reader is involved. The view-type factory is called once per leaf.
     this.registerView(EPUB_VIEW_TYPE, (leaf) => new EpubView(leaf));
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
+    registerCreateBookNoteCommand(this);
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
