@@ -27,6 +27,7 @@ import {
   ScrollSync,
   type ScrollEditor,
 } from "./sync/scrollSync";
+import { currentSectionViewPlugin } from "./sync/currentSectionDecoration";
 
 /**
  * Observation Car — plugin entry point.
@@ -131,6 +132,7 @@ export default class ObservationCarPlugin extends Plugin {
       return reader;
     });
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
+    this.registerEditorExtension(currentSectionViewPlugin);
     registerCreateBookNoteCommand(this);
     registerOpenBookNoteCommand(this);
 

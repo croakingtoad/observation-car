@@ -12,6 +12,7 @@ import { parseBookNote } from "./model/bookNote";
 import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
 import { ReaderRegistry } from "./sync/ReaderRegistry";
+import { currentSectionViewPlugin } from "./sync/currentSectionDecoration";
 import {
   DEFAULT_SCROLL_DEBOUNCE_MS,
   DEFAULT_TYPING_IDLE_MS,
@@ -38,6 +39,7 @@ vi.mock("obsidian", () => {
     app: unknown;
     commands: unknown[] = [];
     savedData: unknown[] = [];
+    editorExtensions: unknown[] = [];
     constructor(app: unknown) {
       this.app = app;
     }
@@ -62,6 +64,9 @@ vi.mock("obsidian", () => {
       }
     }
     registerExtensions(_extensions: string[], _viewType: string): void {}
+    registerEditorExtension(extension: unknown): void {
+      this.editorExtensions.push(extension);
+    }
     addCommand(command: RecordedCommand): RecordedCommand {
       this.commands.push(command);
       if (
@@ -617,6 +622,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(command.checkCallback?.(true)).toBe(true);
     await settleCommand();
     expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("registers the current-section CM6 view plugin", () => {
+    const extensions = (
+      plugin as unknown as { editorExtensions: unknown[] }
+    ).editorExtensions;
+
+    expect(extensions).toContain(currentSectionViewPlugin);
   });
 
   it("creates a templated note in the configured folder only when invoked", async () => {

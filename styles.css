@@ -1,5 +1,11 @@
 /* Observation Car — plugin stylesheet. Scoped styles are added alongside each feature. */
 
+/* F4.4 — current anchor section in a CM6 book-note editor. */
+.markdown-source-view.mod-cm6 .cm-line.oc-current {
+  background-color: var(--background-modifier-hover);
+  box-shadow: inset var(--border-width) 0 0 var(--interactive-accent);
+}
+
 /* F1.4 — plaintext-storage warning above the OPDS credential fields. */
 .oc-settings-warning {
   margin: 4px 0 12px 24px;

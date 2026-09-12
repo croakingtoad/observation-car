@@ -65,6 +65,8 @@ interface Rig {
   readonly scrollIntoView: ReturnType<typeof vi.fn>;
   readonly focus: ReturnType<typeof vi.fn>;
   readonly editor: ScrollEditor;
+  readonly setCurrentSection: ReturnType<typeof vi.fn>;
+  currentEditor: ScrollEditor;
   pairing: ReaderPairing | undefined;
   editorOpen: boolean;
   leafOpen: boolean;
@@ -85,6 +87,7 @@ function makeRig(): Rig {
     scrollIntoView,
     focus,
   } as unknown as ScrollEditor;
+  const setCurrentSection = vi.fn();
   const rig = {
     sync: null as unknown as ScrollSync,
     bookFile,
@@ -93,14 +96,17 @@ function makeRig(): Rig {
     scrollIntoView,
     focus,
     editor,
+    setCurrentSection,
+    currentEditor: editor,
     pairing: pairing(leaf, reader, bookFile, note),
     editorOpen: true,
     leafOpen: true,
   };
   rig.sync = new ScrollSync({
     getPairing: () => rig.pairing,
-    findEditor: () => (rig.editorOpen ? editor : null),
+    findEditor: () => (rig.editorOpen ? rig.currentEditor : null),
     isLeafOpen: () => rig.leafOpen,
+    setCurrentSection,
   });
   rig.sync.register(leaf, reader);
   return rig;
@@ -176,6 +182,21 @@ describe("ScrollSync", () => {
     vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
 
     expect(rig.scrollIntoView).toHaveBeenCalledOnce();
+    expect(rig.setCurrentSection).toHaveBeenCalledTimes(2);
+  });
+
+  it("highlights the resolved section alongside its scroll", () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(rig.setCurrentSection).toHaveBeenCalledOnce();
+    expect(rig.setCurrentSection).toHaveBeenCalledWith(
+      rig.editor,
+      expect.objectContaining({ headingLine: 6 }),
+    );
   });
 
   it("does not move before the first anchor, then scrolls when the first anchor is reached", () => {
@@ -223,12 +244,21 @@ describe("ScrollSync", () => {
   it("keeps only one subscription and releases it when the leaf closes", () => {
     const rig = makeRig();
 
+    vi.useFakeTimers();
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
     rig.sync.register(rig.leaf, rig.reader);
     expect(rig.reader.listenerCount).toBe(1);
 
+    rig.currentEditor = {
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    };
     rig.leafOpen = false;
     rig.sync.refresh();
     expect(rig.reader.listenerCount).toBe(0);
+    expect(rig.setCurrentSection).toHaveBeenLastCalledWith(rig.editor, null);
   });
 
   it("cancels a deferred scroll and unsubscribes on clear", () => {
