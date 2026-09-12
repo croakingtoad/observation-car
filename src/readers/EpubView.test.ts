@@ -65,6 +65,10 @@ const epubMock = vi.hoisted(() => {
         listener(...args);
       }
     }
+
+    listenerCount(event: string): number {
+      return this.listeners.get(event)?.size ?? 0;
+    }
   }
 
   class FakeBook {
@@ -296,6 +300,33 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
 
     displayGate.resolve();
     await openA;
+  });
+
+  it("detaches location events when a superseded render finally settles", async () => {
+    const displayGate = deferred();
+    state.currentDisplayGate = displayGate.promise;
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+
+    const openA = view.onLoadFile(file("library/a.epub"));
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[0].display).toHaveBeenCalledTimes(1);
+    });
+    const renditionA = FakeRendition.instances[0];
+    const listenersBeforeTeardown = renditionA.listenerCount("relocated");
+    expect(listenersBeforeTeardown).toBeGreaterThan(0);
+
+    state.currentDisplayGate = null;
+    await view.onLoadFile(file("library/b.epub"));
+    expect(renditionA.listenerCount("relocated")).toBe(
+      listenersBeforeTeardown,
+    );
+
+    displayGate.resolve();
+    await openA;
+
+    expect(renditionA.listenerCount("relocated")).toBe(
+      listenersBeforeTeardown - 1,
+    );
   });
 
   it("onClose during an in-flight render retires the render", async () => {
