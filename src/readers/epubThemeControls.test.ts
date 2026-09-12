@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 
+import { createRequire } from "node:module";
 import type { Rendition } from "epubjs";
+import type Themes from "epubjs/types/themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EpubFontSizeStepper } from "./epubNavigationTools";
 import { EpubThemes } from "./epubThemes";
+
+const testRequire = createRequire(import.meta.url);
+const EpubJsThemes = (testRequire("epubjs/lib/themes.js") as {
+  default: typeof Themes;
+}).default;
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -36,6 +43,7 @@ class MemoryStorage implements Storage {
 describe("EpubThemes", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
+    document.body.removeAttribute("class");
     document.body.removeAttribute("style");
   });
 
@@ -77,6 +85,40 @@ describe("EpubThemes", () => {
       });
     });
     themes.destroy();
+  });
+
+  it("keeps the font-size override through an Obsidian theme change", async () => {
+    const renderedBody = document.createElement("div");
+    const content = {
+      addClass: vi.fn(),
+      addStylesheetRules: vi.fn(),
+      css: vi.fn((property: string, value: string, priority: boolean) => {
+        renderedBody.style.setProperty(property, value, priority ? "important" : "");
+      }),
+      removeClass: vi.fn(),
+    };
+    const renditionHarness = {
+      getContents: () => [content],
+      hooks: { content: { register: vi.fn() } },
+    };
+    const epubJsThemes = new EpubJsThemes(renditionHarness as unknown as Rendition);
+    const rendition = { themes: epubJsThemes } as unknown as Rendition;
+    const themes = new EpubThemes(rendition);
+    new EpubFontSizeStepper(document.createElement("div"), "book.epub", rendition);
+
+    expect(renderedBody.style.getPropertyValue("font-size")).toBe("100%");
+    expect(renderedBody.style.getPropertyPriority("font-size")).toBe("important");
+
+    document.body.classList.add("theme-dark");
+
+    await vi.waitFor(() => {
+      expect(content.addStylesheetRules).toHaveBeenCalledTimes(2);
+    });
+    expect(renderedBody.style.getPropertyValue("font-size")).toBe("100%");
+    expect(renderedBody.style.getPropertyPriority("font-size")).toBe("important");
+
+    themes.destroy();
+    epubJsThemes.destroy();
   });
 });
 
