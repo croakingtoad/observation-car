@@ -17,6 +17,10 @@ const VALID_MANIFEST = JSON.stringify({
   minAppVersion: "1.7.2",
 });
 const VALID_VERSIONS = JSON.stringify({ "0.1.0": "1.7.2" });
+const SHAPE_DIAGNOSTIC =
+  "::error::versions.json must contain exactly one top-level JSON object.";
+const MISSING_ENTRY_DIAGNOSTIC =
+  "::error::versions.json has no entry for plugin version '0.1.0'. Add it (keyed by plugin version, with minAppVersion as the value) before tagging.";
 
 interface FixtureOptions {
   manifest?: string | null;
@@ -73,9 +77,15 @@ const expectFailure = (
   result: GuardResult,
   expectedStatus: number,
   diagnostic: string,
+  stderrDiagnostic?: string,
 ): void => {
   expect(result.status).toBe(expectedStatus);
-  expect(result.output).toContain(diagnostic);
+  expect(result.stdout).toBe(`${diagnostic}\n`);
+  if (stderrDiagnostic === undefined) {
+    expect(result.stderr).toBe("");
+  } else {
+    expect(result.stderr).toContain(stderrDiagnostic);
+  }
 };
 
 afterEach(() => {
@@ -87,22 +97,25 @@ afterEach(() => {
 describe("release version consistency guard", () => {
   describe("unevaluatable versions.json", () => {
     it.each([
-      ["zero-byte", ""],
-      ["whitespace-only", " \n\t"],
-      ["null document", "null\n"],
-      ["array", "[]\n"],
-      ["multi-document", "{}\n{}\n"],
-      ["malformed JSON", "{not-json\n"],
-      ["missing file", null],
-    ])("rejects %s input with the shape diagnostic", (_name, versions) => {
-      const result = runGuard(createFixture({ versions }));
+      ["zero-byte", "", undefined],
+      ["whitespace-only", " \n\t", undefined],
+      ["null document", "null\n", undefined],
+      ["array", "[]\n", undefined],
+      ["multi-document", "{}\n{}\n", undefined],
+      ["malformed JSON", "{not-json\n", "jq: parse error:"],
+      [
+        "missing file",
+        null,
+        "jq: error: Could not open file versions.json:",
+      ],
+    ])(
+      "rejects %s input with the shape diagnostic",
+      (_name, versions, stderrDiagnostic) => {
+        const result = runGuard(createFixture({ versions }));
 
-      expectFailure(
-        result,
-        1,
-        "::error::versions.json must contain exactly one top-level JSON object.",
-      );
-    });
+        expectFailure(result, 1, SHAPE_DIAGNOSTIC, stderrDiagnostic);
+      },
+    );
   });
 
   describe("versions.json direction", () => {
@@ -122,11 +135,7 @@ describe("release version consistency guard", () => {
         createFixture({ versions: '{"1.7.2":"0.1.0"}\n' }),
       );
 
-      expectFailure(
-        result,
-        1,
-        "::error::versions.json has no entry for plugin version '0.1.0'.",
-      );
+      expectFailure(result, 1, MISSING_ENTRY_DIAGNOSTIC);
     });
   });
 
@@ -138,11 +147,7 @@ describe("release version consistency guard", () => {
     ])("rejects an %s entry", (_name, versions) => {
       const result = runGuard(createFixture({ versions }));
 
-      expectFailure(
-        result,
-        1,
-        "::error::versions.json has no entry for plugin version '0.1.0'.",
-      );
+      expectFailure(result, 1, MISSING_ENTRY_DIAGNOSTIC);
     });
 
     it("rejects an entry value of the wrong type", () => {
@@ -210,26 +215,28 @@ describe("release version consistency guard", () => {
       expect(result.stderr).toContain("jq: parse error:");
     });
 
-    it("preserves the silent exit for a null manifest version", () => {
+    it.each([
+      ["null", null],
+      ["empty", ""],
+      ["non-string", 123],
+    ])("preserves the silent exit for a %s manifest version", (_name, version) => {
       const result = runGuard(
         createFixture({
-          manifest: JSON.stringify({
-            version: null,
-            minAppVersion: "1.7.2",
-          }),
+          manifest: JSON.stringify({ version, minAppVersion: "1.7.2" }),
         }),
       );
 
       expect(result).toMatchObject({ status: 4, stdout: "", stderr: "" });
     });
 
-    it("preserves the silent exit for an empty minAppVersion", () => {
+    it.each([
+      ["null", null],
+      ["empty", ""],
+      ["non-string", 172],
+    ])("preserves the silent exit for a %s minAppVersion", (_name, minAppVersion) => {
       const result = runGuard(
         createFixture({
-          manifest: JSON.stringify({
-            version: "0.1.0",
-            minAppVersion: "",
-          }),
+          manifest: JSON.stringify({ version: "0.1.0", minAppVersion }),
         }),
       );
 
