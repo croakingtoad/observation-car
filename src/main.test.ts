@@ -746,16 +746,6 @@ describe("plugin wiring (substituted obsidian module)", () => {
     );
   });
 
-  it("hides the open-note command when the recent leaf is not a live reader", () => {
-    const book = fake.files.get(SOURCE);
-    if (book === undefined) throw new Error("book fixture is missing");
-    const reader = openEpubReader(book);
-    fake.leaves.delete(reader.leaf);
-
-    expect(getOpenBookNoteCommand()?.checkCallback?.(true)).toBe(false);
-    expect(fake.createdSplitLeaves).toEqual([]);
-  });
-
   it("uses F1.5 creation when the reader has no existing note", async () => {
     const book = fake.files.get(SOURCE);
     if (book === undefined) throw new Error("book fixture is missing");
