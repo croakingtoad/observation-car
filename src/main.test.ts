@@ -361,7 +361,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     // The user strips the `source` frontmatter and saves.
     fake.contents.set("Reading/B.md", "no frontmatter\njust prose\n");
-    fake.caches.set("Reading/B.md", { frontmatter: { type: "book-note" } });
+    fake.caches.set("Reading/B.md", { frontmatter: null });
     fire("metadata", "changed", [file]);
 
     // The sniff no longer calls it a candidate, but the store holds the
@@ -383,7 +383,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     ]);
 
     fake.contents.set("Reading/B.md", "no frontmatter\njust prose\n");
-    fake.caches.set("Reading/B.md", { frontmatter: { type: "book-note" } });
+    fake.caches.set("Reading/B.md", { frontmatter: null });
 
     fire("metadata", "resolved", []);
     await settle();
