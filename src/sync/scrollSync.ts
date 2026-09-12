@@ -29,8 +29,9 @@ export interface LocationReader extends Reader {
   ): () => void;
 }
 
-/** The only editor operation scroll-sync may perform. */
+/** The minimal editor surface scroll-sync may inspect and operate. */
 export interface ScrollEditor {
+  lineCount(): number;
   scrollIntoView(range: EditorRange, center?: boolean): void;
 }
 
@@ -151,7 +152,11 @@ export class ScrollSync {
     try {
       position = parseFragment(pending.location.fragment);
     } catch {
-      // Reader callbacks must not throw into another reader subscriber.
+      // An unparseable location is non-fatal; leave the note where it is.
+      console.warn(
+        "[observation-car] ignoring unparseable reader location",
+        pending.location.fragment,
+      );
       this.pending.delete(pending.leaf);
       return;
     }
@@ -238,9 +243,13 @@ export function scrollHeadingIntoView(
   headingLine: number,
 ): void {
   const cm = codeMirrorView(editor);
-  const oneBasedLine = headingLine + 1;
-  if (cm !== null && oneBasedLine <= cm.state.doc.lines) {
-    const position = cm.state.doc.line(oneBasedLine).from;
+  const lineCount = cm?.state.doc.lines ?? editor.lineCount();
+  const resolvedLine = Math.min(
+    Math.max(headingLine, 0),
+    Math.max(lineCount - 1, 0),
+  );
+  if (cm !== null) {
+    const position = cm.state.doc.line(resolvedLine + 1).from;
     cm.dispatch({
       effects: EditorView.scrollIntoView(position, {
         y: "start",
@@ -249,7 +258,7 @@ export function scrollHeadingIntoView(
     });
     return;
   }
-  const point = { line: headingLine, ch: 0 };
+  const point = { line: resolvedLine, ch: 0 };
   editor.scrollIntoView({ from: point, to: point }, false);
 }
 

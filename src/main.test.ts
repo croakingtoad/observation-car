@@ -683,6 +683,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const scrollIntoView = vi.fn();
     const focus = vi.fn();
     const editor = {
+      lineCount: () => 20,
       scrollIntoView,
       focus,
       hasFocus: () => true,
