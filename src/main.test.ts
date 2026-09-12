@@ -1,4 +1,5 @@
 import {
+  MarkdownView,
   TFile,
   TFolder,
   type App,
@@ -11,6 +12,12 @@ import { parseBookNote } from "./model/bookNote";
 import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
 import { ReaderRegistry } from "./sync/ReaderRegistry";
+import {
+  DEFAULT_SCROLL_DEBOUNCE_MS,
+  DEFAULT_TYPING_IDLE_MS,
+  ScrollSync,
+  type LocationChanged,
+} from "./sync/scrollSync";
 
 /**
  * The plugin wiring is the seam with the Obsidian runtime, so this suite
@@ -84,6 +91,17 @@ vi.mock("obsidian", () => {
       this.basename = this.name.slice(0, -(extension.length + 1));
     }
   }
+  class MarkdownView {
+    file: InstanceType<typeof TFile> | null;
+    editor: unknown;
+    constructor(file: InstanceType<typeof TFile> | null, editor: unknown) {
+      this.file = file;
+      this.editor = editor;
+    }
+    getViewType(): string {
+      return "markdown";
+    }
+  }
   class TFolder {
     path: string;
     constructor(path: string) {
@@ -102,6 +120,7 @@ vi.mock("obsidian", () => {
     Setting,
     TFile,
     TFolder,
+    MarkdownView,
     normalizePath,
   };
 });
@@ -110,8 +129,28 @@ vi.mock("./readers/EpubView", () => ({
   EPUB_VIEW_TYPE: "observation-car-epub",
   EpubView: class {
     file: TFile | null = null;
+    private readonly listeners = new Set<
+      (location: LocationChanged) => void
+    >();
     getViewType(): string {
       return "observation-car-epub";
+    }
+    on(
+      _event: "location",
+      listener: (location: LocationChanged) => void,
+    ): () => void {
+      this.listeners.add(listener);
+      return () => this.listeners.delete(listener);
+    }
+    emitLocation(fragment: string): void {
+      if (this.file === null) return;
+      const location: LocationChanged = {
+        file: this.file,
+        fragment,
+        chapter: 0,
+        label: "Chapter",
+      };
+      for (const listener of [...this.listeners]) listener(location);
     }
   },
 }));
@@ -129,6 +168,11 @@ const TFileDouble = TFile as unknown as new (
   extension: string,
 ) => TFile;
 const TFolderDouble = TFolder as unknown as new (path: string) => TFolder;
+
+const MarkdownViewDouble = MarkdownView as unknown as new (
+  file: TFile | null,
+  editor: unknown,
+) => MarkdownView;
 
 interface FakeVault {
   app: unknown;
@@ -481,7 +525,11 @@ describe("plugin wiring (substituted obsidian module)", () => {
     area: "main" | "sidebar" = "main",
   ): {
     leaf: FakeLeaf;
-    view: { file: TFile | null; getViewType(): string };
+    view: {
+      file: TFile | null;
+      getViewType(): string;
+      emitLocation(fragment: string): void;
+    };
   } {
     const factory = fake.registeredViews.get("observation-car-epub");
     if (factory === undefined) throw new Error("EPUB view was not registered");
@@ -501,6 +549,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const view = factory(leaf) as {
       file: TFile | null;
       getViewType(): string;
+      emitLocation(fragment: string): void;
     };
     leaf.view = view;
     view.file = book;
@@ -1056,6 +1105,54 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(plugin.getReaderPairingForNote("Reading/A.md")).toBeUndefined();
   });
 
+  it("scrolls the paired note on location without focus and resumes after typing idle", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const scrollIntoView = vi.fn();
+    const focus = vi.fn();
+    const editor = {
+      scrollIntoView,
+      focus,
+      hasFocus: () => true,
+    };
+    const markdownView = new MarkdownViewDouble(noteFile, editor);
+    fake.leaves.add({ view: markdownView });
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { view } = openEpubReader(book);
+
+    view.emitLocation(`#${CFI_1}`);
+    await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
+    expect(scrollIntoView).toHaveBeenCalledWith(
+      {
+        from: { line: 6, ch: 0 },
+        to: { line: 6, ch: 0 },
+      },
+      false,
+    );
+    expect(focus).not.toHaveBeenCalled();
+
+    fire("workspace", "editor-change", [editor, markdownView]);
+    view.emitLocation(`#${CFI_2}`);
+    await vi.advanceTimersByTimeAsync(DEFAULT_TYPING_IDLE_MS - 1);
+    expect(scrollIntoView).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(scrollIntoView).toHaveBeenLastCalledWith(
+      {
+        from: { line: 9, ch: 0 },
+        to: { line: 9, ch: 0 },
+      },
+      false,
+    );
+    expect(focus).not.toHaveBeenCalled();
+  });
+
   it.each(["layout-change", "file-open", "active-leaf-change"])(
     "refreshes reader pairings when workspace fires %s",
     async (eventName) => {
@@ -1074,4 +1171,13 @@ describe("plugin wiring (substituted obsidian module)", () => {
       expect(fake.leafQueries.count).toBe(queriesBeforeEvent + 1);
     },
   );
+
+  it("clears scroll subscriptions and timers on unload", async () => {
+    const clear = vi.spyOn(ScrollSync.prototype, "clear");
+
+    plugin.onunload();
+
+    expect(clear).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

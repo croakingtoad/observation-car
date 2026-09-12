@@ -93,6 +93,43 @@ export function buildEpubCfiFragment(cfi: string): string {
   return `#${EPUBCFI_PREFIX}${bare})`;
 }
 
+/**
+ * 0-based spine item index from a CFI's chapter component, or null when
+ * the component is not the canonical two-step form `/M/N!`.
+ *
+ * The second step encodes `(itemIndex + 1) * 2` (epub.js
+ * `EpubCFI.generateChapterComponent`), so `itemIndex = N / 2 - 1` — the
+ * same index `book.spine.items` is addressed by. Range CFIs take the
+ * chapter from the base component. A leading `epubcfi(...)` wrapper is
+ * accepted, as epub.js `relocated` events carry it.
+ *
+ * This is the `chapter` convention shared by the BookNote model (F1.2)
+ * and the reader's LocationChanged events (F2.5), so focus mode (F4.5)
+ * can pair a note section's chapter with a reader location's directly.
+ */
+export function spineIndexFromCfi(cfi: string): number | null {
+  let bare = cfi;
+  if (bare.startsWith(EPUBCFI_PREFIX) && bare.endsWith(")")) {
+    bare = bare.slice(EPUBCFI_PREFIX.length, -1);
+  }
+  const spineEnd = bare.indexOf("!");
+  if (spineEnd === -1) {
+    return null;
+  }
+  const match = /^\/(\d+)(?:\[[^\][]*\])?\/(\d+)(?:\[[^\][]*\])?$/.exec(
+    bare.slice(0, spineEnd),
+  );
+  if (match === null) {
+    return null;
+  }
+  const second = Number(match[2]);
+  if (second < 2 || second % 2 !== 0) {
+    return null;
+  }
+  const index = second / 2 - 1;
+  return Number.isSafeInteger(index) ? index : null;
+}
+
 export function buildEpubSpineFragment(href: string): string {
   assertSpineHref(href);
   return `#${href}`;

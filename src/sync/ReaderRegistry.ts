@@ -109,6 +109,11 @@ export class ReaderRegistry {
     return [...this.byLeaf.values()];
   }
 
+  /** True when refresh has retained this exact leaf/reader registration. */
+  hasReader(leaf: WorkspaceLeaf, reader: Reader): boolean {
+    return this.readers.get(leaf)?.reader === reader;
+  }
+
   /** Drop all reader references and derived pairings on plugin unload. */
   clear(): void {
     this.readers.clear();
