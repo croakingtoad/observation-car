@@ -293,6 +293,109 @@ export function addPagingListeners(
   });
 }
 
+const FONT_SIZE_DEFAULT = 100;
+const FONT_SIZE_MIN = 80;
+const FONT_SIZE_MAX = 180;
+const FONT_SIZE_STEP = 10;
+const FONT_SIZE_STORAGE_PREFIX = "observation-car:epub-font-size:";
+
+/** Per-book font-size control that applies to current and future EPUB sections. */
+export class EpubFontSizeStepper {
+  private readonly storageKey: string;
+  private readonly decreaseButton: HTMLButtonElement;
+  private readonly increaseButton: HTMLButtonElement;
+  private readonly valueOutput: HTMLOutputElement;
+  private currentValue: number;
+
+  constructor(viewerEl: HTMLElement, bookPath: string, private readonly rendition: Rendition) {
+    this.storageKey = `${FONT_SIZE_STORAGE_PREFIX}${bookPath}`;
+    this.currentValue = this.readStoredValue();
+
+    const container = document.createElement("div");
+    container.className = "epub-font-size-stepper";
+    container.setAttribute("role", "group");
+    container.ariaLabel = "Reader font size";
+
+    this.decreaseButton = this.createButton(
+      "epub-font-size-decrease",
+      "Decrease reader font size",
+      "A−",
+      -FONT_SIZE_STEP,
+    );
+    this.valueOutput = document.createElement("output");
+    this.valueOutput.className = "epub-font-size-value";
+    this.valueOutput.ariaLabel = "Reader font size";
+    this.valueOutput.setAttribute("aria-live", "polite");
+    this.increaseButton = this.createButton(
+      "epub-font-size-increase",
+      "Increase reader font size",
+      "A+",
+      FONT_SIZE_STEP,
+    );
+
+    container.append(this.decreaseButton, this.valueOutput, this.increaseButton);
+    viewerEl.appendChild(container);
+    this.applyValue();
+  }
+
+  private createButton(
+    className: string,
+    label: string,
+    text: string,
+    delta: number,
+  ): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `epub-button epub-font-size-button ${className}`;
+    button.title = label;
+    button.ariaLabel = label;
+    button.textContent = text;
+    button.onclick = (event) => {
+      event.stopPropagation();
+      this.currentValue = Math.min(
+        FONT_SIZE_MAX,
+        Math.max(FONT_SIZE_MIN, this.currentValue + delta),
+      );
+      this.writeStoredValue();
+      this.applyValue();
+    };
+    return button;
+  }
+
+  private readStoredValue(): number {
+    try {
+      const value = Number.parseInt(localStorage.getItem(this.storageKey) ?? "", 10);
+      if (
+        Number.isFinite(value) &&
+        value >= FONT_SIZE_MIN &&
+        value <= FONT_SIZE_MAX &&
+        (value - FONT_SIZE_MIN) % FONT_SIZE_STEP === 0
+      ) {
+        return value;
+      }
+    } catch {
+      // Storage can be unavailable in restricted webviews; keep the control functional in-memory.
+    }
+    return FONT_SIZE_DEFAULT;
+  }
+
+  private writeStoredValue(): void {
+    try {
+      localStorage.setItem(this.storageKey, String(this.currentValue));
+    } catch {
+      // See readStoredValue: persistence is optional when the webview denies storage.
+    }
+  }
+
+  private applyValue(): void {
+    const value = `${this.currentValue}%`;
+    this.rendition.themes.override("font-size", value, true);
+    this.valueOutput.value = value;
+    this.decreaseButton.disabled = this.currentValue === FONT_SIZE_MIN;
+    this.increaseButton.disabled = this.currentValue === FONT_SIZE_MAX;
+  }
+}
+
 export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
   private tocButton: HTMLButtonElement | null = null;
@@ -311,6 +414,7 @@ export class EpubNavigationTools {
     private readonly flow?: EpubFlowControls,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
+    new EpubFontSizeStepper(viewerEl, bookPath, rendition);
     this.createNavigationButton(viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
     this.createNavigationButton(viewerEl, "epub-nav-next", "❯", () => this.rendition.next());
     void this.createTocPanel(viewerEl).catch((error: unknown) =>

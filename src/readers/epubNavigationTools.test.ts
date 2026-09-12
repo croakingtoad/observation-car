@@ -28,7 +28,7 @@ function makeRendition() {
     next: vi.fn(),
     display: vi.fn(),
     destroy: vi.fn(),
-    themes: { register: vi.fn(), select: vi.fn() },
+    themes: { register: vi.fn(), select: vi.fn(), override: vi.fn() },
     location: null,
     handlers,
   };

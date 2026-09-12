@@ -55,7 +55,7 @@ const epubMock = vi.hoisted(() => {
     });
     prev = vi.fn();
     next = vi.fn();
-    themes = { register: vi.fn(), select: vi.fn() };
+    themes = { register: vi.fn(), select: vi.fn(), override: vi.fn() };
 
     constructor() {
       FakeRendition.instances.push(this);

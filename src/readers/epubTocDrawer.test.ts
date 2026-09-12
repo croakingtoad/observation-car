@@ -48,6 +48,7 @@ async function buildViewer(
     },
     prev: () => Promise.resolve(),
     next: () => Promise.resolve(),
+    themes: { override: () => undefined },
     display: (target?: unknown) => {
       const href = typeof target === "string" ? target : "";
       displayCalls.push(href);
