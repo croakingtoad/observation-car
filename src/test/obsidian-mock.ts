@@ -30,3 +30,9 @@ export class ItemView {
 
 /** Obsidian's FileView is an ItemView that receives `onLoadFile`. */
 export class FileView extends ItemView {}
+
+export class Notice {
+  constructor(message: string) {
+    void message;
+  }
+}

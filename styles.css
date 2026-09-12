@@ -182,3 +182,16 @@
   justify-content: center;
   align-items: center;
 }
+
+/*
+ * F2.2 — flow-mode toggle in the reader's own chrome (paginated ↔
+ * scrolled). Sits beside the TOC button, top-right, and reuses the
+ * .epub-button treatment.
+ */
+.epub-flow-button {
+  position: absolute;
+  display: flex;
+  top: 0.1em;
+  right: 0.1em;
+  z-index: 30;
+}

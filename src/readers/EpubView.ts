@@ -15,12 +15,13 @@
  * Obsidian routes `leaf.openFile(file)` for a registered extension to
  * `onLoadFile` here.
  */
-import { FileView, TFile, WorkspaceLeaf } from "obsidian";
+import { FileView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
 import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
 import { type Location as EpubRenditionLocation } from "epubjs/types/rendition";
 import { EpubThemes } from "./epubThemes";
 import { EpubLocationTracker, type EpubLocation } from "./epubLocation";
+import type { EpubFlowMode, ObservationCarSettings } from "../settings";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
 
@@ -36,6 +37,16 @@ interface PreparedLocationEvents {
   tracker: EpubLocationTracker;
   relocatedHandler: (loc: EpubRenditionLocation | null | undefined) => void;
   forward: () => void;
+}
+
+/**
+ * The slice of the plugin the EPUB view reads and writes (F2.2 flow mode).
+ * Kept as a narrow structural interface so the view never imports
+ * `main.ts` (which imports it).
+ */
+export interface EpubViewHost {
+  settings: ObservationCarSettings;
+  updateSettings(patch: Partial<ObservationCarSettings>): Promise<void>;
 }
 
 export class EpubView extends FileView {
@@ -60,8 +71,10 @@ export class EpubView extends FileView {
     | null = null;
   private locationForward: (() => void) | null = null;
   private locationListeners = new Set<(loc: EpubLocationEvent) => void>();
+  private renderedFlowMode: EpubFlowMode | null = null;
+  private flowModeChange: Promise<void> | null = null;
 
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(leaf: WorkspaceLeaf, private readonly host: EpubViewHost) {
     super(leaf);
   }
 
@@ -120,7 +133,10 @@ export class EpubView extends FileView {
    * that finishes undisplaced, so `this.*` always point at the one
    * reader that owns the view.
    */
-  private async renderBook(file: TFile): Promise<void> {
+  private async renderBook(
+    file: TFile,
+    flowMode: EpubFlowMode = this.host.settings.epubFlowMode,
+  ): Promise<void> {
     this.disposeReader();
     const generation = this.renderGeneration;
 
@@ -141,6 +157,7 @@ export class EpubView extends FileView {
       rendition = book.renderTo(viewerEl, {
         width: "100%",
         height: "100%",
+        flow: flowMode,
       });
       new EpubNavigationTools(
         viewerEl,
@@ -148,6 +165,10 @@ export class EpubView extends FileView {
         book,
         rendition,
         selectionTracker,
+        {
+          mode: flowMode,
+          onToggle: () => this.toggleFlowMode(),
+        },
       );
       themes = new EpubThemes(rendition);
       locationEvents = this.prepareLocationEvents(book, rendition);
@@ -175,6 +196,7 @@ export class EpubView extends FileView {
     this.locationTracker = locationEvents.tracker;
     this.locationRelocatedHandler = locationEvents.relocatedHandler;
     this.locationForward = locationEvents.forward;
+    this.renderedFlowMode = flowMode;
   }
 
   /** Tear down a reader a render built locally, possibly only partially. */
@@ -254,6 +276,92 @@ export class EpubView extends FileView {
     this.locationTracker = null;
   }
 
+  /**
+   * F2.2 — the on-screen flow toggle: switch to the other mode.
+   */
+  private toggleFlowMode(): void {
+    const current = this.renderedFlowMode ?? this.host.settings.epubFlowMode;
+    const next: EpubFlowMode =
+      current === "paginated" ? "scrolled" : "paginated";
+    void this.setFlowMode(next).catch((error: unknown) => {
+      console.error("Observation Car: could not switch EPUB flow mode", error);
+      const recovered = this.rendition !== null && this.renderedFlowMode === current;
+      new Notice(
+        recovered
+          ? "Could not switch EPUB flow mode. The previous mode was restored."
+          : "Could not switch EPUB flow mode. Close and reopen the book to recover.",
+      );
+    });
+  }
+
+  /**
+   * F2.2 — switch the reader's flow mode and persist it as a global
+   * plugin setting. Re-renders through the existing render path (which
+   * disposes the current reader first); the current CFI is re-displayed
+   * afterwards so the reader does not lose its place on a toggle.
+   */
+  async setFlowMode(mode: EpubFlowMode): Promise<void> {
+    if (this.flowModeChange !== null) {
+      await this.flowModeChange;
+      return;
+    }
+
+    const file = this.file;
+    const previousMode = this.renderedFlowMode;
+    if (file === null || this.rendition === null || previousMode === null || previousMode === mode) {
+      return;
+    }
+    const cfi = this.rendition.location?.start?.cfi ?? null;
+    const change = this.applyFlowMode(file, mode, previousMode, cfi);
+    this.flowModeChange = change;
+    try {
+      await change;
+    } finally {
+      if (this.flowModeChange === change) {
+        this.flowModeChange = null;
+      }
+    }
+  }
+
+  private async applyFlowMode(
+    file: TFile,
+    mode: EpubFlowMode,
+    previousMode: EpubFlowMode,
+    cfi: string | null,
+  ): Promise<void> {
+    try {
+      await this.host.updateSettings({ epubFlowMode: mode });
+      await this.renderBook(file, mode);
+      if (cfi !== null && this.rendition !== null) {
+        await this.rendition.display(cfi);
+      }
+      return;
+    } catch (error: unknown) {
+      const failures: unknown[] = [error];
+      try {
+        await this.host.updateSettings({ epubFlowMode: previousMode });
+      } catch (rollbackError: unknown) {
+        failures.push(rollbackError);
+      }
+
+      if (this.rendition === null || this.renderedFlowMode !== previousMode) {
+        try {
+          await this.renderBook(file, previousMode);
+          if (cfi !== null && this.rendition !== null) {
+            await this.rendition.display(cfi);
+          }
+        } catch (recoveryError: unknown) {
+          failures.push(recoveryError);
+        }
+      }
+
+      if (failures.length === 1) {
+        throw error;
+      }
+      throw new AggregateError(failures, "Could not switch or restore the EPUB flow mode");
+    }
+  }
+
   private disposeReader(): void {
     // Retire any in-flight render: it sees the moved generation at its
     // next `await` and disposes what it has built.
@@ -266,6 +374,7 @@ export class EpubView extends FileView {
     this.themes = null;
     this.rendition?.destroy();
     this.rendition = null;
+    this.renderedFlowMode = null;
     this.book?.destroy();
     this.book = null;
     this.contentEl.empty();

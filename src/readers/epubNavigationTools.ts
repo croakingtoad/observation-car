@@ -33,6 +33,10 @@ import type Locations from "epubjs/types/locations";
 import { type Location } from "epubjs/types/rendition";
 import { AnchorError, buildEpubCfiFragment } from "../model/anchor";
 import type { NavItem } from "epubjs/types/navigation";
+import { Notice } from "obsidian";
+import { buildEpubSpineFragment } from "../model/anchor";
+import type { EpubFlowMode } from "../settings";
+import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 
 const EPUBCFI_WRAPPER = "epubcfi(";
 
@@ -171,6 +175,124 @@ export function flattenToc(items: readonly NavItem[], depth = 0): TocEntry[] {
   return entries;
 }
 
+/**
+ * F2.2 — flow-mode controls handed in by the view. The button shows the
+ * reader's current mode; `onToggle` persists the other mode and re-renders
+ * through the view's existing render path.
+ */
+export interface EpubFlowControls {
+  /** Flow mode the current rendition was rendered with. */
+  readonly mode: EpubFlowMode;
+  /** Switch the reader to the other flow mode. */
+  readonly onToggle: () => void;
+}
+
+/** A press in progress inside the rendered document (F2.2). */
+interface PointerPress {
+  startX: number;
+  startY: number;
+  /** pointerdown timeStamp, in the document's own time origin. */
+  startStamp: number;
+  /** Farthest the pointer has moved from the start, in px. */
+  distance: number;
+}
+
+/** Attach F2.2 pointer paging to one rendered EPUB document. */
+export function addPagingListeners(
+  doc: Document,
+  mode: EpubFlowMode,
+  page: (direction: "prev" | "next") => void,
+): void {
+  // Scrolled mode is vertical: tap zones and horizontal swipe are inert,
+  // so it needs neither pointer listeners nor a touch-action override.
+  if (mode !== "paginated") {
+    return;
+  }
+
+  // Keep native vertical pan while handing horizontal gestures to the
+  // pointer handlers below.
+  doc.documentElement.style.touchAction = "pan-y";
+
+  let press: PointerPress | null = null;
+
+  doc.addEventListener("pointerdown", (event: PointerEvent) => {
+    if (event.button !== 0) {
+      return; // primary button only; touch and pen report 0 too
+    }
+    press = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startStamp: event.timeStamp,
+      distance: 0,
+    };
+  });
+
+  doc.addEventListener("pointermove", (event: PointerEvent) => {
+    if (press === null) {
+      return;
+    }
+    const travelled = Math.hypot(event.clientX - press.startX, event.clientY - press.startY);
+    if (travelled > press.distance) {
+      press.distance = travelled;
+    }
+  });
+
+  // A native pan or scroll cancels the press; it must not page.
+  doc.addEventListener("pointercancel", () => {
+    press = null;
+  });
+
+  doc.addEventListener("pointerup", (event: PointerEvent) => {
+    if (press === null) {
+      return;
+    }
+    const down = press;
+    press = null;
+
+    const selection = doc.defaultView?.getSelection();
+    const hasSelection =
+      selection !== null && selection !== undefined && selection.toString().length > 0;
+
+    const deltaX = event.clientX - down.startX;
+    const deltaY = event.clientY - down.startY;
+    const distance = Math.max(down.distance, Math.hypot(deltaX, deltaY));
+    const pageWidth = Math.min(doc.body.clientWidth, doc.documentElement.clientWidth);
+    const pageX = pageWidth > 0
+      ? ((event.clientX % pageWidth) + pageWidth) % pageWidth
+      : event.clientX;
+
+    const action = decidePagingAction({
+      flowMode: mode,
+      hasSelection,
+      deltaX,
+      deltaY,
+      distance,
+      durationMs: event.timeStamp - down.startStamp,
+      // Reflowable sections expand the document across every column while
+      // body.clientWidth remains one page/spread. Fixed-layout sections do
+      // the inverse: the body keeps its intrinsic width while the document
+      // is the scaled viewport. The narrower box is the visible paging unit.
+      // Reduce the document-relative pointer coordinate into that unit.
+      endX: pageX,
+      contentWidth: pageWidth,
+    });
+
+    if (action.kind === "page") {
+      const ElementType = doc.defaultView?.Element;
+      const endsOnLink =
+        ElementType !== undefined &&
+        event.target instanceof ElementType &&
+        event.target.closest("a[href]") !== null;
+      // epub.js owns link taps, but a swipe that happens to end over a
+      // link is still a paging gesture.
+      if (endsOnLink && distance <= TAP_SLOP_PX) {
+        return;
+      }
+      page(action.direction);
+    }
+  });
+}
+
 export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
   private tocButton: HTMLButtonElement | null = null;
@@ -186,6 +308,7 @@ export class EpubNavigationTools {
     private readonly book: Book,
     private readonly rendition: Rendition,
     private readonly selectionTracker: EpubSelectionTracker,
+    private readonly flow?: EpubFlowControls,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
     this.createNavigationButton(viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
@@ -193,6 +316,8 @@ export class EpubNavigationTools {
     void this.createTocPanel(viewerEl).catch((error: unknown) =>
       this.reportSetupFailure(viewerEl, "Table of contents", error),
     );
+    this.createFlowButton(viewerEl);
+    this.registerPagingListeners();
     this.addKeyListeners();
     void this.addSelectionListener(viewerEl).catch((error: unknown) =>
       this.reportSetupFailure(viewerEl, "Selection copying", error),
@@ -264,6 +389,58 @@ export class EpubNavigationTools {
     if (active === false) {
       this.selectionTracker.clear();
     }
+  }
+
+  /**
+   * F2.2 — tap-zone and swipe paging. The gesture is decided by
+   * `pagingGestures` (pure, unit-tested); this is the capture side.
+   *
+   * Listeners live on the rendered document — pointer events in the
+   * iframe never reach the host element — and are torn down with the
+   * rendition: a mode toggle or a second book in the same leaf destroys
+   * the rendition, which destroys these documents with them.
+   *
+   * Zones are decided from the pointer's x inside the document, never
+   * from an overlay div: an overlay over the page is exactly what swallows
+   * text selection. A tap is ignored when a non-empty selection exists,
+   * when the pointer moved past the slop, when the press was long, or
+   * when it lands on an in-content link (epub.js owns those).
+   */
+  private registerPagingListeners(): void {
+    const mode = this.flow?.mode;
+    if (mode !== "paginated") {
+      return;
+    }
+
+    this.rendition.on("rendered", (_section: unknown, view: { document: Document }) => {
+      addPagingListeners(view.document, mode, (direction) => {
+        void (direction === "next" ? this.rendition.next() : this.rendition.prev());
+      });
+    });
+  }
+
+  /**
+   * F2.2 — flow-mode toggle in the reader's own chrome (the settings tab
+   * is F1.4's enumeration; no command-palette entry until E006/E007).
+   * The icon and label always describe the action available: in
+   * paginated mode it offers scrolled, and vice versa.
+   */
+  private createFlowButton(viewerEl: HTMLElement): void {
+    if (this.flow === undefined) {
+      return;
+    }
+    const toScrolled = this.flow.mode === "paginated";
+    const label = toScrolled ? "Switch to scrolled mode" : "Switch to paginated mode";
+    const btn = document.createElement("button");
+    btn.className = "epub-button epub-flow-button";
+    btn.textContent = toScrolled ? "≡" : "▭";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      this.flow?.onToggle();
+    };
+    viewerEl.appendChild(btn);
   }
 
   /** Chapter-level jump: PageUp = next chapter, PageDown = previous. */
@@ -455,9 +632,19 @@ export class EpubNavigationTools {
   ): Promise<void> {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLButtonElement;
+    let fragment: string;
+    try {
+      fragment = buildEpubSpineFragment(href);
+    } catch {
+      new Notice(
+        "Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.",
+      );
+      return;
+    }
+    const safeLabel = label.replaceAll("|", "｜").replaceAll("]", "］");
     try {
       await navigator.clipboard.writeText(
-        `[[${this.bookPath}#${href}|${bookTitle}, ${label}]]`,
+        `[[${this.bookPath}${fragment}|${bookTitle}, ${safeLabel}]]`,
       );
     } catch (error) {
       this.flashCopyFailed(btn, error);

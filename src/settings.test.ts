@@ -56,6 +56,10 @@ describe("F1.4 settings defaults", () => {
     expect(DEFAULT_SETTINGS.opdsPassword).toBe("");
   });
 
+  it("defaults the EPUB flow mode to paginated", () => {
+    expect(DEFAULT_SETTINGS.epubFlowMode).toBe("paginated");
+  });
+
   it("seeds the note template with the PRD §5.2 frontmatter and placeholders", () => {
     expect(DEFAULT_SETTINGS.noteTemplate).toBe(DEFAULT_NOTE_TEMPLATE);
     expect(DEFAULT_NOTE_TEMPLATE).toMatch(/^---\n/);
@@ -124,6 +128,17 @@ describe("F1.4 data.json persistence (mergeSettings)", () => {
     expect(merged.focusModeDefault).toBe(true);
     expect(merged.noteTemplate).toBe("custom");
     expect(merged.pdfChapterWindowPages).toBe(10);
+  });
+
+  it("round-trips a stored EPUB flow mode", () => {
+    expect(mergeSettings({ epubFlowMode: "scrolled" }).epubFlowMode).toBe("scrolled");
+    expect(mergeSettings({ epubFlowMode: "paginated" }).epubFlowMode).toBe("paginated");
+  });
+
+  it("falls back to paginated for flow modes outside the whitelist", () => {
+    for (const bad of ["SCROLLED", "paginated ", "scroll", 42, true, null]) {
+      expect(mergeSettings({ epubFlowMode: bad }).epubFlowMode).toBe("paginated");
+    }
   });
 
   it("drops unknown keys from stored data", () => {

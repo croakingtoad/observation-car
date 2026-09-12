@@ -8,7 +8,8 @@ import {
   vi,
 } from "vitest";
 import type { TFile, WorkspaceLeaf } from "obsidian";
-import { EpubView } from "./EpubView";
+import { DEFAULT_SETTINGS } from "../settings";
+import { EpubView, type EpubViewHost } from "./EpubView";
 
 /**
  * Fake epubjs: counts every Book/Rendition built and whether it was
@@ -39,6 +40,7 @@ const epubMock = vi.hoisted(() => {
       this.destroyed = true;
     });
     on = vi.fn();
+    off = vi.fn();
     prev = vi.fn();
     next = vi.fn();
     themes = { register: vi.fn(), select: vi.fn() };
@@ -146,7 +148,11 @@ function file(path: string): TFile {
 }
 
 function makeView(readBinary: (file: TFile) => Promise<Uint8Array>): EpubView {
-  const view = new EpubView(null as unknown as WorkspaceLeaf);
+  const host: EpubViewHost = {
+    settings: { ...DEFAULT_SETTINGS },
+    updateSettings: async () => undefined,
+  };
+  const view = new EpubView(null as unknown as WorkspaceLeaf, host);
   // Mirrors the workspace injecting the App into a real view.
   Object.assign(view, { app: { vault: { readBinary } } });
   return view;

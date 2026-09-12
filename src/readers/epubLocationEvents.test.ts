@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TFile, WorkspaceLeaf } from "obsidian";
-import { EpubView, type EpubLocationEvent } from "./EpubView";
+import { DEFAULT_SETTINGS } from "../settings";
+import {
+  EpubView,
+  type EpubLocationEvent,
+  type EpubViewHost,
+} from "./EpubView";
 
 /**
  * F2.5 wiring contract: EpubView listens for `relocated` on the
@@ -75,6 +80,7 @@ vi.mock("epubjs", () => ({
 
 vi.mock("./epubNavigationTools", () => ({
   EpubNavigationTools: class {},
+  EpubSelectionTracker: class {},
 }));
 
 /** A relocated payload shaped like epub.js's `Location`. */
@@ -92,6 +98,11 @@ const makeLeaf = () =>
 
 const makeFile = (path: string) =>
   ({ path, basename: path.split("/").pop() ?? path }) as TFile;
+
+const makeHost = (): EpubViewHost => ({
+  settings: { ...DEFAULT_SETTINGS },
+  updateSettings: async () => undefined,
+});
 
 beforeEach(() => {
   epub.reset();
@@ -125,7 +136,7 @@ afterEach(() => {
 describe("EpubView location events (F2.5)", () => {
   it("emits a debounced LocationChanged with {file, fragment, chapter, label}", async () => {
     vi.useFakeTimers();
-    const view = new EpubView(makeLeaf());
+    const view = new EpubView(makeLeaf(), makeHost());
     const events: EpubLocationEvent[] = [];
     view.on("location", (loc) => events.push(loc));
 
@@ -150,7 +161,7 @@ describe("EpubView location events (F2.5)", () => {
 
   it("delivers the first relocation to subscribers attached before the book loads", async () => {
     vi.useFakeTimers();
-    const view = new EpubView(makeLeaf());
+    const view = new EpubView(makeLeaf(), makeHost());
     const events: EpubLocationEvent[] = [];
     const unsubscribe = view.on("location", (loc) => events.push(loc));
 
@@ -177,7 +188,7 @@ describe("EpubView location events (F2.5)", () => {
 
   it("keeps the subscription alive across a book swap in the same leaf", async () => {
     vi.useFakeTimers();
-    const view = new EpubView(makeLeaf());
+    const view = new EpubView(makeLeaf(), makeHost());
     const events: EpubLocationEvent[] = [];
     view.on("location", (loc) => events.push(loc));
 
@@ -212,7 +223,7 @@ describe("EpubView location events (F2.5)", () => {
 
   it("cancels a pending event on close", async () => {
     vi.useFakeTimers();
-    const view = new EpubView(makeLeaf());
+    const view = new EpubView(makeLeaf(), makeHost());
     await view.onLoadFile(makeFile("Books/Test.epub"));
     await vi.advanceTimersByTimeAsync(0);
 
@@ -231,7 +242,7 @@ describe("EpubView location events (F2.5)", () => {
 
   it("detaches the rendition listener on close", async () => {
     vi.useFakeTimers();
-    const view = new EpubView(makeLeaf());
+    const view = new EpubView(makeLeaf(), makeHost());
     const events: EpubLocationEvent[] = [];
     view.on("location", (loc) => events.push(loc));
     await view.onLoadFile(makeFile("Books/Test.epub"));
@@ -255,7 +266,7 @@ describe("EpubView location events (F2.5)", () => {
     const windowSpy = vi.spyOn(window, "addEventListener");
     const documentSpy = vi.spyOn(document, "addEventListener");
 
-    const view = new EpubView(makeLeaf());
+    const view = new EpubView(makeLeaf(), makeHost());
     await view.onLoadFile(makeFile("Books/Test.epub"));
     await vi.advanceTimersByTimeAsync(150);
     epub.emit(
