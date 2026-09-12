@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -25,6 +26,10 @@ const epubMock = vi.hoisted(() => {
 
   class FakeRendition {
     static instances: FakeRendition[] = [];
+    private readonly listeners = new Map<
+      string,
+      Set<(...args: unknown[]) => void>
+    >();
     destroyed = false;
     displayImpl: () => Promise<void> = () =>
     {
@@ -39,14 +44,26 @@ const epubMock = vi.hoisted(() => {
     destroy = vi.fn(() => {
       this.destroyed = true;
     });
-    on = vi.fn();
-    off = vi.fn();
+    on = vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      const listeners = this.listeners.get(event) ?? new Set();
+      listeners.add(listener);
+      this.listeners.set(event, listeners);
+    });
+    off = vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      this.listeners.get(event)?.delete(listener);
+    });
     prev = vi.fn();
     next = vi.fn();
     themes = { register: vi.fn(), select: vi.fn() };
 
     constructor() {
       FakeRendition.instances.push(this);
+    }
+
+    emit(event: string, ...args: unknown[]): void {
+      for (const listener of [...(this.listeners.get(event) ?? [])]) {
+        listener(...args);
+      }
     }
   }
 
@@ -176,6 +193,10 @@ beforeEach(() => {
   FakeMutationObserver.instances.length = 0;
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
   it("a second open inside the readBinary window leaves exactly one live reader", async () => {
     const firstRead = deferred();
@@ -243,6 +264,38 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     expect(FakeRendition.instances.filter((rendition) => !rendition.destroyed)).toHaveLength(1);
     expect(liveObservers()).toHaveLength(1);
     expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(1);
+  });
+
+  it("does not attribute a superseded rendition's relocation to the new file", async () => {
+    const displayGate = deferred();
+    state.currentDisplayGate = displayGate.promise;
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const locations: Array<{ file: TFile; fragment: string }> = [];
+    view.on("location", (location) => locations.push(location));
+
+    const openA = view.onLoadFile(file("library/a.epub"));
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[0].display).toHaveBeenCalledTimes(1);
+    });
+    const renditionA = FakeRendition.instances[0];
+
+    state.currentDisplayGate = null;
+    const fileB = file("library/b.epub");
+    await view.onLoadFile(fileB);
+
+    vi.useFakeTimers();
+    renditionA.emit("relocated", {
+      start: {
+        cfi: "epubcfi(/6/8!/4/2/1:0)",
+        href: "chapters/ch1.xhtml",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(locations).toEqual([]);
+
+    displayGate.resolve();
+    await openA;
   });
 
   it("onClose during an in-flight render retires the render", async () => {

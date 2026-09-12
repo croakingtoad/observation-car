@@ -250,7 +250,12 @@ export class EpubView extends FileView {
         },
       );
       themes = new EpubThemes(rendition);
-      locationEvents = this.prepareLocationEvents(book, rendition);
+      locationEvents = this.prepareLocationEvents(
+        book,
+        rendition,
+        file,
+        generation,
+      );
       await rendition.display();
     } catch (error) {
       // A bad book can fail anywhere in the build; dispose what was
@@ -310,6 +315,8 @@ export class EpubView extends FileView {
   private prepareLocationEvents(
     book: Book,
     rendition: Rendition,
+    file: TFile,
+    generation: number,
   ): PreparedLocationEvents {
     const tracker = new EpubLocationTracker();
     const onRelocated = (
@@ -331,8 +338,7 @@ export class EpubView extends FileView {
       });
 
     const forward = tracker.on((loc) => {
-      const file = this.file;
-      if (file === null) {
+      if (generation !== this.renderGeneration) {
         return;
       }
       const event: EpubLocationEvent = { ...loc, file };
