@@ -28,8 +28,20 @@ export class ItemView {
   }
 }
 
-/** Obsidian's FileView is an ItemView that receives `onLoadFile`. */
-export class FileView extends ItemView {}
+/**
+ * Obsidian assigns `FileView.file` before delegating to `onLoadFile`.
+ * `EpubView.onLoadFile` relies on that contract at EpubView.ts:126-128.
+ */
+export class FileView extends ItemView {
+  file: TFile | null = null;
+
+  async loadFile(file: TFile): Promise<void> {
+    this.file = file;
+    await this.onLoadFile(file);
+  }
+
+  async onLoadFile(_file: TFile): Promise<void> {}
+}
 
 export class Notice {
   constructor(message: string, timeout?: number) {

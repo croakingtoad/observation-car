@@ -6,23 +6,15 @@ import { EpubView, type EpubViewHost } from "./EpubView";
 
 const showNotice = vi.hoisted(() => vi.fn());
 
-vi.mock("obsidian", () => ({
-  FileView: class {
-    app: unknown;
-    contentEl = document.createElement("div");
-
-    constructor(leaf: { app?: unknown } | null) {
-      this.app = leaf?.app;
-    }
-  },
-  Notice: showNotice,
-  TFile: class {},
-  WorkspaceLeaf: class {},
-}));
+vi.mock("obsidian", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("obsidian")>();
+  return { ...actual, Notice: showNotice };
+});
 
 const epubMock = vi.hoisted(() => {
   const state = {
     initialDisplayGate: null as Promise<void> | null,
+    targetedDisplayGates: new Map<string, Promise<void>[]>(),
     failNextInitialDisplay: false,
   };
 
@@ -47,6 +39,14 @@ const epubMock = vi.hoisted(() => {
           await gate;
         }
         return;
+      }
+      const gates = state.targetedDisplayGates.get(target);
+      const gate = gates?.shift();
+      if (gates?.length === 0) {
+        state.targetedDisplayGates.delete(target);
+      }
+      if (gate !== undefined) {
+        await gate;
       }
       if (this.failedTargets.has(target)) {
         throw new Error("CFI does not resolve in this book");
@@ -165,6 +165,26 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+function gateTargetedDisplay(target: string): { resolve: () => void } {
+  const gate = deferred();
+  const gates = state.targetedDisplayGates.get(target) ?? [];
+  gates.push(gate.promise);
+  state.targetedDisplayGates.set(target, gates);
+  return { resolve: gate.resolve };
+}
+
+async function waitForTargetedDisplay(
+  renditionIndex: number,
+  target: string,
+): Promise<InstanceType<typeof FakeRendition>> {
+  return vi.waitFor(() => {
+    const rendition = FakeRendition.instances[renditionIndex];
+    expect(rendition).toBeDefined();
+    expect(rendition.display).toHaveBeenCalledWith(target);
+    return rendition;
+  });
+}
+
 function makeFile(path: string): TFile {
   return { path, basename: path.split("/").pop() ?? path } as TFile;
 }
@@ -203,6 +223,13 @@ function createView(host: EpubViewHost): EpubView {
     },
   } as unknown as WorkspaceLeaf;
   return new EpubView(leaf, host);
+}
+
+function loadViewFile(view: EpubView, file: TFile): Promise<void> {
+  // Obsidian's runtime method is absent from its current public typings.
+  return (view as EpubView & {
+    loadFile(file: TFile): Promise<void>;
+  }).loadFile(file);
 }
 
 async function openInitialBook(
@@ -279,6 +306,7 @@ beforeEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
   state.initialDisplayGate = null;
+  state.targetedDisplayGates.clear();
   state.failNextInitialDisplay = false;
   FakeBook.instances.length = 0;
   FakeRendition.instances.length = 0;
@@ -312,7 +340,7 @@ describe("F2.2 flow-mode recovery", () => {
     const rollbackGate = deferred();
     let settingsWrite = 0;
     const host = createHost({
-      beforeSettingsWrite: async () => {
+      persistSettings: async () => {
         settingsWrite += 1;
         if (settingsWrite === 2) {
           await rollbackGate.promise;
@@ -326,7 +354,7 @@ describe("F2.2 flow-mode recovery", () => {
     await vi.waitFor(() => {
       expect(host.updateSettings).toHaveBeenCalledTimes(2);
     });
-    expect(host.settings.epubFlowMode).toBe("scrolled");
+    expect(host.settings.epubFlowMode).toBe("paginated");
     expect(FakeBook.instances[1].flow).toBe("scrolled");
 
     await view.onLoadFile(FILE_B);
@@ -405,33 +433,73 @@ describe("F2.2 flow-mode recovery", () => {
     expect(race.renditionB.display).not.toHaveBeenCalledWith(CFI_A);
   });
 
-  // QC-PROBE-Y: a stale redisplay must not become a valid write for B.
-  it("keeps book B's saved CFI when book A's flow render is superseded", async () => {
-    const host = createHost();
-    host.locations[FILE_B.path] = `#${CFI_B}`;
-    const { view } = await openInitialBook(host);
-    const race = await swapWhileFlowRenderIsBlocked(view);
-    vi.useFakeTimers();
+  // No parked continuation can observe one ownership half moving alone:
+  // EpubView.ts:131 reaches :250 synchronously, while the rendition assignment
+  // at :308 follows the sole render-generation bump at :608.
+  // QC-PROBE-Y: a stale redisplay must not overwrite a newer write for A.
+  it("keeps book A's newer CFI when its stale redisplay finishes", async () => {
+    const targetedDisplay = gateTargetedDisplay(CFI_A);
+    const { host, view } = await openInitialBook();
+    const toggle = view.setFlowMode("scrolled");
+    await waitForTargetedDisplay(1, CFI_A);
 
-    race.finishFlowRender();
-    await race.toggle;
+    await loadViewFile(view, FILE_B);
+    await loadViewFile(view, FILE_A);
+    vi.useFakeTimers();
+    FakeRendition.instances[3].emitRelocated(CFI_TURN);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(host.rememberEpubLocation).toHaveBeenCalledWith(
+      FILE_A.path,
+      `#${CFI_TURN}`,
+    );
+    expect(host.locations[FILE_A.path]).toBe(`#${CFI_TURN}`);
+
+    targetedDisplay.resolve();
+    await toggle;
     await vi.advanceTimersByTimeAsync(150);
 
-    expect(host.locations[FILE_B.path]).toBe(`#${CFI_B}`);
+    expect(host.locations[FILE_A.path]).toBe(`#${CFI_TURN}`);
   });
 
-  // QC-PROBE-Z2: rejecting A's CFI in B must not recover A over B.
-  it("does not replace book B when book A's stale CFI rejects", async () => {
+  // QC-PROBE-Z2: rejecting A's stale CFI must not recover A over B.
+  it("does not replace book B when book A's stale redisplay rejects", async () => {
+    const targetedDisplay = gateTargetedDisplay(CFI_A);
     const { view } = await openInitialBook();
-    const race = await swapWhileFlowRenderIsBlocked(view);
-    race.renditionB.failedTargets.add(CFI_A);
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const toggle = view.setFlowMode("scrolled");
+    const staleRendition = await waitForTargetedDisplay(1, CFI_A);
+    staleRendition.failedTargets.add(CFI_A);
 
-    race.finishFlowRender();
-    await race.toggle.catch(() => undefined);
+    await loadViewFile(view, FILE_B);
+    const bookB = FakeBook.instances[2];
 
-    expect(FakeBook.instances).toHaveLength(3);
-    expect(race.renditionB.destroyed).toBe(false);
-    expect(view.file).toBe(FILE_B);
+    targetedDisplay.resolve();
+    await toggle;
+
+    expect(staleRendition.display).toHaveBeenCalledWith(CFI_A);
+    expect(consoleError).toHaveBeenCalledWith(
+      "Observation Car: abandoned EPUB flow-mode failure",
+      expect.any(Error),
+    );
+    expectBookStillInstalled(view, FILE_B, bookB, 3);
+  });
+
+  it("silently abandons a superseded recovery redisplay", async () => {
+    const targetedDisplay = gateTargetedDisplay(CFI_A);
+    const { view } = await openInitialBook();
+    state.failNextInitialDisplay = true;
+
+    const toggle = view.setFlowMode("scrolled");
+    await waitForTargetedDisplay(2, CFI_A);
+
+    await loadViewFile(view, FILE_B);
+    const bookB = FakeBook.instances[3];
+    targetedDisplay.resolve();
+    await expect(toggle).resolves.toBeUndefined();
+
+    expectBookStillInstalled(view, FILE_B, bookB, 4);
   });
 
   it("notifies the user when a toggle fails", async () => {
