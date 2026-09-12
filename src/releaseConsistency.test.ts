@@ -40,8 +40,8 @@ const createFixture = (options: FixtureOptions = {}): string => {
   const directory = mkdtempSync(join(tmpdir(), "observation-car-release-"));
   fixtureDirectories.push(directory);
 
-  const manifest = options.manifest ??
-    (options.manifest === null ? null : VALID_MANIFEST);
+  const manifest =
+    options.manifest === undefined ? VALID_MANIFEST : options.manifest;
   const versions = options.versions ??
     (options.versions === null ? null : VALID_VERSIONS);
 
@@ -192,6 +192,16 @@ describe("release version consistency guard", () => {
         result,
         1,
         "::error::Tag 'release-latest' is not a plugin version (expected '1.2.3' or 'v1.2.3').",
+      );
+    });
+
+    it("rejects a version tag that differs from manifest.json", () => {
+      const result = runGuard(createFixture(), "0.2.0");
+
+      expectFailure(
+        result,
+        1,
+        "::error::manifest.json version '0.1.0' does not match tag '0.2.0' (normalized version '0.2.0'). Bump manifest.json before tagging, or retag.",
       );
     });
   });
