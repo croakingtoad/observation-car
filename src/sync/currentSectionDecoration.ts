@@ -12,9 +12,11 @@ import { codeMirrorView } from "./codeMirrorView";
 interface DocumentRange {
   readonly from: number;
   readonly to: number;
+  readonly heading: string;
 }
 
-const setCurrentSectionEffect = StateEffect.define<DocumentRange | null>();
+export const setCurrentSectionEffect =
+  StateEffect.define<DocumentRange | null>();
 const currentLine = Decoration.line({ class: "oc-current" });
 
 class CurrentSectionViewPlugin {
@@ -26,13 +28,13 @@ class CurrentSectionViewPlugin {
     let changed = false;
 
     if (update.docChanged && nextRange !== null) {
-      if (replacesWholeDocument(update)) {
-        nextRange = null;
-      } else {
-        const from = update.changes.mapPos(nextRange.from, -1);
-        const to = update.changes.mapPos(nextRange.to, 1);
-        nextRange = from === to ? null : { from, to };
-      }
+      const from = update.changes.mapPos(nextRange.from, -1);
+      const to = update.changes.mapPos(nextRange.to, 1);
+      const mappedRange = { ...nextRange, from, to };
+      nextRange =
+        from !== to && hasExpectedHeading(update.view, mappedRange)
+          ? mappedRange
+          : null;
       changed = true;
     }
 
@@ -78,14 +80,6 @@ export function setCurrentSectionDecoration(
   });
 }
 
-function replacesWholeDocument(update: ViewUpdate): boolean {
-  let replaced = false;
-  update.changes.iterChangedRanges((from, to) => {
-    if (from === 0 && to === update.startState.doc.length) replaced = true;
-  });
-  return replaced;
-}
-
 function sectionRange(
   view: EditorView,
   section: BookNoteSection,
@@ -99,7 +93,12 @@ function sectionRange(
   return {
     from: view.state.doc.line(startLine + 1).from,
     to: view.state.doc.line(endLine + 1).to,
+    heading: view.state.doc.line(startLine + 1).text,
   };
+}
+
+function hasExpectedHeading(view: EditorView, range: DocumentRange): boolean {
+  return view.state.doc.lineAt(range.from).text.startsWith(range.heading);
 }
 
 function buildDecorations(

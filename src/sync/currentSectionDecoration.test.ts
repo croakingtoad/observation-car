@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { BookNoteSection } from "../model/bookNote";
 import {
   currentSectionViewPlugin,
+  setCurrentSectionEffect,
   setCurrentSectionDecoration,
 } from "./currentSectionDecoration";
 
@@ -77,6 +78,71 @@ describe("current-section CM6 decoration", () => {
     });
 
     expect(currentLineTexts(view)).toEqual([]);
+  });
+
+  it("clears the class when a replacement shares the first line", () => {
+    view = createView();
+    setCurrentSectionDecoration({ cm: view }, section(1, 3));
+
+    view.dispatch({
+      changes: {
+        from: NOTE.indexOf("## Chapter one"),
+        to: NOTE.length,
+        insert: "## Other heading\nother body\nmore other body",
+      },
+    });
+
+    expect(currentLineTexts(view)).toEqual([]);
+  });
+
+  it("clears the class when a replacement shares the last character", () => {
+    view = createView();
+    setCurrentSectionDecoration({ cm: view }, section(1, 3));
+
+    view.dispatch({
+      changes: {
+        from: 0,
+        to: NOTE.length - 1,
+        insert: "## Other\nother body\nmor",
+      },
+    });
+
+    expect(currentLineTexts(view)).toEqual([]);
+  });
+
+  it("clears the class after a diff-minimized two-range replacement", () => {
+    view = createView();
+    setCurrentSectionDecoration({ cm: view }, section(1, 3));
+
+    view.dispatch({
+      changes: [
+        { from: 9, to: 23, insert: "## Different heading" },
+        { from: 56, to: NOTE.length, insert: "## Second" },
+      ],
+    });
+
+    expect(currentLineTexts(view)).toEqual([]);
+  });
+
+  it("establishes a fresh range during a document replacement", () => {
+    view = createView();
+    setCurrentSectionDecoration({ cm: view }, section(1, 3));
+
+    const replacement = ["## Other", "other body", "more body"].join("\n");
+    view.dispatch({
+      changes: { from: 0, to: NOTE.length, insert: replacement },
+      effects: setCurrentSectionEffect.of({
+        from: 0,
+        to: replacement.length,
+        heading: "## Other",
+      }),
+    });
+
+    expect(currentLineTexts(view)).toEqual([
+      "## Other",
+      "other body",
+      "more body",
+    ]);
   });
 
   it("clears the class when the whole highlighted section is deleted", () => {
