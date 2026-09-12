@@ -124,25 +124,45 @@ describe("current-section CM6 decoration", () => {
     expect(currentLineTexts(view)).toEqual([]);
   });
 
+  it("retains the highlighted section after an ordinary body edit", () => {
+    view = createView();
+    setCurrentSectionDecoration({ cm: view }, section(1, 3));
+
+    view.dispatch({
+      changes: {
+        from: view.state.doc.line(3).to,
+        insert: "!",
+      },
+    });
+
+    expect(currentLineTexts(view)).toEqual([
+      "## Chapter one",
+      "first paragraph!",
+      "second paragraph",
+    ]);
+  });
+
   it("establishes a fresh range during a document replacement", () => {
     view = createView();
     setCurrentSectionDecoration({ cm: view }, section(1, 3));
 
-    const replacement = ["## Other", "other body", "more body"].join("\n");
+    const replacement = [
+      "## Mapped heading",
+      "mapped body",
+      "## Fresh heading",
+      "fresh body",
+    ].join("\n");
+    const freshFrom = replacement.indexOf("## Fresh heading");
     view.dispatch({
       changes: { from: 0, to: NOTE.length, insert: replacement },
       effects: setCurrentSectionEffect.of({
-        from: 0,
+        from: freshFrom,
         to: replacement.length,
-        heading: "## Other",
+        heading: "## Fresh heading",
       }),
     });
 
-    expect(currentLineTexts(view)).toEqual([
-      "## Other",
-      "other body",
-      "more body",
-    ]);
+    expect(currentLineTexts(view)).toEqual(["## Fresh heading", "fresh body"]);
   });
 
   it("clears the class when the whole highlighted section is deleted", () => {
