@@ -208,6 +208,16 @@ describe("F5.1c parseOpdsFeed — live acquisition feed, page 2", () => {
     expect(entry.summary).not.toContain("</p>");
   });
 
+  it("turns every supported escaped br spelling into a newline only", () => {
+    const parsed = parseOpdsFeed(
+      `<feed><entry><summary>&lt;p&gt;one&lt;br&gt;two&lt;br/&gt;three&lt;br /&gt;four&lt;BR&gt;five&lt;/p&gt;&lt;div&gt;six&lt;/div&gt;</summary></entry></feed>`,
+      PAGE2_URL,
+    );
+    expect(parsed.entries[0].summary).toBe(
+      "one\ntwo\nthree\nfour\nfivesix",
+    );
+  });
+
   it("passes inconsistent author spellings through unchanged", () => {
     expect(feed().entries[0].authors).toEqual(["Lewis Turco"]);
     expect(feed().entries[1].authors).toEqual(["McGilchrist, Iain"]);
@@ -288,7 +298,7 @@ describe("F5.1c parseOpdsFeed — live acquisition feed, page 23 (final page)", 
   it("decodes entities nested inside escaped summary markup", () => {
     const entry = feed().entries[0];
     expect(entry.summary).toContain(
-      '"Whoever does not love does not know God, because God is love."—1 John 4:8',
+      '"Whoever does not love does not know God, because God is love."—1 John 4:8\nAre you looking',
     );
     expect(entry.summary).toContain(
       '"the best couple therapist in the world," according to bestselling relationship expert',

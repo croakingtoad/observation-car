@@ -157,12 +157,14 @@ function textOf(element: Element | null): string {
  * parsed as HTML into a throwaway document and its body's text read back —
  * rather than stripped by a `<…>` regex, which cannot tell markup from
  * prose around bare angle brackets (`"1 < 2"`, `"I<>III"`) and deletes it.
+ * HTML line breaks are changed to newlines first because `textContent`
+ * otherwise removes them without leaving a word boundary.
  */
 function summaryText(element: Element | null): string {
   if (element === null) {
     return "";
   }
-  const markup = element.textContent ?? "";
+  const markup = (element.textContent ?? "").replace(/<br\s*\/?>/gi, "\n");
   if (markup === "") {
     return "";
   }

@@ -94,8 +94,18 @@ function findFixtureViolations(contents: Buffer): string[] {
     violations.push(`host:port pair: ${hostPort}`);
   }
 
-  if (/\bauthorization\s*:\s*\S+/i.test(text)) {
+  if (
+    /[a-z][a-z0-9+.-]*:\/\/[^\s/?#@:]+:[^\s/?#@]+@/i.test(text)
+  ) {
+    violations.push("URL userinfo credentials");
+  }
+  if (/authorization\s*:\s*\S+/i.test(text)) {
     violations.push("Authorization header value");
+  }
+  if (
+    /(?:x-api-key|api-key|x-auth-token|x-access-token)\s*:\s*\S+/i.test(text)
+  ) {
+    violations.push("secret-bearing header value");
   }
   const basicValues = text.matchAll(
     /\bbasic[ \t]+([a-z0-9+/]{4,}={0,2})(?![a-z0-9+/=])/gi,
@@ -105,12 +115,11 @@ function findFixtureViolations(contents: Buffer): string[] {
       violations.push("Basic authentication token");
     }
   }
-  for (const field of ["opdsUsername", "opdsPassword"]) {
-    if (text.includes(field)) {
-      violations.push(`credential field name: ${field}`);
-    }
+  const credentialFields = text.match(/(?:opdsUsername|opdsPassword)/gi) ?? [];
+  for (const field of credentialFields) {
+    violations.push(`credential field name: ${field}`);
   }
-  if (/(?:\?|&|&amp;)(?:password|passwd|token)=/i.test(text)) {
+  if (/\b(?:password|passwd|token)=/i.test(text)) {
     violations.push("credential query parameter");
   }
 
@@ -118,6 +127,38 @@ function findFixtureViolations(contents: Buffer): string[] {
 }
 
 describe("F5.1 fixture redaction", () => {
+  it.each([
+    {
+      name: "URL userinfo credentials",
+      contents: "https://redacted:redacted@booklore.example/api/v1/opds",
+      violation: "URL userinfo credentials",
+    },
+    {
+      name: "case-insensitive OPDS password field",
+      contents: "OPDSPASSWORD",
+      violation: "credential field name: OPDSPASSWORD",
+    },
+    {
+      name: "credential parameter without a query delimiter",
+      contents: "password=redacted",
+      violation: "credential query parameter",
+    },
+    {
+      name: "API key header",
+      contents: "X-Api-Key: redacted",
+      violation: "secret-bearing header value",
+    },
+    {
+      name: "Authorization header glued to a preceding byte",
+      contents: "xAuthorization: redacted",
+      violation: "Authorization header value",
+    },
+  ])("catches $name", ({ contents, violation }) => {
+    expect(findFixtureViolations(Buffer.from(contents, "latin1"))).toContain(
+      violation,
+    );
+  });
+
   it("keeps every fixture free of private hosts and credentials", () => {
     for (const path of listFixtureFiles(fixturesDir)) {
       const name = relative(fixturesDir, path);
