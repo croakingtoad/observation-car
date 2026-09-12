@@ -371,6 +371,18 @@ describe("F5.1c parseOpenSearchDescription — live description document", () =>
     );
   });
 
+  it("drops a javascript OpenSearch template", () => {
+    const parsed = parseOpenSearchDescription(
+      `<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+        <ShortName>Unsafe search</ShortName>
+        <Url type="application/atom+xml" template="javascript:alert({searchTerms})" />
+      </OpenSearchDescription>`,
+      OSD_URL,
+    );
+
+    expect(parsed.urls).toEqual([]);
+  });
+
   it("rejects an Atom feed body as not-opds", () => {
     try {
       parseOpenSearchDescription(readFixture("root-catalog.xml"), OSD_URL);
@@ -507,6 +519,19 @@ describe("F5.1 parseOpdsFeed — unsafe href schemes", () => {
     expect(entry.images.map((link) => link.href)).toEqual([
       "http://booklore.example/covers/3.jpg",
     ]);
+  });
+
+  it("drops a javascript feed-level next link from pagination", () => {
+    const parsed = parseOpdsFeed(
+      `<feed xmlns="http://www.w3.org/2005/Atom">
+        <id>urn:booklore:unsafe-pagination</id>
+        <title>Unsafe pagination</title>
+        <link rel="next" href="javascript:alert('next')" />
+      </feed>`,
+      UNSAFE_HREFS_URL,
+    );
+
+    expect(parsed.pagination.next).toBeNull();
   });
 });
 

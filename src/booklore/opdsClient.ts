@@ -56,15 +56,32 @@ export interface OpdsClientOptions {
   transport?: OpdsTransport;
 }
 
-function isConfiguredOrigin(feedUrl: string, baseUrl: string): boolean {
+interface CheckedFeedUrl {
+  requestUrl: string;
+  isConfiguredOrigin: boolean;
+}
+
+function checkFeedUrl(feedUrl: string, baseUrl: string): CheckedFeedUrl {
+  let parsedFeedUrl: URL;
+  try {
+    parsedFeedUrl = new URL(feedUrl);
+  } catch {
+    return { requestUrl: feedUrl, isConfiguredOrigin: false };
+  }
+
+  const requestUrl = parsedFeedUrl.toString();
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   if (normalizedBaseUrl === "") {
-    return false;
+    return { requestUrl, isConfiguredOrigin: false };
   }
   try {
-    return new URL(feedUrl).origin === new URL(normalizedBaseUrl).origin;
+    return {
+      requestUrl,
+      isConfiguredOrigin:
+        parsedFeedUrl.origin === new URL(normalizedBaseUrl).origin,
+    };
   } catch {
-    return false;
+    return { requestUrl, isConfiguredOrigin: false };
   }
 }
 
@@ -103,11 +120,15 @@ export class OpdsClient {
    */
   async fetchFeed(feedUrl: string): Promise<OpdsFeed> {
     const credentials = this.settings();
+    const checkedFeedUrl = checkFeedUrl(
+      feedUrl,
+      credentials.bookloreBaseUrl,
+    );
     const headers: Record<string, string> = {
       Accept: "application/atom+xml",
     };
     if (
-      isConfiguredOrigin(feedUrl, credentials.bookloreBaseUrl) &&
+      checkedFeedUrl.isConfiguredOrigin &&
       (credentials.opdsUsername !== "" || credentials.opdsPassword !== "")
     ) {
       headers.Authorization = basicAuthHeader(
@@ -118,7 +139,7 @@ export class OpdsClient {
 
     let result: OpdsTransportResult;
     try {
-      result = await this.transport(feedUrl, headers);
+      result = await this.transport(checkedFeedUrl.requestUrl, headers);
     } catch {
       throw new OpdsError(
         "unreachable",

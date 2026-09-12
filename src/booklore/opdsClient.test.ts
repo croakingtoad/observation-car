@@ -195,6 +195,75 @@ describe("F5.1 OpdsClient — credential origin boundary", () => {
     expect(calls[0].headers.Authorization).toBe(AUTHORIZATION);
   });
 
+  it("omits credentials when the configured base URL is empty", async () => {
+    const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "",
+        opdsUsername: USERNAME,
+        opdsPassword: PASSWORD,
+      }),
+      transport,
+    );
+
+    await client.fetchFeed("https://booklore.example/api/v1/opds/page2");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({ Accept: "application/atom+xml" });
+  });
+
+  it("omits credentials when the configured base URL is unparseable", async () => {
+    const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "https://[invalid",
+        opdsUsername: USERNAME,
+        opdsPassword: PASSWORD,
+      }),
+      transport,
+    );
+
+    await client.fetchFeed("https://booklore.example/api/v1/opds/page2");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({ Accept: "application/atom+xml" });
+  });
+
+  it("sends the canonical URL used for the origin check to the transport", async () => {
+    const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: USERNAME,
+        opdsPassword: PASSWORD,
+      }),
+      transport,
+    );
+
+    await client.fetchFeed(
+      "HTTPS://BOOKLORE.EXAMPLE:443/api/v1/../opds/catalog?q=reading notes",
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(
+      "https://booklore.example/api/opds/catalog?q=reading%20notes",
+    );
+    expect(calls[0].headers.Authorization).toBe(AUTHORIZATION);
+  });
+
+  it("keeps an unparseable feed URL raw and omits credentials", async () => {
+    const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(settings, transport);
+
+    await client.fetchFeed("not a URL");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      url: "not a URL",
+      headers: { Accept: "application/atom+xml" },
+    });
+  });
+
   it.each([
     ["different host", "https://evil.example.net:8443/collect"],
     ["different scheme", "http://booklore.example:8443/api/v1/opds"],
