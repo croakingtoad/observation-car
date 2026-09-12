@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Book, Rendition } from "epubjs";
-import { EpubNavigationTools } from "./epubNavigationTools";
+import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
 
 const SELECTION_CFI = "epubcfi(/6/4!/4/2/6:32,/2/1:1,/2/1:80)";
 const SELECTION_TEXT = "quoted words";
@@ -66,6 +66,7 @@ function makeTools(overrides: {
     "library/book.epub",
     book as unknown as Book,
     rendition as unknown as Rendition,
+    new EpubSelectionTracker(),
   );
   return { viewerEl, book, rendition, tools };
 }

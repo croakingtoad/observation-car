@@ -23,11 +23,16 @@
  * - The TOC/selection setup promises no longer go unhandled: a book whose
  *   `loaded.navigation` or `loaded.metadata` rejects reports a readable
  *   error in the viewer instead of leaving the panel silently absent.
+ * - The TOC drawer (F2.3) renders the full nested TOC with depth indent,
+ *   passes labels and hrefs through without character stripping, handles
+ *   `rendition.display()` rejections, and supports keyboard focus,
+ *   Enter/Space activation, and Escape to close.
  */
 import { type Book, type Contents, type Rendition } from "epubjs";
 import type Locations from "epubjs/types/locations";
 import { type Location } from "epubjs/types/rendition";
 import { AnchorError, buildEpubCfiFragment } from "../model/anchor";
+import type { NavItem } from "epubjs/types/navigation";
 
 const EPUBCFI_WRAPPER = "epubcfi(";
 
@@ -140,8 +145,35 @@ export class EpubSelectionTracker {
   }
 }
 
+/** A single flattened TOC entry with its depth in the source tree. */
+export interface TocEntry {
+  href: string;
+  label: string;
+  depth: number;
+}
+
+/**
+ * Flatten a nested EPUB navigation TOC into a single list, preserving
+ * document order and recording each entry's depth for indentation.
+ *
+ * Labels and hrefs are returned exactly as epub.js provides them - no
+ * character stripping - so callers can normalize labels for display and
+ * pass hrefs straight to `rendition.display()`.
+ */
+export function flattenToc(items: readonly NavItem[], depth = 0): TocEntry[] {
+  const entries: TocEntry[] = [];
+  for (const item of items) {
+    entries.push({ href: item.href, label: item.label, depth });
+    if (item.subitems !== undefined && item.subitems.length > 0) {
+      entries.push(...flattenToc(item.subitems, depth + 1));
+    }
+  }
+  return entries;
+}
+
 export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
+  private tocButton: HTMLButtonElement | null = null;
   private isTocOpen = false;
   private readonly copyPanel: HTMLDivElement;
   private locations: Promise<Locations> | null = null;
@@ -247,7 +279,7 @@ export class EpubNavigationTools {
       targetIdx = idx - 1;
     }
     if (targetIdx !== -1) {
-      await this.rendition.display(this.sanitize(tocItems[targetIdx].href));
+      await this.rendition.display(tocItems[targetIdx].href);
     }
   }
 
@@ -329,38 +361,30 @@ export class EpubNavigationTools {
     tocButton.textContent = "☰";
     tocButton.onclick = () => this.toggleTocVisibility();
     viewerEl.appendChild(tocButton);
+    this.tocButton = tocButton;
 
     this.tocPanel = document.createElement("div");
     this.tocPanel.className = "epub-toc-panel";
+    this.tocPanel.setAttribute("role", "navigation");
+    this.tocPanel.setAttribute("aria-label", "Table of contents");
+    // Starts closed; keep it out of the tab order until opened.
+    this.tocPanel.inert = true;
     viewerEl.appendChild(this.tocPanel);
 
-    for (const item of navigation.toc) {
-      const safeHref = this.sanitize(item.href);
-      const safeLabel = this.sanitize(item.label);
-
-      const tocLink = document.createElement("div");
-      tocLink.className = "epub-toc-link";
-      tocLink.dataset.href = safeHref;
-      tocLink.dataset.label = safeLabel;
-
-      const labelSpan = document.createElement("span");
-      labelSpan.className = "epub-toc-label";
-      labelSpan.textContent = safeLabel;
-
-      const copyBtn = document.createElement("button");
-      copyBtn.className = "epub-toc-copy";
-      copyBtn.title = "Copy link";
-      copyBtn.dataset.href = safeHref;
-      copyBtn.dataset.label = safeLabel;
-      copyBtn.tabIndex = -1;
-      copyBtn.textContent = "🔗";
-      copyBtn.onclick = (e) => void this.copyTocLink(e, bookTitle, safeHref, safeLabel);
-      copyBtn.ariaLabel = `Copy link to ${safeLabel}`;
-
-      tocLink.append(labelSpan, copyBtn);
-      tocLink.onclick = () => void this.rendition.display(safeHref);
-      this.tocPanel.appendChild(tocLink);
+    for (const entry of flattenToc(navigation.toc)) {
+      this.tocPanel.appendChild(this.createTocRow(entry, bookTitle));
     }
+
+    // Escape closes the drawer while it is open and returns focus to the
+    // toggle so keyboard users are not left on an off-screen element.
+    viewerEl.addEventListener("keydown", (event: KeyboardEvent) => {
+      if (event.key === "Escape" && this.isTocOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.toggleTocVisibility(false);
+        this.tocButton?.focus();
+      }
+    });
 
     // Hide the TOC panel when the reader is clicked.
     this.rendition.on("rendered", (_section: unknown, contents: Contents) => {
@@ -370,7 +394,65 @@ export class EpubNavigationTools {
     });
   }
 
-  private async copyTocLink(e: Event, bookTitle: string, href: string, label: string): Promise<void> {
+  /** Build one TOC row (label + copy button) for a flattened entry. */
+  private createTocRow(entry: TocEntry, bookTitle: string): HTMLDivElement {
+    const label = this.sanitize(entry.label);
+    const href = entry.href;
+
+    const row = document.createElement("div");
+    row.className = "epub-toc-link";
+    row.dataset.href = href;
+    row.dataset.label = label;
+    row.style.setProperty("--toc-depth", String(entry.depth));
+    row.onclick = () => void this.jumpToEntry(entry);
+
+    const labelSpan = document.createElement("span");
+    labelSpan.className = "epub-toc-label";
+    labelSpan.textContent = label;
+    labelSpan.setAttribute("role", "link");
+    labelSpan.tabIndex = 0;
+    labelSpan.setAttribute("aria-label", label);
+    labelSpan.addEventListener("keydown", (event: KeyboardEvent) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        void this.jumpToEntry(entry);
+      }
+    });
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "epub-toc-copy";
+    copyBtn.title = "Copy link";
+    copyBtn.dataset.href = href;
+    copyBtn.dataset.label = label;
+    copyBtn.tabIndex = -1;
+    copyBtn.textContent = "🔗";
+    copyBtn.onclick = (e) => void this.copyTocLink(e, bookTitle, href, label);
+    copyBtn.ariaLabel = `Copy link to ${label}`;
+
+    row.append(labelSpan, copyBtn);
+    return row;
+  }
+
+  /**
+   * Jump to a TOC entry. The drawer closes only after `rendition.display()`
+   * resolves; a rejection is surfaced (never left unhandled) and the drawer
+   * stays open so the user can retry.
+   */
+  private async jumpToEntry(entry: TocEntry): Promise<void> {
+    try {
+      await this.rendition.display(entry.href);
+      this.toggleTocVisibility(false);
+    } catch (error) {
+      console.warn(`[Observation Car] Could not open TOC entry "${entry.label}":`, error);
+    }
+  }
+
+  private async copyTocLink(
+    e: Event,
+    bookTitle: string,
+    href: string,
+    label: string,
+  ): Promise<void> {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLButtonElement;
     try {
@@ -490,9 +572,12 @@ export class EpubNavigationTools {
     }, 1000);
   }
 
-  /** Ultra-basic sanitization for hrefs/labels that land in link text. */
+  /**
+   * Collapse consecutive whitespace and trim. Preserves accents and non-Latin
+   * scripts, so it is safe for display labels.
+   */
   private sanitize(str: string): string {
-    return str.replace(/[^\x20-\x7E]+/g, "").trim();
+    return str.replace(/\s+/g, " ").trim();
   }
 
   private setCopyHandler(className: string, handler: (e: Event) => void): void {
@@ -506,6 +591,9 @@ export class EpubNavigationTools {
     }
     const shouldShow = show !== undefined ? show : !this.isTocOpen;
     this.tocPanel.classList.toggle("open", shouldShow);
+    // The transform only hides the drawer visually; inert is what removes
+    // its tab stops from keyboard order and the accessibility tree.
+    this.tocPanel.inert = !shouldShow;
     this.copyPanel.classList.toggle("open", false);
     this.isTocOpen = shouldShow;
   }
