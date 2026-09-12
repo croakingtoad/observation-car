@@ -6,8 +6,10 @@
  * provenance in `VENDOR_NOTICE.md`.
  *
  * F2.1 registers this view for `.epub` so a book opens in-plugin; the
- * location/selection/link-navigation API surface the sync layer (E004)
- * consumes arrives with F2.5–F2.9.
+ * selection half (`getSelection`) of the API surface the sync layer
+ * (E004) consumes (PRD §8) is in since F2.6; the location half
+ * (`on("location")` / `getLocation`) arrives with F2.5 and link
+ * navigation with F2.7–F2.9.
  *
  * `FileView` (an `ItemView` subclass, like the core PDF view) is the base:
  * Obsidian routes `leaf.openFile(file)` for a registered extension to
@@ -15,7 +17,7 @@
  */
 import { FileView, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
-import { EpubNavigationTools } from "./epubNavigationTools";
+import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
 import { EpubThemes } from "./epubThemes";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
@@ -33,6 +35,7 @@ export class EpubView extends FileView {
    * entry.
    */
   private renderGeneration = 0;
+  private selectionTracker: EpubSelectionTracker | null = null;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -44,6 +47,17 @@ export class EpubView extends FileView {
 
   getDisplayText(): string {
     return this.file?.basename ?? "EPUB Reader";
+  }
+
+  /**
+   * PRD §8 Reader contract: the current selection in the book as
+   * `{text, fragment}` — `fragment` built by `buildEpubCfiFragment` —
+   * or `null` when nothing is selected. F4.6 "new note here" builds
+   * on this; a bad CFI resolves to `null` rather than a throw so that
+   * path can never crash on a stray selection.
+   */
+  getSelection(): { text: string; fragment: string } | null {
+    return this.selectionTracker?.getSelection() ?? null;
   }
 
   async onLoadFile(file: TFile): Promise<void> {
@@ -79,13 +93,20 @@ export class EpubView extends FileView {
     let book: Book | null = null;
     let rendition: Rendition | null = null;
     let themes: EpubThemes | null = null;
+    const selectionTracker = new EpubSelectionTracker();
     try {
       book = ePub(bytes);
       rendition = book.renderTo(viewerEl, {
         width: "100%",
         height: "100%",
       });
-      new EpubNavigationTools(viewerEl, file.path, book, rendition);
+      new EpubNavigationTools(
+        viewerEl,
+        file.path,
+        book,
+        rendition,
+        selectionTracker,
+      );
       themes = new EpubThemes(rendition);
       await rendition.display();
     } catch (error) {
@@ -107,6 +128,7 @@ export class EpubView extends FileView {
     this.book = book;
     this.rendition = rendition;
     this.themes = themes;
+    this.selectionTracker = selectionTracker;
   }
 
   /** Tear down a reader a render built locally, possibly only partially. */
@@ -126,6 +148,9 @@ export class EpubView extends FileView {
     // Retire any in-flight render: it sees the moved generation at its
     // next `await` and disposes what it has built.
     this.renderGeneration += 1;
+    // A selection only lives inside a rendition's iframe; with the
+    // reader gone, the retained one is stale by definition.
+    this.selectionTracker = null;
     this.themes?.destroy();
     this.themes = null;
     this.rendition?.destroy();
