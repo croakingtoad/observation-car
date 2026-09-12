@@ -13,6 +13,10 @@ function tocItem(href: string, label: string, subitems?: NavItem[]): NavItem {
 interface ViewerHarness {
   viewerEl: HTMLDivElement;
   displayCalls: string[];
+  /** Simulate epub.js reporting the current position's starting href. */
+  setLocation: (href: string | undefined) => void;
+  /** Fire the rendition "rendered" event with a fresh contents document. */
+  renderContents: () => HTMLDocument;
 }
 
 /**
@@ -29,9 +33,15 @@ async function buildViewer(
   document.body.appendChild(viewerEl);
 
   const displayCalls: string[] = [];
+  const eventHandlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+  const locationState: { start?: { href?: string } } = {};
   const rendition = {
-    location: undefined,
-    on: () => {},
+    get location() {
+      return locationState.start === undefined ? undefined : { start: locationState.start };
+    },
+    on: (event: string, handler: (...args: unknown[]) => void) => {
+      (eventHandlers[event] ??= []).push(handler);
+    },
     prev: () => Promise.resolve(),
     next: () => Promise.resolve(),
     display: (target?: unknown) => {
@@ -54,7 +64,22 @@ async function buildViewer(
     expect(viewerEl.querySelector(".epub-toc-panel")).not.toBeNull();
   });
 
-  return { viewerEl, displayCalls };
+  const renderContents = (): HTMLDocument => {
+    const contentsDocument = document.implementation.createHTMLDocument("contents");
+    for (const handler of eventHandlers["rendered"] ?? []) {
+      handler({}, { document: contentsDocument });
+    }
+    return contentsDocument;
+  };
+
+  return {
+    viewerEl,
+    displayCalls,
+    setLocation: (href: string | undefined) => {
+      locationState.start = href === undefined ? undefined : { href };
+    },
+    renderContents,
+  };
 }
 
 /** Let the fire-and-forget jump promise (and its drawer close) settle. */
@@ -156,6 +181,24 @@ describe("TOC drawer", () => {
     expect(displayCalls).toEqual(["chapter-1.xhtml#section-a"]);
   });
 
+  it("indents nested TOC rows by depth via the --toc-depth CSS variable", async () => {
+    const { viewerEl } = await buildViewer([
+      tocItem("part1.xhtml", "Part I", [
+        tocItem("ch1.xhtml", "Chapter 1", [
+          tocItem("ch1.xhtml#section-a", "Section A"),
+        ]),
+      ]),
+      tocItem("part2.xhtml", "Part II"),
+    ]);
+
+    const rows = Array.from(viewerEl.querySelectorAll<HTMLElement>(".epub-toc-link"));
+    expect(rows).toHaveLength(4);
+    expect(rows[0].style.getPropertyValue("--toc-depth")).toBe("0");
+    expect(rows[1].style.getPropertyValue("--toc-depth")).toBe("1");
+    expect(rows[2].style.getPropertyValue("--toc-depth")).toBe("2");
+    expect(rows[3].style.getPropertyValue("--toc-depth")).toBe("0");
+  });
+
   it("renders non-ASCII labels as authored and passes their hrefs unstripped", async () => {
     const { viewerEl, displayCalls } = await buildViewer([
       tocItem("chapitres/été.xhtml", "Café Terrace 第一章"),
@@ -220,6 +263,26 @@ describe("TOC drawer", () => {
     expect(copyBtn.getAttribute("aria-label")).toBe("Copy link to Chapter A");
   });
 
+  it("a closed drawer is inert so no entry is keyboard-reachable; opening restores it", async () => {
+    const { viewerEl } = await buildViewer([
+      tocItem("a.xhtml", "A", [tocItem("a.xhtml#sub", "Sub")]),
+    ]);
+    const panel = viewerEl.querySelector(".epub-toc-panel") as HTMLElement;
+
+    expect(panel.classList.contains("open")).toBe(false);
+    expect(panel.inert).toBe(true);
+
+    openDrawer(viewerEl);
+    expect(panel.classList.contains("open")).toBe(true);
+    expect(panel.inert).toBe(false);
+
+    viewerEl.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(panel.classList.contains("open")).toBe(false);
+    expect(panel.inert).toBe(true);
+  });
+
   it("Enter and Space activate the jump on a focused entry", async () => {
     const { viewerEl, displayCalls } = await buildViewer([
       tocItem("a.xhtml", "A"),
@@ -252,5 +315,55 @@ describe("TOC drawer", () => {
     );
 
     expect(panel.classList.contains("open")).toBe(false);
+  });
+});
+
+describe("chapter navigation", () => {
+  it("PageUp passes the raw target href to display(), byte-identical", async () => {
+    const rawHref = "chapitres/été.xhtml#résumé";
+    const { displayCalls, setLocation, renderContents } = await buildViewer([
+      tocItem("chapter-1.xhtml", "Chapter One"),
+      tocItem(rawHref, "Été — Résumé"),
+    ]);
+    const contentsDocument = renderContents();
+    setLocation("chapter-1.xhtml");
+
+    contentsDocument.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }),
+    );
+    await flush();
+
+    expect(displayCalls).toEqual([rawHref]);
+  });
+
+  it("PageUp/Down move one chapter and stop at the TOC edges", async () => {
+    const { displayCalls, setLocation, renderContents } = await buildViewer([
+      tocItem("chapter-1.xhtml", "Chapter One"),
+      tocItem("chapter-2.xhtml", "Chapter Two"),
+      tocItem("chapter-3.xhtml", "Chapter Three"),
+    ]);
+    const contentsDocument = renderContents();
+    const press = (key: string): void => {
+      contentsDocument.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+    };
+
+    setLocation("chapter-2.xhtml");
+    press("PageUp");
+    await flush();
+    press("PageDown");
+    await flush();
+    expect(displayCalls).toEqual(["chapter-3.xhtml", "chapter-1.xhtml"]);
+
+    setLocation("chapter-3.xhtml");
+    press("PageUp");
+    await flush();
+    expect(displayCalls).toEqual(["chapter-3.xhtml", "chapter-1.xhtml"]);
+
+    setLocation("chapter-1.xhtml");
+    press("PageDown");
+    await flush();
+    expect(displayCalls).toEqual(["chapter-3.xhtml", "chapter-1.xhtml"]);
   });
 });

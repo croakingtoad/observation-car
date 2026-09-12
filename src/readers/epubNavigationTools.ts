@@ -126,7 +126,7 @@ export class EpubNavigationTools {
       targetIdx = idx - 1;
     }
     if (targetIdx !== -1) {
-      await this.rendition.display(this.sanitize(tocItems[targetIdx].href));
+      await this.rendition.display(tocItems[targetIdx].href);
     }
   }
 
@@ -215,6 +215,8 @@ export class EpubNavigationTools {
     this.tocPanel.className = "epub-toc-panel";
     this.tocPanel.setAttribute("role", "navigation");
     this.tocPanel.setAttribute("aria-label", "Table of contents");
+    // Starts closed; keep it out of the tab order until opened.
+    this.tocPanel.inert = true;
     viewerEl.appendChild(this.tocPanel);
 
     for (const entry of flattenToc(navigation.toc)) {
@@ -367,8 +369,7 @@ export class EpubNavigationTools {
 
   /**
    * Collapse consecutive whitespace and trim. Preserves accents and non-Latin
-   * scripts, so it is safe for display labels. Hrefs are never stripped - they
-   * are passed to `rendition.display()` exactly as epub.js provides them.
+   * scripts, so it is safe for display labels.
    */
   private sanitize(str: string): string {
     return str.replace(/\s+/g, " ").trim();
@@ -385,6 +386,9 @@ export class EpubNavigationTools {
     }
     const shouldShow = show !== undefined ? show : !this.isTocOpen;
     this.tocPanel.classList.toggle("open", shouldShow);
+    // The transform only hides the drawer visually; inert is what removes
+    // its tab stops from keyboard order and the accessibility tree.
+    this.tocPanel.inert = !shouldShow;
     this.copyPanel.classList.toggle("open", false);
     this.isTocOpen = shouldShow;
   }
