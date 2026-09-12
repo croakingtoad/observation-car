@@ -72,6 +72,7 @@ export class EpubView extends FileView {
       file.path,
       this.book,
       this.rendition,
+      () => this.app.workspace.setActiveLeaf(this.leaf, { focus: false }),
     );
     this.themes = new EpubThemes(this.rendition);
     await this.rendition.display();

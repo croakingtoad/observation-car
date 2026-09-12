@@ -9,53 +9,55 @@ export const CREATE_BOOK_NOTE_COMMAND_ID =
 export function registerCreateBookNoteCommand(
   plugin: ObservationCarPlugin,
 ): void {
-  let mostRecentlyActiveView: EpubView | null = null;
-  plugin.registerEvent(
-    plugin.app.workspace.on("active-leaf-change", (leaf) => {
-      if (leaf?.view instanceof EpubView && leaf.view.file !== null) {
-        mostRecentlyActiveView = leaf.view;
-      }
-    }),
-  );
-
   plugin.addCommand({
     id: CREATE_BOOK_NOTE_COMMAND_ID,
     name: "Create book note for current book",
     icon: "book-open",
     callback: () => {
-      const book = currentBook(plugin, mostRecentlyActiveView);
-      if (book === null) {
-        new Notice("Open a book in Observation Car first");
-        return;
-      }
-
-      void createOrOpenBookNote(plugin, book);
+      void createBookNoteForCurrentBook(plugin);
     },
   });
 }
 
-function currentBook(
+async function createBookNoteForCurrentBook(
   plugin: ObservationCarPlugin,
-  mostRecentlyActiveView: EpubView | null,
-): TFile | null {
-  const activeBook = plugin.app.workspace.getActiveViewOfType(EpubView)?.file;
-  if (activeBook !== null && activeBook !== undefined) return activeBook;
+): Promise<void> {
+  try {
+    const openLeaves = plugin.app.workspace
+      .getLeavesOfType(EPUB_VIEW_TYPE)
+      .filter((leaf) => leaf.getViewState().type === EPUB_VIEW_TYPE);
+    const activeView = plugin.app.workspace.getActiveViewOfType(EpubView);
+    const activeLeaf = openLeaves.find((leaf) => leaf.view === activeView);
 
-  const openLeaves = plugin.app.workspace.getLeavesOfType(EPUB_VIEW_TYPE);
-  if (
-    mostRecentlyActiveView !== null &&
-    mostRecentlyActiveView.file !== null &&
-    openLeaves.some((leaf) => leaf.view === mostRecentlyActiveView)
-  ) {
-    return mostRecentlyActiveView.file;
-  }
-
-  for (const leaf of openLeaves) {
-    if (leaf.view instanceof EpubView && leaf.view.file !== null) {
-      return leaf.view.file;
+    if (activeLeaf !== undefined) {
+      await activeLeaf.loadIfDeferred();
+      if (activeLeaf.view instanceof EpubView && activeLeaf.view.file !== null) {
+        await createOrOpenBookNote(plugin, activeLeaf.view.file);
+        return;
+      }
     }
+
+    if (openLeaves.length > 1) {
+      new Notice("Multiple books are open. Focus the book you want first");
+      return;
+    }
+    const onlyLeaf = openLeaves[0];
+    if (onlyLeaf === undefined) {
+      new Notice("Open a book in Observation Car first");
+      return;
+    }
+
+    await onlyLeaf.loadIfDeferred();
+    if (onlyLeaf.view instanceof EpubView && onlyLeaf.view.file !== null) {
+      await createOrOpenBookNote(plugin, onlyLeaf.view.file);
+      return;
+    }
+
+    new Notice("Open a book in Observation Car first");
+  } catch (error) {
+    console.error("[observation-car] could not resolve current book", error);
+    new Notice("Could not resolve the current book. Check the developer console for details.");
   }
-  return null;
 }
 
 /**

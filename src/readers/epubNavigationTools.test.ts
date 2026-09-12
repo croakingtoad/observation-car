@@ -1,11 +1,14 @@
 import type { Book } from "epubjs";
 import { JSDOM } from "jsdom";
-import type { TFile, WorkspaceLeaf } from "obsidian";
+import type { Command, TFile, WorkspaceLeaf } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtime = vi.hoisted(() => ({
   createEpub: vi.fn(),
   readBinary: vi.fn(),
+  app: undefined as unknown,
+  setActiveLeaf: vi.fn(),
+  noticeMessages: [] as string[],
 }));
 
 vi.mock("epubjs", async (importOriginal) => {
@@ -15,13 +18,16 @@ vi.mock("epubjs", async (importOriginal) => {
 
 vi.mock("obsidian", () => {
   class FileView {
-    readonly app = { vault: { readBinary: runtime.readBinary } };
+    readonly app: unknown;
+    readonly leaf: unknown;
     readonly contentEl: HTMLElement & {
       createDiv(options?: { cls?: string }): HTMLDivElement;
       empty(): void;
     };
 
-    constructor(_leaf: unknown) {
+    constructor(leaf: unknown) {
+      this.app = runtime.app;
+      this.leaf = leaf;
       const contentEl = document.createElement("div") as FileView["contentEl"];
       contentEl.createDiv = (options = {}) => {
         const child = document.createElement("div");
@@ -38,9 +44,22 @@ vi.mock("obsidian", () => {
     }
   }
 
-  return { FileView };
+  class TFile {}
+  class TFolder {}
+  class Notice {
+    constructor(message: string) {
+      runtime.noticeMessages.push(message);
+    }
+  }
+
+  const normalizePath = (path: string): string =>
+    path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\//, "");
+
+  return { FileView, Notice, TFile, TFolder, normalizePath };
 });
 
+import { registerCreateBookNoteCommand } from "../commands/createBookNote";
+import type ObservationCarPlugin from "../main";
 import {
   EpubKeyBridge,
   type EpubKeyBridgeRendition,
@@ -183,7 +202,14 @@ function fakeBook(title: string, rendition: FakeRendition): Book {
 }
 
 function bookFile(path: string): TFile {
-  return { path, basename: path.split("/").at(-1) ?? path } as TFile;
+  const name = path.split("/").at(-1) ?? path;
+  const extension = name.split(".").at(-1) ?? "";
+  return {
+    path,
+    name,
+    extension,
+    basename: name.slice(0, -(extension.length + 1)),
+  } as TFile;
 }
 
 function keyboardEvent(
@@ -232,6 +258,7 @@ let testDom: JSDOM;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runtime.noticeMessages.length = 0;
   testDom = new JSDOM("<!doctype html><html><body></body></html>");
   vi.stubGlobal("window", testDom.window);
   vi.stubGlobal("document", testDom.window.document);
@@ -239,6 +266,10 @@ beforeEach(() => {
   vi.stubGlobal("MutationObserver", testDom.window.MutationObserver);
   vi.stubGlobal("getComputedStyle", testDom.window.getComputedStyle.bind(testDom.window));
   runtime.readBinary.mockResolvedValue(new ArrayBuffer(0));
+  runtime.app = {
+    vault: { readBinary: runtime.readBinary },
+    workspace: { setActiveLeaf: runtime.setActiveLeaf },
+  };
 });
 
 afterEach(() => {
@@ -473,5 +504,129 @@ describe("EpubView reader replacement", () => {
     expect(oldRendition.removedHandlerCount("rendered")).toBe(2);
     expect(oldRendition.activeHandlerCount("rendered")).toBe(0);
     await view.onClose();
+  });
+});
+
+describe("forwarded EPUB hotkey integration", () => {
+  it("creates the note for the iframe that received the chord, not the last active book", async () => {
+    const { EpubView, EPUB_VIEW_TYPE } = await import("./EpubView");
+    const firstDocument = childDocument(document);
+    const secondDocument = childDocument(document);
+    const firstRendition = new FakeRendition(firstDocument);
+    const secondRendition = new FakeRendition(secondDocument);
+    runtime.createEpub
+      .mockReturnValueOnce(fakeBook("Book A", firstRendition))
+      .mockReturnValueOnce(fakeBook("Book B", secondRendition));
+
+    type EpubViewInstance = InstanceType<typeof EpubView>;
+    let activeView: EpubViewInstance | null = null;
+    let activeLeafHandler: ((leaf: WorkspaceLeaf | null) => void) | undefined;
+    const createdFiles: string[] = [];
+    const openedFiles: string[] = [];
+    const leaves: Array<{
+      view: EpubViewInstance;
+      getViewState(): { type: string };
+      loadIfDeferred(): Promise<void>;
+    }> = [];
+    runtime.setActiveLeaf.mockImplementation(
+      (leaf: WorkspaceLeaf, _params: { focus?: boolean }): void => {
+        activeView = leaf.view as EpubViewInstance;
+        activeLeafHandler?.(leaf);
+      },
+    );
+    runtime.app = {
+      vault: {
+        readBinary: runtime.readBinary,
+        getAbstractFileByPath: () => null,
+        create: async (path: string): Promise<TFile> => {
+          createdFiles.push(path);
+          return bookFile(path);
+        },
+        createFolder: async (): Promise<void> => undefined,
+      },
+      workspace: {
+        setActiveLeaf: runtime.setActiveLeaf,
+        getActiveViewOfType: (
+          viewType: typeof EpubView,
+        ): EpubViewInstance | null =>
+          activeView instanceof viewType ? activeView : null,
+        getLeavesOfType: () => leaves,
+        on: (
+          _name: string,
+          handler: (leaf: WorkspaceLeaf | null) => void,
+        ): { event: string } => {
+          activeLeafHandler = handler;
+          return { event: "active-leaf-change" };
+        },
+        getLeaf: () => ({
+          openFile: async (file: TFile): Promise<void> => {
+            openedFiles.push(file.path);
+          },
+        }),
+      },
+    };
+
+    const makeLeaf = (): (typeof leaves)[number] => ({
+      view: undefined as unknown as EpubViewInstance,
+      getViewState: () => ({ type: EPUB_VIEW_TYPE }),
+      loadIfDeferred: vi.fn(async (): Promise<void> => undefined),
+    });
+    const firstLeaf = makeLeaf();
+    const secondLeaf = makeLeaf();
+    const firstView = new EpubView(firstLeaf as unknown as WorkspaceLeaf);
+    const secondView = new EpubView(secondLeaf as unknown as WorkspaceLeaf);
+    firstLeaf.view = firstView;
+    secondLeaf.view = secondView;
+    leaves.push(firstLeaf, secondLeaf);
+    await firstView.onLoadFile(bookFile("Books/Book A.epub"));
+    await secondView.onLoadFile(bookFile("Books/Book B.epub"));
+    activeView = secondView;
+    activeLeafHandler?.(secondLeaf as unknown as WorkspaceLeaf);
+
+    let command: Command | undefined;
+    const plugin = {
+      app: runtime.app,
+      settings: {
+        notesFolder: "",
+        noteTemplate:
+          "---\nsource: {{source}}\nformat: {{format}}\ntitle: {{title}}\n---\n",
+      },
+      registerEvent: vi.fn(),
+      addCommand: (registered: Command): Command => {
+        command = registered;
+        return registered;
+      },
+    } as unknown as ObservationCarPlugin;
+    registerCreateBookNoteCommand(plugin);
+
+    const invokeHostHotkey = (event: KeyboardEvent): void => {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "n") {
+        command?.callback?.();
+      }
+    };
+    document.addEventListener("keydown", invokeHostHotkey);
+    firstDocument.dispatchEvent(
+      keyboardEvent(firstDocument, "n", {
+        code: "KeyN",
+        keyCode: 78,
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(createdFiles).toEqual(["Book A.md"]);
+    });
+    expect(openedFiles).toEqual(["Book A.md"]);
+    expect(runtime.setActiveLeaf).toHaveBeenCalledWith(firstLeaf, {
+      focus: false,
+    });
+    expect(runtime.noticeMessages).toEqual([]);
+
+    document.removeEventListener("keydown", invokeHostHotkey);
+    await firstView.onClose();
+    await secondView.onClose();
   });
 });

@@ -105,6 +105,7 @@ export class EpubKeyBridge {
     if (isCopy || isInteractiveTarget || event.defaultPrevented) {
       return;
     }
+    this.prepareHostForward();
     this.forwardToHost(event);
   };
 
@@ -114,6 +115,7 @@ export class EpubKeyBridge {
     private readonly pageKeyJump: (
       key: "PageUp" | "PageDown",
     ) => void | Promise<void>,
+    private readonly prepareHostForward: () => void = () => undefined,
   ) {
     this.rendition.on("rendered", this.onRendered);
   }
@@ -203,6 +205,7 @@ export class EpubNavigationTools {
     private readonly bookPath: string,
     private readonly book: Book,
     private readonly rendition: Rendition,
+    prepareHostForward: () => void,
   ) {
     this.bookTitle = this.book.loaded.metadata.then((metadata) => metadata.title);
     this.copyPanel = this.createCopyPanel(this.viewerEl);
@@ -213,6 +216,7 @@ export class EpubNavigationTools {
       this.rendition,
       this.viewerEl.ownerDocument,
       (key) => this.pageKeyJump(key),
+      prepareHostForward,
     );
 
     // Pane/layout changes make epub.js reflow and report a fresh
