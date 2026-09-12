@@ -1,6 +1,6 @@
 import { Notice, normalizePath, TFile, TFolder } from "obsidian";
 import type ObservationCarPlugin from "../main";
-import { EpubView } from "../readers/EpubView";
+import { EpubView, EPUB_VIEW_TYPE } from "../readers/EpubView";
 
 export const CREATE_BOOK_NOTE_COMMAND_ID =
   "create-book-note-for-current-book";
@@ -9,24 +9,53 @@ export const CREATE_BOOK_NOTE_COMMAND_ID =
 export function registerCreateBookNoteCommand(
   plugin: ObservationCarPlugin,
 ): void {
+  let mostRecentlyActiveView: EpubView | null = null;
+  plugin.registerEvent(
+    plugin.app.workspace.on("active-leaf-change", (leaf) => {
+      if (leaf?.view instanceof EpubView && leaf.view.file !== null) {
+        mostRecentlyActiveView = leaf.view;
+      }
+    }),
+  );
+
   plugin.addCommand({
     id: CREATE_BOOK_NOTE_COMMAND_ID,
     name: "Create book note for current book",
     icon: "book-open",
-    checkCallback: (checking) => {
-      const book = currentBook(plugin);
-      if (book === null) return false;
-
-      if (checking === false) {
-        void createOrOpenBookNote(plugin, book);
+    callback: () => {
+      const book = currentBook(plugin, mostRecentlyActiveView);
+      if (book === null) {
+        new Notice("Open a book in Observation Car first");
+        return;
       }
-      return true;
+
+      void createOrOpenBookNote(plugin, book);
     },
   });
 }
 
-function currentBook(plugin: ObservationCarPlugin): TFile | null {
-  return plugin.app.workspace.getActiveViewOfType(EpubView)?.file ?? null;
+function currentBook(
+  plugin: ObservationCarPlugin,
+  mostRecentlyActiveView: EpubView | null,
+): TFile | null {
+  const activeBook = plugin.app.workspace.getActiveViewOfType(EpubView)?.file;
+  if (activeBook !== null && activeBook !== undefined) return activeBook;
+
+  const openLeaves = plugin.app.workspace.getLeavesOfType(EPUB_VIEW_TYPE);
+  if (
+    mostRecentlyActiveView !== null &&
+    mostRecentlyActiveView.file !== null &&
+    openLeaves.some((leaf) => leaf.view === mostRecentlyActiveView)
+  ) {
+    return mostRecentlyActiveView.file;
+  }
+
+  for (const leaf of openLeaves) {
+    if (leaf.view instanceof EpubView && leaf.view.file !== null) {
+      return leaf.view.file;
+    }
+  }
+  return null;
 }
 
 /**
