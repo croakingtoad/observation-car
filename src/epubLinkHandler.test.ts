@@ -123,6 +123,34 @@ describe("installEpubLinkHandler", () => {
     expect(reader.openAtFragment).toHaveBeenCalledWith("epubcfi(/6/4!/4/2/1:0)");
   });
 
+  it("routes a generated spine href and jumps the reader to that item", async () => {
+    const book = file("Books/Test.epub");
+    const { app, newLeaf } = appFor(book);
+    installEpubLinkHandler(app);
+
+    await app.workspace.openLinkText(
+      "Books/Test.epub#text/chapter03.xhtml",
+      "Notes/unrelated.md",
+    );
+
+    expect(newLeaf.openFile).toHaveBeenCalledWith(book, undefined);
+    expect(reader.openAtFragment).toHaveBeenCalledWith("text/chapter03.xhtml");
+  });
+
+  it("delegates invalid grammar and PDF fragments on an EPUB link", async () => {
+    const book = file("Books/Test.epub");
+    const { app, original, workspace } = appFor(book);
+    installEpubLinkHandler(app);
+
+    await app.workspace.openLinkText("Books/Test.epub#bad href", "source.md");
+    await app.workspace.openLinkText("Books/Test.epub#epubcfi(nonsense)", "source.md");
+    await app.workspace.openLinkText("Books/Test.epub#page=7", "source.md");
+
+    expect(original).toHaveBeenCalledTimes(3);
+    expect(workspace.getLeaf).not.toHaveBeenCalled();
+    expect(reader.openAtFragment).not.toHaveBeenCalled();
+  });
+
   it("delegates links that are not resolvable EPUB CFI links", async () => {
     const { app, original } = appFor(null);
     installEpubLinkHandler(app);

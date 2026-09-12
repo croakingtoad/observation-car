@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { TFile } from "obsidian";
+import { parseFragment } from "./model/anchor";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
 
 interface EpubLink {
@@ -19,14 +20,16 @@ function parseEpubLink(linktext: string): EpubLink | null {
   if (hash <= 0) return null;
 
   const fragment = linktext.slice(hash + 1);
-  if (!fragment.startsWith("epubcfi(") || !fragment.endsWith(")")) {
+  try {
+    if (parseFragment(fragment).kind === "pdf-page") return null;
+  } catch {
     return null;
   }
   return { linkpath: linktext.slice(0, hash), fragment };
 }
 
 /**
- * Route vault EPUB CFI links through the registered reader view.
+ * Route vault EPUB location links through the registered reader view.
  * Returns a cleanup callback that restores Obsidian's original handler.
  */
 export function installEpubLinkHandler(app: App): () => void {
