@@ -127,9 +127,17 @@
   pointer-events: auto;
 }
 
-.epubjs-hl {
-  background: yellow !important;
-  opacity: 0.6;
+.epub-setup-error {
+  position: absolute;
+  bottom: 0.5em;
+  left: 0.5em;
+  z-index: 15;
+  max-width: 80%;
+  padding: 0.25em 0.5em;
+  font-size: 0.85em;
+  color: var(--text-error, #d05060);
+  background: var(--background-secondary, #222);
+  border-radius: 4px;
 }
 
 .epub-cfi-popup {
