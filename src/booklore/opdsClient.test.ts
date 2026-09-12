@@ -17,7 +17,17 @@ function readFixture(name: string): string {
   return readFileSync(join(fixturesDir, name), "utf8");
 }
 
-const ATOM_BODY = readFixture("root-navigation.xml");
+// Fixtures that are verbatim response bodies (like auth-401.txt) carry a
+// provenance header comment; strip it to get the body exactly as captured.
+function readFixtureBody(name: string): string {
+  const raw = readFileSync(join(fixturesDir, name), "utf8");
+  const marker = raw.indexOf("-->");
+  return marker === -1 ? raw : raw.slice(marker + 3).replace(/^\r?\n/, "");
+}
+
+const AUTH_401_BODY = readFixtureBody("auth-401.txt");
+
+const ATOM_BODY = readFixture("root-catalog.xml");
 const HTML_BODY = readFixture("login-page.html");
 
 interface RecordedCall {
@@ -88,7 +98,7 @@ describe("F5.1 OpdsClient — root catalog", () => {
       basicAuthHeader("opds-user", "s3cret"),
     );
     expect(calls[0].headers.Accept).toBe("application/atom+xml");
-    expect(feed.title).toBe("My Booklore Library");
+    expect(feed.title).toBe("Booklore Catalog");
     expect(feed.url).toBe("https://booklore.example/api/v1/opds");
   });
 
@@ -161,6 +171,24 @@ describe("F5.1 OpdsClient — transport outcome classification", () => {
     );
     const error = await expectOpdsError(client.getRootFeed(), "auth");
     expect(error.status).toBeUndefined();
+  });
+
+  it("maps a 401 carrying Booklore's real plain-text body to auth", async () => {
+    // Live capture (LOCO-101): a wrong OPDS password yields this exact
+    // non-XML body; the client must classify it auth, not not-opds.
+    expect(AUTH_401_BODY).toBe("HTTP Status 401 - Bad credentials");
+    const { transport } = makeTransport({ status: 401, text: AUTH_401_BODY });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: "opds-user",
+        opdsPassword: "bad-pass",
+      }),
+      transport,
+    );
+    const error = await expectOpdsError(client.getRootFeed(), "auth");
+    expect(error.message).toBe("Booklore rejected the OPDS credentials.");
+    expect(error.message).not.toContain("bad-pass");
   });
 
   it.each([

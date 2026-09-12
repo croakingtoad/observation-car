@@ -4,8 +4,11 @@
   a PDF-only entry, a dual-format entry carrying a cover and a thumbnail,
   and an entry with no authors.
   SPEC-DERIVED: hand-authored from OPDS 1.2 (catalog module) and Atom
-  (RFC 4287). NOT captured from a live Booklore instance. Live-captured,
-  redacted fixtures replace this whole set in LOCO-101 (F5.1c).
+  (RFC 4287); not captured from a live Booklore instance. LOCO-101
+  surveyed all 68 books in the live library and found no book carrying
+  more than one format, so the dual-format case has no live equivalent.
+  Kept for the both-formats path (PRD F5.4); its single-format entries are
+  superseded by the live-captured fixtures in this directory.
 -->
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>urn:uuid:1f2e3d4c-all-books</id>

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fixture: root-catalog — the root catalog feed: a navigation feed whose
+  eight entries each carry a single rel="subsection" link (OPDS 1.0-style,
+  not rel="http://opds-spec.org/navigation") and a <content type="text">
+  blurb. It carries no OpenSearch pagination metadata.
+  LIVE CAPTURE (LOCO-101, 2026-09-12 UTC): verbatim response from a real
+  Booklore instance (the requester's self-hosted library), fetched over
+  OPDS Basic Auth.
+  Request: GET /api/v1/opds
+  Redaction: the instance host (a tailnet address) was substituted with
+  booklore.example. Booklore serves only site-relative hrefs, so no host
+  string appears in the body — substitution verified at capture.
+--><feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>urn:booklore:root</id>
+  <title>Booklore Catalog</title>
+  <updated>2026-09-12T01:06:37.645665693Z</updated>
+  <link rel="self" href="/api/v1/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start" href="/api/v1/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="search" type="application/opensearchdescription+xml" title="Search" href="/api/v1/opds/search.opds"/>
+  <entry>
+    <title>All Books</title>
+    <id>urn:booklore:catalog:all</id>
+    <updated>2026-09-12T01:06:37.645678800Z</updated>
+    <link rel="subsection" href="/api/v1/opds/catalog?page=1&amp;size=50" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <content type="text">Browse all available books</content>
+  </entry>
+  <entry>
+    <title>Recently Added</title>
+    <id>urn:booklore:catalog:recent</id>
+    <updated>2026-09-12T01:06:37.645686165Z</updated>
+    <link rel="subsection" href="/api/v1/opds/recent?page=1&amp;size=50" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <content type="text">Recently added books</content>
+  </entry>
+  <entry>
+    <title>Libraries</title>
+    <id>urn:booklore:navigation:libraries</id>
+    <updated>2026-09-12T01:06:37.645688256Z</updated>
+    <link rel="subsection" href="/api/v1/opds/libraries" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+    <content type="text">Browse books by library</content>
+  </entry>
+  <entry>
+    <title>Shelves</title>
+    <id>urn:booklore:navigation:shelves</id>
+    <updated>2026-09-12T01:06:37.645689610Z</updated>
+    <link rel="subsection" href="/api/v1/opds/shelves" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+    <content type="text">Browse your personal shelves</content>
+  </entry>
+  <entry>
+    <title>Magic Shelves</title>
+    <id>urn:booklore:navigation:magic-shelves</id>
+    <updated>2026-09-12T01:06:37.645690989Z</updated>
+    <link rel="subsection" href="/api/v1/opds/magic-shelves" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+    <content type="text">Browse your smart, dynamic shelves</content>
+  </entry>
+  <entry>
+    <title>Authors</title>
+    <id>urn:booklore:navigation:authors</id>
+    <updated>2026-09-12T01:06:37.645692257Z</updated>
+    <link rel="subsection" href="/api/v1/opds/authors" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+    <content type="text">Browse books by author</content>
+  </entry>
+  <entry>
+    <title>Series</title>
+    <id>urn:booklore:navigation:series</id>
+    <updated>2026-09-12T01:06:37.645693479Z</updated>
+    <link rel="subsection" href="/api/v1/opds/series" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+    <content type="text">Browse books by series</content>
+  </entry>
+  <entry>
+    <title>Surprise Me</title>
+    <id>urn:booklore:catalog:surprise</id>
+    <updated>2026-09-12T01:06:37.645694621Z</updated>
+    <link rel="subsection" href="/api/v1/opds/surprise" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <content type="text">25 random books from the catalog</content>
+  </entry>
+</feed>

@@ -3,7 +3,10 @@ import {
   type OpdsEntry,
   type OpdsFeed,
   type OpdsLink,
+  type OpdsOpenSearchMeta,
   type OpdsPagination,
+  type OpenSearchDescription,
+  type OpenSearchUrl,
 } from "./opdsTypes";
 
 /**
@@ -18,17 +21,34 @@ import {
  * `atom:`, or (invalid but seen in the wild) omits it entirely parses the
  * same way. Missing or empty optional elements yield empty values, never a
  * throw; only a response that is not an Atom feed at all throws.
+ *
+ * Shape verified against live Booklore captures (LOCO-101 fixtures): every
+ * href is site-relative and resolves against the feed URL; navigation
+ * entries use the legacy `subsection` rel; acquisition and search feeds
+ * carry `opensearch:` pagination metadata; entries carry Dublin Core
+ * `dc:publisher`/`dc:language`; the back link is `rel="previous"`;
+ * summaries escape their HTML into the element's text.
  */
 
 /** OpenSearch description media type advertised by OPDS 1.2 §3.1.1. */
 const OPEN_SEARCH_TYPE = "application/opensearchdescription+xml";
 /** OPDS acquisition rel; subtypes (`/open-access`, `/buy`, …) share the prefix. */
 const ACQUISITION_REL_PREFIX = "http://opds-spec.org/acquisition";
-const NAVIGATION_REL = "http://opds-spec.org/navigation";
+/**
+ * Rels that mark the link to an entry's sub-feed. Booklore sends the legacy
+ * OPDS 1.0 `subsection` rel on every navigation entry (LOCO-101 capture);
+ * OPDS 1.2's own rel is accepted alongside it.
+ */
+const NAVIGATION_RELS = new Set([
+  "http://opds-spec.org/navigation",
+  "subsection",
+]);
 const IMAGE_RELS = new Set([
   "http://opds-spec.org/image",
   "http://opds-spec.org/image/thumbnail",
 ]);
+/** Rels for the "previous page" link; Booklore sends `previous`. */
+const PREV_RELS = ["previous", "prev"];
 
 /**
  * Parse an OPDS 1.2 (Atom) feed into the `OpdsFeed` shape.
@@ -57,6 +77,53 @@ export function parseOpdsFeed(xml: string, feedUrl: string): OpdsFeed {
   return parseFeed(root, feedUrl);
 }
 
+/**
+ * Parse an OpenSearch description document (OPDS 1.2 §3.1.1) into the
+ * search-URL template(s) F5.3 fills with the query.
+ *
+ * @param xml - Raw document body exactly as the server returned it.
+ * @param docUrl - Absolute URL the document was fetched from; a relative
+ *   `template` (as Booklore sends) resolves against it.
+ * @returns The parsed description.
+ * @throws OpdsError with `kind: "not-opds"` when the body is not a
+ *   parseable OpenSearch description document.
+ */
+export function parseOpenSearchDescription(
+  xml: string,
+  docUrl: string,
+): OpenSearchDescription {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const root = doc.documentElement;
+  if (root === null) {
+    throw notOpds("the response is empty");
+  }
+  if (root.localName === "parsererror") {
+    throw notOpds("the response is not well-formed XML");
+  }
+  if (root.localName !== "OpenSearchDescription") {
+    throw notOpds(
+      `the response root is <${root.tagName}>, not an OpenSearch description`,
+    );
+  }
+  const urls: OpenSearchUrl[] = [];
+  for (const urlElement of directChildren(root, "Url")) {
+    const template = attrOf(urlElement, "template");
+    // A <Url> without a template cannot be filled; skip it.
+    if (template === "") {
+      continue;
+    }
+    urls.push({
+      type: attrOf(urlElement, "type"),
+      template: resolveHref(template, docUrl),
+    });
+  }
+  return {
+    shortName: textOf(directChild(root, "ShortName")),
+    description: textOf(directChild(root, "Description")),
+    urls,
+  };
+}
+
 function notOpds(reason: string): OpdsError {
   return new OpdsError("not-opds", `Not an OPDS feed: ${reason}.`);
 }
@@ -81,8 +148,35 @@ function textOf(element: Element | null): string {
   return element === null ? "" : (element.textContent ?? "").trim();
 }
 
+/**
+ * Trimmed text of an element reduced to displayable prose. `textContent`
+ * already flattens real markup (`<summary type="html"><p>…</p></summary>`);
+ * Booklore instead escapes its markup into the text
+ * (`<summary>&lt;p&gt;…&lt;/p&gt;</summary>`), so residual `<…>` tag text is
+ * stripped as well.
+ */
+function summaryText(element: Element | null): string {
+  if (element === null) {
+    return "";
+  }
+  return (element.textContent ?? "").replace(/<[^>]*>/g, "").trim();
+}
+
 function attrOf(element: Element, name: string): string {
   return element.getAttribute(name) ?? "";
+}
+
+/**
+ * Parse OpenSearch metadata numbers; `null` when the element is missing,
+ * empty, or not a finite number (Booklore sends plain integers).
+ */
+function parseCount(text: string): number | null {
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : null;
 }
 
 /**
@@ -120,7 +214,7 @@ function parseEntry(element: Element, baseUrl: string): OpdsEntry {
     link.rel.startsWith(ACQUISITION_REL_PREFIX),
   );
   const images = links.filter((link) => IMAGE_RELS.has(link.rel));
-  const navigation = links.find((link) => link.rel === NAVIGATION_REL) ?? null;
+  const navigation = links.find((link) => NAVIGATION_RELS.has(link.rel)) ?? null;
 
   const authors: string[] = [];
   for (const author of directChildren(element, "author")) {
@@ -144,9 +238,13 @@ function parseEntry(element: Element, baseUrl: string): OpdsEntry {
     authors,
     updated: textOf(directChild(element, "updated")),
     summary:
-      textOf(directChild(element, "summary")) ||
-      textOf(directChild(element, "content")),
+      summaryText(directChild(element, "summary")) ||
+      summaryText(directChild(element, "content")),
     categories,
+    // Dublin Core metadata, matched by local name like everything else in
+    // this parser; passed through unchanged.
+    publisher: textOf(directChild(element, "publisher")),
+    language: textOf(directChild(element, "language")),
     // An entry with at least one acquisition link is downloadable;
     // everything else (including a bare catalog pointer) navigates.
     kind: acquisitions.length > 0 ? "acquisition" : "navigation",
@@ -159,6 +257,11 @@ function parseEntry(element: Element, baseUrl: string): OpdsEntry {
 
 function firstHref(links: OpdsLink[], rel: string): string | null {
   const link = links.find((candidate) => candidate.rel === rel);
+  return link !== undefined && link.href !== "" ? link.href : null;
+}
+
+function firstHrefAny(links: OpdsLink[], rels: string[]): string | null {
+  const link = links.find((candidate) => rels.includes(candidate.rel));
   return link !== undefined && link.href !== "" ? link.href : null;
 }
 
@@ -178,9 +281,17 @@ function parseFeed(root: Element, feedUrl: string): OpdsFeed {
 
   const pagination: OpdsPagination = {
     next: firstHref(links, "next"),
-    prev: firstHref(links, "prev"),
+    prev: firstHrefAny(links, PREV_RELS),
     self: firstHref(links, "self"),
     start: firstHref(links, "start"),
+    first: firstHref(links, "first"),
+    last: firstHref(links, "last"),
+  };
+
+  const opensearch: OpdsOpenSearchMeta = {
+    totalResults: parseCount(textOf(directChild(root, "totalResults"))),
+    startIndex: parseCount(textOf(directChild(root, "startIndex"))),
+    itemsPerPage: parseCount(textOf(directChild(root, "itemsPerPage"))),
   };
 
   return {
@@ -191,6 +302,7 @@ function parseFeed(root: Element, feedUrl: string): OpdsFeed {
     links,
     search,
     pagination,
+    opensearch,
     entries: directChildren(root, "entry").map((entry) =>
       parseEntry(entry, feedUrl),
     ),

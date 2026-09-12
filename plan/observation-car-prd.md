@@ -162,7 +162,7 @@ Settings only, plus a small download index `{booklore_id → vault path, etag/up
 ### E005 — Booklore integration (P0)
 - F5.1 OPDS client using Obsidian `requestUrl` (works on mobile, avoids CORS). Basic Auth from settings. Parse Atom XML with `DOMParser` (no extra dependency).
 - F5.2 Browse: root catalog → navigation feeds → acquisition entries; paginate via `rel="next"`.
-- F5.3 Search: use the catalog's OpenSearch link if advertised; otherwise fetch the "all books" feed and filter client-side by title/author. Verify against the live instance during implementation.
+- F5.3 Search: use the catalog's OpenSearch link. Verified against the live Booklore instance (2026-09-12): it is advertised at `/api/v1/opds/search.opds` with template `/api/v1/opds/catalog?q={searchTerms}`; server-side search is a case-insensitive substring match over title and author, and the 68-book catalog is paged by `?page=N&size=M` — no client-side filtering fallback is needed.
 - F5.4 Modal: "Open from Booklore" — fuzzy search box, results with title/author/format badges, cover thumbnail if cheap. Prefer EPUB when both formats exist; let the user pick.
 - F5.5 Download: acquisition link with `type` `application/epub+zip` or `application/pdf` → `requestUrl` (arraybuffer) → `vault.adapter.writeBinary` into the books folder. Filename from title (sanitized). Record in download index. Skip download if already present and unchanged.
 - F5.6 Create/open the book note with frontmatter seeded from the OPDS entry (title, author(s), booklore id/url, format, cover if downloaded), then open reader + note side by side.
@@ -259,7 +259,6 @@ Critical path: E001 parser/anchors → E002 location events → E004 scroll-sync
 10. Fold only: with the reader open unfolded, fold the phone → Obsidian drops to phone mode → the reader remains, "Flip to note" opens the note at the current section, Alt+N-equivalent toolbar button inserts a section and flips. Unfold → the split is restored (or offered) with pairing intact.
 
 ## 11. Open questions (resolve during implementation; don't block M1)
-- Does Booklore's OPDS advertise OpenSearch? If not, confirm the "all books" feed is paginated and size-reasonable for client-side filtering.
 - Can the pdf.js eventBus be reached from the core PDF view on iPadOS? If not, F3.6 polling fallback becomes the mobile path.
 - Should chapter labels come from the EPUB TOC title (preferred) or "Ch. N"? Default: TOC title when resolvable, else number.
 - Anchor heading level: H2 default. Confirm this doesn't collide with existing note conventions in the vault.
