@@ -5,6 +5,7 @@ import {
   registerOpenBookNoteCommand,
 } from "./commands/openBookNote";
 import { registerJumpToSectionCommand } from "./commands/jumpToSection";
+import { registerSplitRatioToggleCommand } from "./commands/toggleSplitRatio";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -137,6 +138,7 @@ export default class ObservationCarPlugin extends Plugin {
     registerCreateBookNoteCommand(this);
     registerOpenBookNoteCommand(this);
     registerJumpToSectionCommand(this);
+    registerSplitRatioToggleCommand(this);
 
     // Obsidian has no leaf-close event. `layout-change` covers closes and
     // moves; the other events make a newly loaded reader visible quickly.
