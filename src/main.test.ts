@@ -445,6 +445,72 @@ describe("plugin wiring (substituted obsidian module)", () => {
     },
   );
 
+  it("escapes apostrophes in a single-quoted source placeholder", async () => {
+    plugin.settings = {
+      ...plugin.settings,
+      noteTemplate: [
+        "---",
+        "type: book-note",
+        "source: '{{source}}'",
+        "format: {{format}}",
+        "---",
+        "",
+      ].join("\n"),
+    };
+    const source = "Books/The Reader's Journey.epub";
+    const book = addBookFile(source);
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const content = fake.contents.get("Reading/The Reader's Journey.md");
+    expect(content).toBeDefined();
+    if (content === undefined) return;
+    expect(content).toContain(
+      "source: '[[Books/The Reader''s Journey.epub]]'",
+    );
+    const renderedSource = parseBookNote(content).frontmatter.source;
+    expect(renderedSource).toBe(source);
+    expect(
+      renderedSource === null
+        ? null
+        : fake.linkDests.get(renderedSource.toLowerCase()),
+    ).toBe(source);
+  });
+
+  it("preserves quotes around a quoted format placeholder", async () => {
+    plugin.settings = {
+      ...plugin.settings,
+      noteTemplate: [
+        "---",
+        "type: book-note",
+        "source: {{source}}",
+        "format: '{{format}}'",
+        "---",
+        "",
+      ].join("\n"),
+    };
+    const book = fake.files.get(SOURCE);
+    expect(book).toBeDefined();
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const content = fake.contents.get("Reading/Surprised by Grace.md");
+    expect(content).toBeDefined();
+    if (content === undefined) return;
+    expect(content).toContain("format: 'epub'");
+    expect(parseBookNote(content).frontmatter.format).toBe("epub");
+  });
+
   it("preserves a literal author placeholder in the book filename", async () => {
     const source = "Books/Foo {{author}} Bar.epub";
     const book = addBookFile(source);
