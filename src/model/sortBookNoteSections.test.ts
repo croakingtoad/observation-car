@@ -81,6 +81,104 @@ describe("sortSectionsByBookPosition", () => {
     );
   });
 
+  it("keeps mixed LF and CRLF terminators at their document boundaries", () => {
+    const prefix = note([
+      `## [[${SOURCE}#${LATE}|Later]]`,
+      "later body",
+    ]);
+    const input = [
+      `${prefix}\r`,
+      `## [[${SOURCE}#${EARLY}|Earlier]]`,
+      "earlier body",
+    ].join("\n");
+    const expected = note([
+      `## [[${SOURCE}#${EARLY}|Earlier]]`,
+      "earlier body\r",
+      `## [[${SOURCE}#${LATE}|Later]]`,
+      "later body",
+    ]);
+
+    expect(sortParsed(input)).toBe(expected);
+  });
+
+  it("preserves file order when sections share the same book position", () => {
+    const input = note([
+      `## [[${SOURCE}#${EARLY}|First at position]]`,
+      "first body",
+      `## [[${SOURCE}#${LATE}|Second at position]]`,
+      "second body",
+    ]);
+    const parsed = parseBookNote(input).sections;
+    const sections: readonly BookNoteSection[] = [
+      parsed[0],
+      { ...parsed[1], position: parsed[0].position },
+    ];
+
+    expect(sortSectionsByBookPosition(input, sections)).toBe(input);
+  });
+
+  it("rejects a gap between supplied section ranges", () => {
+    const input = note([
+      `## [[${SOURCE}#${EARLY}|Earlier]]`,
+      "earlier body",
+      `## [[${SOURCE}#${LATE}|Later]]`,
+      "later body",
+    ]);
+    const parsed = parseBookNote(input).sections;
+    const sections: readonly BookNoteSection[] = [
+      parsed[0],
+      {
+        ...parsed[1],
+        bodyRange: {
+          start: parsed[1].bodyRange.start + 1,
+          end: parsed[1].bodyRange.end,
+        },
+      },
+    ];
+
+    expect(() => sortSectionsByBookPosition(input, sections)).toThrow(
+      RangeError,
+    );
+  });
+
+  it("rejects an end-before-start section range", () => {
+    const input = note([
+      `## [[${SOURCE}#${EARLY}|Earlier]]`,
+      "earlier body",
+      `## [[${SOURCE}#${LATE}|Later]]`,
+      "later body",
+    ]);
+    const parsed = parseBookNote(input).sections;
+    const sections: readonly BookNoteSection[] = [
+      {
+        ...parsed[0],
+        bodyRange: {
+          start: parsed[0].bodyRange.start,
+          end: parsed[0].bodyRange.start - 1,
+        },
+      },
+      parsed[1],
+    ];
+
+    expect(() => sortSectionsByBookPosition(input, sections)).toThrow(
+      RangeError,
+    );
+  });
+
+  it("accepts supplied sections in non-file order", () => {
+    const input = note([
+      `## [[${SOURCE}#${EARLY}|Earlier]]`,
+      "earlier body",
+      `## [[${SOURCE}#${LATE}|Later]]`,
+      "later body",
+    ]);
+    const parsed = parseBookNote(input).sections;
+
+    expect(
+      sortSectionsByBookPosition(input, [parsed[1], parsed[0]]),
+    ).toBe(input);
+  });
+
   it("is a no-op when there are no sections or they are already sorted", () => {
     const plain = "preamble\r\ntrailing\r\n";
     expect(sortSectionsByBookPosition(plain, [])).toBe(plain);

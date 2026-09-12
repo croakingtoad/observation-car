@@ -432,6 +432,22 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(setValue).toHaveBeenCalledOnce();
   });
 
+  it("does not run the section-sort command without a backing file", () => {
+    const command = fake.registeredCommands.get(
+      "sort-sections-by-book-position",
+    );
+    if (command?.editorCallback === undefined) {
+      throw new Error("section-sort editor command was not registered");
+    }
+    const getValue = vi.fn(() => NOTE_TEXT);
+    const setValue = vi.fn();
+
+    command.editorCallback({ getValue, setValue }, { file: undefined });
+
+    expect(getValue).not.toHaveBeenCalled();
+    expect(setValue).not.toHaveBeenCalled();
+  });
+
   it("a changed event caches a candidate note after the debounce window", async () => {
     const file = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
     expect(plugin.getBookNote("Reading/A.md")).toBeUndefined();
