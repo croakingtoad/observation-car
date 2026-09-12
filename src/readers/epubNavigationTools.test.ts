@@ -11,7 +11,7 @@ const SAME_SECTION_CFI = "epubcfi(/6/4!/4/2/6:0)";
 const ZERO_RECT = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
 
 interface FakeContents extends Contents {
-  state: { text: string; collapsed: boolean; connected: boolean };
+  state: { text: string; collapsed: boolean };
   events: Map<string, (event?: unknown) => void>;
 }
 
@@ -21,7 +21,6 @@ function makeContents(
   const state = {
     text: options.text ?? "",
     collapsed: options.collapsed ?? false,
-    connected: true,
   };
   const events = new Map<string, (event?: unknown) => void>();
   const contents = {
@@ -34,9 +33,6 @@ function makeContents(
       body: {
         setAttribute: () => undefined,
         focus: () => undefined,
-        get isConnected() {
-          return state.connected;
-        },
       },
       defaultView: null,
     },
@@ -54,6 +50,26 @@ function makeContents(
     },
   };
   return contents as unknown as FakeContents;
+}
+
+function makeIframeContents(): {
+  contents: Contents;
+  iframe: HTMLIFrameElement;
+} {
+  const iframe = document.createElement("iframe");
+  document.body.appendChild(iframe);
+  const iframeDocument = iframe.contentDocument;
+  const iframeWindow = iframe.contentWindow;
+  if (iframeDocument === null || iframeWindow === null) {
+    throw new Error("jsdom did not create an iframe browsing context");
+  }
+  return {
+    contents: {
+      document: iframeDocument,
+      window: iframeWindow,
+    } as unknown as Contents,
+    iframe,
+  };
 }
 
 function makeRendition(): {
@@ -149,12 +165,12 @@ describe("EpubSelectionTracker — selection state machine", () => {
   });
 
   it("returns null once the selection's iframe is detached", () => {
-    const contents = makeContents();
+    const { contents, iframe } = makeIframeContents();
     const tracker = new EpubSelectionTracker();
     tracker.setSelected(CFI_RANGE, "some text", contents);
     expect(tracker.getSelection()).not.toBeNull();
 
-    contents.state.connected = false;
+    iframe.remove();
 
     expect(tracker.getSelection()).toBeNull();
   });
@@ -212,6 +228,20 @@ describe("EpubNavigationTools — rendition event wiring", () => {
     emit("selected", CFI_RANGE, makeContents({ text: "quoted words" }));
 
     emit("relocated", { start: { cfi: OTHER_SECTION_CFI } });
+
+    expect(tracker.getSelection()).toBeNull();
+  });
+
+  it("clears a detached selection when resize re-renders the same section", async () => {
+    const tracker = new EpubSelectionTracker();
+    const { emit } = await makeTools(tracker);
+    const { contents, iframe } = makeIframeContents();
+    tracker.setSelected(CFI_RANGE, "quoted words", contents);
+
+    emit("resized");
+    iframe.remove();
+    emit("rendered", undefined, makeContents());
+    emit("relocated", { start: { cfi: SAME_SECTION_CFI } });
 
     expect(tracker.getSelection()).toBeNull();
   });

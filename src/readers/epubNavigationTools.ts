@@ -26,6 +26,11 @@ import { AnchorError, buildEpubCfiFragment } from "../model/anchor";
 
 const EPUBCFI_WRAPPER = "epubcfi(";
 
+interface EpubRenderedView {
+  document: Document;
+  window: Window;
+}
+
 /**
  * The spine component (before "!") of a CFI, with or without the
  * `epubcfi(...)` wrapper — the section the CFI points into.
@@ -51,18 +56,18 @@ function sectionOfCfi(cfi: string): string {
  *   (defensive; the selected handler also forwards an unreadable
  *   selection this way),
  * - `clear` drops it when the user collapses the selection in the
- *   iframe (tap-away) or when the book is disposed,
+ *   iframe (tap-away), when epub.js renders a fresh view, or when the
+ *   book is disposed,
  * - `clearUnlessInLocation` drops it when the rendition reports a
  *   location in another section,
- * - `getSelection` drops it lazily when the selection's iframe has
- *   been torn down — a stale selection from a previous section can
- *   never be returned.
+ * - `getSelection` validates the actual iframe element captured with
+ *   the selection and drops the state if that element was detached.
  */
 export class EpubSelectionTracker {
   private selection: {
     text: string;
     cfiRange: string;
-    contents: Contents;
+    frameElement: Element | null;
   } | null = null;
 
   /** Record a `selected` event; an empty CFI or blank text clears. */
@@ -72,7 +77,11 @@ export class EpubSelectionTracker {
       this.clear();
       return;
     }
-    this.selection = { text: trimmed, cfiRange, contents };
+    this.selection = {
+      text: trimmed,
+      cfiRange,
+      frameElement: contents.window.frameElement ?? null,
+    };
   }
 
   /** Drop the selection: collapse in the iframe, page away, dispose. */
@@ -107,9 +116,8 @@ export class EpubSelectionTracker {
     if (selection === null) {
       return null;
     }
-    if (selection.contents.document.body.isConnected === false) {
-      // The view that held the selection was torn down (page turn,
-      // re-render, dispose); the retained CFI is stale with it.
+    if (selection.frameElement !== null && selection.frameElement.isConnected === false) {
+      // The actual iframe that held the selection left the host DOM.
       this.clear();
       return null;
     }
@@ -168,7 +176,12 @@ export class EpubNavigationTools {
   }
 
   private addKeyListeners(): void {
-    this.rendition.on("rendered", (_section: unknown, contents: Contents) => {
+    this.rendition.on("rendered", (_section: unknown, contents: EpubRenderedView) => {
+      // A rendered view has no selection yet. In particular, epub.js
+      // destroys and replaces the iframe on resize before relocating
+      // to the same CFI, so relocation alone cannot detect this clear.
+      this.selectionTracker.clear();
+
       contents.document.addEventListener("keydown", (event: KeyboardEvent) => {
         if (event.key === "ArrowLeft") {
           void this.rendition.prev();
@@ -201,7 +214,7 @@ export class EpubNavigationTools {
    * for a non-collapsed range, so the collapse reaches us here, on the
    * iframe, not through the rendition.
    */
-  private onIframeSelectionChange(contents: Contents): void {
+  private onIframeSelectionChange(contents: EpubRenderedView): void {
     const selection = contents.window.getSelection();
     const active =
       selection !== null &&
