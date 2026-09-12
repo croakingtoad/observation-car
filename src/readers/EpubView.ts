@@ -6,8 +6,10 @@
  * provenance in `VENDOR_NOTICE.md`.
  *
  * F2.1 registers this view for `.epub` so a book opens in-plugin; the
- * location/selection/link-navigation API surface the sync layer (E004)
- * consumes arrives with F2.5–F2.9.
+ * selection half (`getSelection`) of the API surface the sync layer
+ * (E004) consumes (PRD §8) is in since F2.6; the location half
+ * (`on("location")` / `getLocation`) arrives with F2.5 and link
+ * navigation with F2.7–F2.9.
  *
  * `FileView` (an `ItemView` subclass, like the core PDF view) is the base:
  * Obsidian routes `leaf.openFile(file)` for a registered extension to
@@ -15,7 +17,7 @@
  */
 import { FileView, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
-import { EpubNavigationTools } from "./epubNavigationTools";
+import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
 import { EpubThemes } from "./epubThemes";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
@@ -27,6 +29,7 @@ export class EpubView extends FileView {
   private book: Book | null = null;
   private rendition: Rendition | null = null;
   private themes: EpubThemes | null = null;
+  private selectionTracker: EpubSelectionTracker | null = null;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -38,6 +41,17 @@ export class EpubView extends FileView {
 
   getDisplayText(): string {
     return this.file?.basename ?? "EPUB Reader";
+  }
+
+  /**
+   * PRD §8 Reader contract: the current selection in the book as
+   * `{text, fragment}` — `fragment` built by `buildEpubCfiFragment` —
+   * or `null` when nothing is selected. F4.6 "new note here" builds
+   * on this; a bad CFI resolves to `null` rather than a throw so that
+   * path can never crash on a stray selection.
+   */
+  getSelection(): { text: string; fragment: string } | null {
+    return this.selectionTracker?.getSelection() ?? null;
   }
 
   async onLoadFile(file: TFile): Promise<void> {
@@ -60,6 +74,7 @@ export class EpubView extends FileView {
 
     const bytes = await this.app.vault.readBinary(file);
     const viewerEl = this.contentEl.createDiv({ cls: "epub-viewer" });
+    this.selectionTracker = new EpubSelectionTracker();
 
     this.book = ePub(bytes);
     this.rendition = this.book.renderTo(viewerEl, {
@@ -71,12 +86,16 @@ export class EpubView extends FileView {
       file.path,
       this.book,
       this.rendition,
+      this.selectionTracker,
     );
     this.themes = new EpubThemes(this.rendition);
     await this.rendition.display();
   }
 
   private disposeReader(): void {
+    // A selection only lives inside a rendition's iframe; with the
+    // reader gone, the retained one is stale by definition.
+    this.selectionTracker = null;
     this.themes?.destroy();
     this.themes = null;
     this.rendition?.destroy();

@@ -22,7 +22,110 @@
 import { type Book, type Contents, type Rendition } from "epubjs";
 import type Locations from "epubjs/types/locations";
 import { type Location } from "epubjs/types/rendition";
-import { buildEpubCfiFragment } from "../model/anchor";
+import { AnchorError, buildEpubCfiFragment } from "../model/anchor";
+
+const EPUBCFI_WRAPPER = "epubcfi(";
+
+/**
+ * The spine component (before "!") of a CFI, with or without the
+ * `epubcfi(...)` wrapper — the section the CFI points into.
+ */
+function sectionOfCfi(cfi: string): string {
+  const bare = cfi.startsWith(EPUBCFI_WRAPPER)
+    ? cfi.slice(EPUBCFI_WRAPPER.length)
+    : cfi;
+  const separator = bare.indexOf("!");
+  return separator === -1 ? bare : bare.slice(0, separator);
+}
+
+/**
+ * Retains the rendition's current selection so the view can answer
+ * `getSelection()` (PRD §8 Reader contract).
+ *
+ * The rendition only ever emits `selected` for a non-collapsed range —
+ * it never reports a collapse — so clearing is owned here, from four
+ * directions:
+ *
+ * - `setSelected` records a real selection and clears on an empty CFI
+ *   or whitespace-only text
+ *   (defensive; the selected handler also forwards an unreadable
+ *   selection this way),
+ * - `clear` drops it when the user collapses the selection in the
+ *   iframe (tap-away) or when the book is disposed,
+ * - `clearUnlessInLocation` drops it when the rendition reports a
+ *   location in another section,
+ * - `getSelection` drops it lazily when the selection's iframe has
+ *   been torn down — a stale selection from a previous section can
+ *   never be returned.
+ */
+export class EpubSelectionTracker {
+  private selection: {
+    text: string;
+    cfiRange: string;
+    contents: Contents;
+  } | null = null;
+
+  /** Record a `selected` event; an empty CFI or blank text clears. */
+  setSelected(cfiRange: string, text: string, contents: Contents): void {
+    const trimmed = text.trim();
+    if (cfiRange.length === 0 || trimmed.length === 0) {
+      this.clear();
+      return;
+    }
+    this.selection = { text: trimmed, cfiRange, contents };
+  }
+
+  /** Drop the selection: collapse in the iframe, page away, dispose. */
+  clear(): void {
+    this.selection = null;
+  }
+
+  /**
+   * Drop the selection when the rendition moved to another section.
+   * `displayedCfi` is the CFI of the newly reported location; a
+   * relocation within the same section (a scroll in a fixed-layout
+   * book) keeps it.
+   */
+  clearUnlessInLocation(displayedCfi: string): void {
+    const selection = this.selection;
+    if (selection === null) {
+      return;
+    }
+    if (sectionOfCfi(selection.cfiRange) !== sectionOfCfi(displayedCfi)) {
+      this.clear();
+    }
+  }
+
+  /**
+   * PRD §8 Reader contract: `{text, fragment}` for the current
+   * selection, `null` when there is no selection. A malformed CFI
+   * resolves to `null` rather than a throw, so F4.6 "new note here"
+   * can never crash on a bad selection.
+   */
+  getSelection(): { text: string; fragment: string } | null {
+    const selection = this.selection;
+    if (selection === null) {
+      return null;
+    }
+    if (selection.contents.document.body.isConnected === false) {
+      // The view that held the selection was torn down (page turn,
+      // re-render, dispose); the retained CFI is stale with it.
+      this.clear();
+      return null;
+    }
+    try {
+      return {
+        text: selection.text,
+        fragment: buildEpubCfiFragment(selection.cfiRange),
+      };
+    } catch (error) {
+      if (error instanceof AnchorError) {
+        return null;
+      }
+      throw error;
+    }
+  }
+}
 
 export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
@@ -37,6 +140,7 @@ export class EpubNavigationTools {
     private readonly bookPath: string,
     private readonly book: Book,
     private readonly rendition: Rendition,
+    private readonly selectionTracker: EpubSelectionTracker,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
     this.createNavigationButton(viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
@@ -48,6 +152,9 @@ export class EpubNavigationTools {
     // Pane/layout changes make epub.js reflow and report a fresh
     // location; re-display the one we had so the page does not jump.
     this.rendition.on("relocated", (loc: Location) => {
+      // The selection's section may no longer be on screen (page
+      // turn); a same-section relocation (scroll) keeps it.
+      this.selectionTracker.clearUnlessInLocation(loc.start.cfi);
       if (this.needsCorrection) {
         this.needsCorrection = false;
         void this.rendition.display(this.currentLocation?.start.cfi);
@@ -75,10 +182,34 @@ export class EpubNavigationTools {
         }
       });
 
+      // The rendition never emits `selected` for a collapsed range,
+      // so a tap-away inside the book is caught on the iframe's own
+      // selectionchange to clear the retained selection (F2.6).
+      contents.document.addEventListener("selectionchange", () => {
+        this.onIframeSelectionChange(contents);
+      });
+
       // Keep focus on the iframe so page keys keep working.
       (contents.document.body as HTMLElement).setAttribute("tabindex", "0");
       (contents.document.body as HTMLElement).focus();
     });
+  }
+
+  /**
+   * Clear the retained selection once the user collapses it inside
+   * the book (tap-away, Escape, re-tap): epub.js only emits `selected`
+   * for a non-collapsed range, so the collapse reaches us here, on the
+   * iframe, not through the rendition.
+   */
+  private onIframeSelectionChange(contents: Contents): void {
+    const selection = contents.window.getSelection();
+    const active =
+      selection !== null &&
+      selection.rangeCount > 0 &&
+      selection.getRangeAt(0).collapsed === false;
+    if (active === false) {
+      this.selectionTracker.clear();
+    }
   }
 
   /** Chapter-level jump: PageUp = next chapter, PageDown = previous. */
@@ -103,13 +234,12 @@ export class EpubNavigationTools {
     const title = metadata.title;
 
     this.rendition.on("selected", (cfiRange: string, contents: Contents) => {
-      if (cfiRange.length === 0) {
-        return;
-      }
       const selection = contents.window.getSelection();
-      if (selection === null || selection.rangeCount === 0) {
+      if (cfiRange.length === 0 || selection === null || selection.rangeCount === 0) {
+        this.selectionTracker.clear();
         return;
       }
+      this.selectionTracker.setSelected(cfiRange, selection.toString(), contents);
 
       const range = selection.getRangeAt(0);
       const rect = range.getBoundingClientRect();
