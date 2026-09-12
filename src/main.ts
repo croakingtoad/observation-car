@@ -4,6 +4,7 @@ import {
   openBookNoteBesideRecentReader,
   registerOpenBookNoteCommand,
 } from "./commands/openBookNote";
+import { registerSplitRatioToggleCommand } from "./commands/toggleSplitRatio";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -133,6 +134,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
     registerCreateBookNoteCommand(this);
     registerOpenBookNoteCommand(this);
+    registerSplitRatioToggleCommand(this);
 
     // Obsidian has no leaf-close event. `layout-change` covers closes and
     // moves; the other events make a newly loaded reader visible quickly.

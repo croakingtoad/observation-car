@@ -23,6 +23,7 @@ interface RecordedCommand {
   id: string;
   name: string;
   editorCallback?: (editor: unknown, context: unknown) => unknown;
+  checkCallback?: (checking: boolean) => boolean | void;
 }
 
 /**
@@ -617,6 +618,15 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(command.checkCallback?.(true)).toBe(true);
     await settleCommand();
     expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("registers the reader/note split-ratio toggle command", () => {
+    const command = fake.registeredCommands.get(
+      "toggle-reader-note-split-ratio",
+    );
+
+    expect(command?.name).toBe("Toggle reader/note split ratio");
+    expect(command?.checkCallback).toBeTypeOf("function");
   });
 
   it("creates a templated note in the configured folder only when invoked", async () => {
