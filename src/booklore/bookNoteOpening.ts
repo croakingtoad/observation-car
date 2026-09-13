@@ -14,7 +14,10 @@ import {
 } from "./bookDownload";
 import type { OpdsEntry, OpdsLink } from "./opdsTypes";
 
-type DownloadEntry = Pick<OpdsEntry, "id" | "title" | "updated">;
+type DownloadEntry = Pick<
+  OpdsEntry,
+  "id" | "title" | "updated" | "authors"
+>;
 type DownloadLink = Pick<OpdsLink, "href" | "type">;
 
 export interface BookNoteOpeningHost {
