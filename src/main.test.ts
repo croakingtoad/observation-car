@@ -99,6 +99,7 @@ vi.mock("./readers/EpubView", () => ({
 const registrationMocks = vi.hoisted(() => ({
   registerBookloreCatalog: vi.fn(),
   registerBookloreDownloads: vi.fn(async () => {}),
+  registerOpenFromBooklore: vi.fn(),
 }));
 
 vi.mock("./booklore/catalogRegistration", () => ({
@@ -107,6 +108,10 @@ vi.mock("./booklore/catalogRegistration", () => ({
 
 vi.mock("./booklore/bookDownloadRegistration", () => ({
   registerBookloreDownloads: registrationMocks.registerBookloreDownloads,
+}));
+
+vi.mock("./booklore/openBookloreRegistration", () => ({
+  registerOpenFromBooklore: registrationMocks.registerOpenFromBooklore,
 }));
 
 type Handler = (...args: unknown[]) => void;
@@ -373,7 +378,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     await settle();
   }
 
-  it("registers the Booklore catalog and downloads on plugin load", () => {
+  it("registers the Booklore catalog, downloads, and open modal on plugin load", () => {
     expect(registrationMocks.registerBookloreCatalog).toHaveBeenCalledTimes(1);
     expect(
       registrationMocks.registerBookloreCatalog,
@@ -381,6 +386,10 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(registrationMocks.registerBookloreDownloads).toHaveBeenCalledTimes(1);
     expect(
       registrationMocks.registerBookloreDownloads,
+    ).toHaveBeenCalledWith(plugin);
+    expect(registrationMocks.registerOpenFromBooklore).toHaveBeenCalledTimes(1);
+    expect(
+      registrationMocks.registerOpenFromBooklore,
     ).toHaveBeenCalledWith(plugin);
   });
 

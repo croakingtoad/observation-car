@@ -14,6 +14,7 @@ import {
 import { BookNoteStore } from "./model/bookNoteStore";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
 import { registerBookloreCatalog } from "./booklore/catalogRegistration";
+import { registerOpenFromBooklore } from "./booklore/openBookloreRegistration";
 
 /**
  * Observation Car — plugin entry point.
@@ -66,6 +67,7 @@ export default class ObservationCarPlugin extends Plugin {
           ?.path ?? null,
     });
     await registerBookloreDownloads(this);
+    registerOpenFromBooklore(this);
 
     // `changed` also fires when a file's cache entry is first built, which
     // covers notes created after load; `resolved` covers the initial load
