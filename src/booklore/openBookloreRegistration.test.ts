@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { Command, Plugin } from "obsidian";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../settings";
 
 const runtime = vi.hoisted(() => ({
@@ -9,6 +9,8 @@ const runtime = vi.hoisted(() => ({
   notices: [] as string[],
   runOnOpen: false,
   lastContentEl: undefined as HTMLElement | undefined,
+  closeModal: undefined as (() => void) | undefined,
+  openPromise: undefined as Promise<void> | undefined,
 }));
 
 vi.mock("obsidian", () => ({
@@ -25,11 +27,16 @@ vi.mock("obsidian", () => ({
       contentEl.setText = (value: string) => { contentEl.textContent = value; };
       this.contentEl = contentEl;
       runtime.lastContentEl = contentEl;
+      runtime.closeModal = () => this.close();
       runtime.modalOpen();
-      if (runtime.runOnOpen) void this.onOpen();
+      if (runtime.runOnOpen) runtime.openPromise = this.onOpen();
     }
 
+    close(): void { this.onClose(); }
+
     onOpen(): Promise<void> { return Promise.resolve(); }
+
+    onClose(): void {}
   },
   Notice: class {
     constructor(message: string) { runtime.notices.push(message); }
@@ -49,6 +56,13 @@ describe("registerOpenFromBooklore", () => {
     runtime.notices.length = 0;
     runtime.runOnOpen = false;
     runtime.lastContentEl = undefined;
+    runtime.closeModal = undefined;
+    runtime.openPromise = undefined;
+  });
+
+  afterEach(() => {
+    vi.doUnmock("./openBookloreModal");
+    vi.resetModules();
   });
 
   it("registers matching command and touch-reachable ribbon actions", () => {
@@ -125,6 +139,43 @@ describe("registerOpenFromBooklore", () => {
       expect(runtime.lastContentEl?.textContent).toContain(
         "Could not open Booklore:",
       );
+      expect(runtime.lastContentEl?.textContent).toContain(
+        "There was an error when mocking a module",
+      );
     });
+  });
+
+  it("restores the real lazy modal module after a rejected load", async () => {
+    const { OpenBookloreModalContent } = await import("./openBookloreModal");
+
+    expect(OpenBookloreModalContent).toBeTypeOf("function");
+  });
+
+  it("keeps closed modal content empty when the lazy load rejects", async () => {
+    let rejectImport: ((reason?: unknown) => void) | undefined;
+    vi.doMock("./openBookloreModal", () => new Promise((_resolve, reject) => {
+      rejectImport = reject;
+    }));
+    runtime.runOnOpen = true;
+    let command: Command | undefined;
+    const ribbon = document.createElement("button");
+    Object.assign(ribbon, { addClass: vi.fn() });
+    const host = {
+      app: {},
+      settings: { ...DEFAULT_SETTINGS },
+      addCommand(value: Command): Command { command = value; return value; },
+      addRibbonIcon: vi.fn(() => ribbon),
+    } as unknown as Plugin & { settings: typeof DEFAULT_SETTINGS };
+
+    registerOpenFromBooklore(host);
+    command?.callback?.();
+    const contentEl = runtime.lastContentEl;
+    await vi.waitFor(() => expect(rejectImport).toBeTypeOf("function"));
+
+    runtime.closeModal?.();
+    rejectImport?.(new Error("lazy module failed after close"));
+
+    await runtime.openPromise;
+    expect(contentEl?.textContent).toBe("");
   });
 });
