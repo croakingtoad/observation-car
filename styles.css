@@ -20,8 +20,32 @@
 .oc-catalog-toolbar,
 .oc-catalog-pager {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--size-4-2);
   align-items: center;
+}
+
+.oc-catalog-search {
+  display: flex;
+  flex: 1 1 16rem;
+  gap: var(--size-4-2);
+  margin-inline-start: auto;
+}
+
+.oc-catalog-search input {
+  min-width: 8rem;
+  min-height: 44px;
+  flex: 1;
+}
+
+.oc-catalog-search button {
+  min-height: 44px;
+}
+
+.oc-catalog-search input:focus-visible,
+.oc-catalog-search button:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
 }
 
 .oc-catalog-header {

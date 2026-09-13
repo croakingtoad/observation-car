@@ -3,9 +3,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { parseOpdsFeed } from "./opdsParser";
-import type { OpdsEntry, OpdsFeed } from "./opdsTypes";
+import { parseOpenSearchDescription, parseOpdsFeed } from "./opdsParser";
+import type {
+  OpdsEntry,
+  OpdsFeed,
+  OpenSearchDescription,
+} from "./opdsTypes";
 import {
+  buildOpenSearchUrl,
   CatalogBrowser,
   renderAcquisitionEntry,
   type CatalogFeedClient,
@@ -22,13 +27,25 @@ const PAGE1_URL =
   "https://booklore.example/api/v1/opds/catalog?page=1&size=3";
 const PAGE2_URL =
   "https://booklore.example/api/v1/opds/catalog?page=2&size=3";
+const OPEN_SEARCH_URL =
+  "https://booklore.example/api/v1/opds/search.opds";
+const SEARCH_URL =
+  "https://booklore.example/api/v1/opds/catalog?q=Turco";
 
 function fixture(name: string, url: string): OpdsFeed {
   return parseOpdsFeed(readFileSync(join(fixturesDir, name), "utf8"), url);
 }
 
+function openSearchFixture(): OpenSearchDescription {
+  return parseOpenSearchDescription(
+    readFileSync(join(fixturesDir, "opensearch-description.xml"), "utf8"),
+    OPEN_SEARCH_URL,
+  );
+}
+
 function makeClient(
   feeds: ReadonlyMap<string, OpdsFeed>,
+  descriptions: ReadonlyMap<string, OpenSearchDescription> = new Map(),
 ): CatalogFeedClient & { calls: string[] } {
   const calls: string[] = [];
   return {
@@ -44,6 +61,16 @@ function makeClient(
       const feed = feeds.get(url);
       if (feed === undefined) throw new Error(`missing fixture for ${url}`);
       return feed;
+    },
+    async fetchOpenSearchDescription(
+      url: string,
+    ): Promise<OpenSearchDescription> {
+      calls.push(url);
+      const description = descriptions.get(url);
+      if (description === undefined) {
+        throw new Error(`missing OpenSearch fixture for ${url}`);
+      }
+      return description;
     },
   };
 }
@@ -166,6 +193,9 @@ describe("F5.2 CatalogBrowser", () => {
         this.attempts += 1;
         throw new Error("safe display message");
       },
+      async fetchOpenSearchDescription(): Promise<OpenSearchDescription> {
+        throw new Error("unexpected OpenSearch request");
+      },
     };
     const container = document.createElement("div");
     const browser = new CatalogBrowser(container, client);
@@ -176,6 +206,54 @@ describe("F5.2 CatalogBrowser", () => {
     expect(container.querySelector("h2")?.textContent).toBe("Booklore Catalog");
     expect(container.textContent).toContain("safe display message");
     expect(button(container, "Retry")).toBeDefined();
+  });
+});
+
+describe("F5.3 CatalogBrowser search", () => {
+  it("lazily searches the live advertised template and reuses acquisition entries", async () => {
+    const root = fixture("root-catalog.xml", ROOT_URL);
+    const results = fixture("catalog-search-turco.xml", SEARCH_URL);
+    const client = makeClient(
+      new Map([
+        [ROOT_URL, root],
+        [SEARCH_URL, results],
+      ]),
+      new Map([[OPEN_SEARCH_URL, openSearchFixture()]]),
+    );
+    const container = document.createElement("div");
+    const browser = new CatalogBrowser(container, client);
+
+    await browser.openRoot();
+    expect(client.calls).toEqual(["root"]);
+
+    const input = container.querySelector("input[type='search']");
+    const form = container.querySelector("form[role='search']");
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    expect(form).toBeInstanceOf(HTMLFormElement);
+    if (!(input instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) {
+      throw new Error("search form not rendered");
+    }
+    input.value = "Turco";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() => {
+      expect(container.querySelector("[aria-busy='true']")).toBeNull();
+      expect(container.querySelectorAll(".oc-catalog-acquisition-entry")).toHaveLength(2);
+    });
+    expect(client.calls).toEqual(["root", OPEN_SEARCH_URL, SEARCH_URL]);
+    expect(container.textContent).toContain("1–2 of 2 books");
+    expect(container.textContent).toContain("Turco, Lewis");
+    expect(container.textContent).toContain("Lewis Turco");
+  });
+
+  it("takes the query parameter name from the template and URL-encodes the term", () => {
+    const description = openSearchFixture();
+    description.urls[0].template =
+      "https://booklore.example/api/v1/opds/catalog?lookup={searchTerms}&scope=books";
+
+    expect(buildOpenSearchUrl(description, "Poetic craft & form")).toBe(
+      "https://booklore.example/api/v1/opds/catalog?lookup=Poetic%20craft%20%26%20form&scope=books",
+    );
   });
 });
 

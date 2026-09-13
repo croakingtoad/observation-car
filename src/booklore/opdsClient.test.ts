@@ -28,6 +28,7 @@ function readFixtureBody(name: string): string {
 const AUTH_401_BODY = readFixtureBody("auth-401.txt");
 
 const ATOM_BODY = readFixture("root-catalog.xml");
+const OPEN_SEARCH_BODY = readFixture("opensearch-description.xml");
 const HTML_BODY = readFixture("login-page.html");
 
 interface RecordedCall {
@@ -170,6 +171,53 @@ describe("F5.1 OpdsClient — live settings reads", () => {
     await client.fetchFeed("https://booklore.example/api/v1/opds/page2");
     expect(calls[0].url).toBe("https://booklore.example/api/v1/opds/page2");
     expect(calls[0].headers.Authorization).toBe(basicAuthHeader("u", "p"));
+  });
+});
+
+describe("F5.3 OpdsClient — OpenSearch description", () => {
+  it("retrieves and parses the advertised document through the authenticated transport", async () => {
+    const { transport, calls } = makeTransport({
+      status: 200,
+      text: OPEN_SEARCH_BODY,
+    });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: "opds-user",
+        opdsPassword: "s3cret",
+      }),
+      transport,
+    );
+
+    const description = await client.fetchOpenSearchDescription(
+      "https://booklore.example/api/v1/opds/search.opds",
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers.Accept).toBe(
+      "application/opensearchdescription+xml",
+    );
+    expect(calls[0].headers.Authorization).toBe(
+      basicAuthHeader("opds-user", "s3cret"),
+    );
+    expect(description.urls[0].template).toBe(
+      "https://booklore.example/api/v1/opds/catalog?q={searchTerms}",
+    );
+  });
+
+  it("classifies an Atom feed as not-opds instead of accepting the wrong document type", async () => {
+    const { transport } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(
+      makeSettings({ bookloreBaseUrl: "https://booklore.example" }),
+      transport,
+    );
+
+    await expectOpdsError(
+      client.fetchOpenSearchDescription(
+        "https://booklore.example/api/v1/opds/search.opds",
+      ),
+      "not-opds",
+    );
   });
 });
 
