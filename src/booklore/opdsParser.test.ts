@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -305,6 +305,40 @@ describe("F5.1c parseOpdsFeed — live acquisition feed, page 23 (final page)", 
     expect(entry.summary).toContain(
       '"the best couple therapist in the world," according to bestselling relationship expert',
     );
+  });
+
+  it("collapses live boundary whitespace without creating blank paragraphs", () => {
+    const fredRogers = feed().entries[1].summary;
+    expect(fredRogers).toContain("Inside!\nMister Rogers");
+    expect(fredRogers).not.toMatch(/[ \t]+\n/);
+
+    const page17 = parseOpdsFeed(
+      readFixture("catalog-page17.xml"),
+      PAGE17_URL,
+    );
+    expect(
+      page17.entries.every(
+        (entry) => entry.summary.includes("\n\n") === false,
+      ),
+    ).toBe(true);
+
+    const allSummaries = readdirSync(fixturesDir)
+      .filter((name) => name.endsWith(".xml"))
+      .flatMap((name) => {
+        try {
+          return parseOpdsFeed(
+            readFixture(name),
+            `https://booklore.example/fixtures/${name}`,
+          ).entries.map((entry) => entry.summary);
+        } catch (error) {
+          if (error instanceof OpdsError) return [];
+          throw error;
+        }
+      });
+    expect(allSummaries).toHaveLength(32);
+    expect(
+      allSummaries.every((summary) => summary.includes("\n\n") === false),
+    ).toBe(true);
   });
 
   it("classifies the zero-acquisition entry with a null navigation link", () => {
