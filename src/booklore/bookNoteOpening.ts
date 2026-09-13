@@ -31,10 +31,9 @@ export interface BookNoteOpeningDownloaderOptions
 }
 
 /**
- * F5.6's adapter around the F5.5 downloader. No UI in this consolidated base
- * invokes `download` yet; it preserves the signature F5.4's separately landed
- * UI calls with complete OPDS objects while adding note seeding and the
- * reader/note split after the vault write.
+ * The live production download path for the Booklore "Open from Booklore"
+ * modal's Download button. It adds note seeding and the reader/note split on
+ * top of `BookloreDownloader.download` after the vault write.
  */
 export class BookNoteOpeningDownloader extends BookloreDownloader {
   private readonly host: BookNoteOpeningHost;
