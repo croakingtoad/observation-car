@@ -155,12 +155,12 @@ export function buildOpenSearchUrl(
   // OpenSearch marks optional parameters with a trailing `?`. Booklore's live
   // template uses the required form, but accepting both avoids hardcoding its
   // `q` parameter name or reconstructing the server URL ourselves.
-  const searchTerms = /\{searchTerms\??\}/g;
+  const searchTerms = /\{searchTerms\??\}/;
   if (searchTerms.test(searchUrl.template) === false) {
     throw new Error("Booklore advertised an unusable OpenSearch template.");
   }
   return searchUrl.template.replace(
-    searchTerms,
+    /\{searchTerms\??\}/g,
     encodeURIComponent(query),
   );
 }

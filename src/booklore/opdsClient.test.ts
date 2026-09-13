@@ -219,6 +219,33 @@ describe("F5.3 OpdsClient — OpenSearch description", () => {
       "not-opds",
     );
   });
+
+  it.each([
+    ["userinfo", "https://booklore.example@evil.test/search.opds"],
+    ["scheme downgrade", "http://booklore.example/search.opds"],
+    ["host suffix confusion", "https://booklore.example.evil.test/search.opds"],
+    ["port change", "https://booklore.example:8443/search.opds"],
+  ])("omits credentials for an off-origin %s URL", async (_case, url) => {
+    const { transport, calls } = makeTransport({
+      status: 200,
+      text: OPEN_SEARCH_BODY,
+    });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: "opds-user",
+        opdsPassword: "s3cret",
+      }),
+      transport,
+    );
+
+    await client.fetchOpenSearchDescription(url);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({
+      Accept: "application/opensearchdescription+xml",
+    });
+  });
 });
 
 describe("F5.1 OpdsClient — credential origin boundary", () => {
