@@ -1,5 +1,6 @@
 import { Plugin, TFile } from "obsidian";
 import { registerCreateBookNoteCommand } from "./commands/createBookNote";
+import { registerBookloreDownloads } from "./booklore/bookDownloadRegistration";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -46,6 +47,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
     registerCreateBookNoteCommand(this);
     registerBookloreCatalog(this);
+    await registerBookloreDownloads(this);
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
