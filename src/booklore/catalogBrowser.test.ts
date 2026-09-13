@@ -87,6 +87,20 @@ function makeClient(
   };
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(reason: unknown): void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function button(container: HTMLElement, label: string): HTMLButtonElement {
   const match = [...container.querySelectorAll("button")].find(
     (candidate) =>
@@ -228,6 +242,110 @@ describe("F5.2 CatalogBrowser", () => {
     expect(container.querySelector("h2")?.textContent).toBe("Booklore Catalog");
     expect(container.textContent).toContain("safe display message");
     expect(button(container, "Retry")).toBeDefined();
+  });
+
+  it("does not render a feed that resolves after the browser is destroyed", async () => {
+    const pending = deferred<OpdsFeed>();
+    const client: CatalogFeedClient = {
+      getRootFeed: () => pending.promise,
+      async fetchFeed(): Promise<OpdsFeed> {
+        throw new Error("not used");
+      },
+    };
+    const container = document.createElement("div");
+    const browser = new CatalogBrowser(container, client);
+
+    const opening = browser.openRoot();
+    browser.destroy();
+    pending.resolve(fixture("root-catalog.xml", ROOT_URL));
+    await opening;
+
+    expect(container.childElementCount).toBe(0);
+  });
+
+  it("keeps a faster navigation visible when a superseded feed resolves late", async () => {
+    const root = fixture("root-catalog.xml", ROOT_URL);
+    const libraries = fixture("nav-libraries.xml", LIBRARIES_URL);
+    const page = fixture("catalog-page1.xml", ALL_BOOKS_URL);
+    const slow = deferred<OpdsFeed>();
+    let slowRequestFinished = false;
+    const client: CatalogFeedClient = {
+      async getRootFeed(): Promise<OpdsFeed> {
+        return root;
+      },
+      async fetchFeed(url: string): Promise<OpdsFeed> {
+        if (url === LIBRARIES_URL) {
+          const feed = await slow.promise;
+          slowRequestFinished = true;
+          return feed;
+        }
+        if (url === ALL_BOOKS_URL) return page;
+        throw new Error(`unexpected URL: ${url}`);
+      },
+    };
+    const container = document.createElement("div");
+    const browser = new CatalogBrowser(container, client);
+
+    await browser.openRoot();
+    const slowNavigation = button(container, "Libraries");
+    const fastNavigation = button(container, "All Books");
+    slowNavigation.click();
+    fastNavigation.click();
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll(".oc-catalog-acquisition-entry")).toHaveLength(3);
+    });
+
+    slow.resolve(libraries);
+    await vi.waitFor(() => {
+      expect(slowRequestFinished).toBe(true);
+    });
+    await Promise.resolve();
+
+    expect(container.querySelectorAll(".oc-catalog-acquisition-entry")).toHaveLength(3);
+    expect(container.textContent).not.toContain("Marty's Library");
+  });
+
+  it("does not render a late navigation error after a faster navigation wins", async () => {
+    const root = fixture("root-catalog.xml", ROOT_URL);
+    const page = fixture("catalog-page1.xml", ALL_BOOKS_URL);
+    const slow = deferred<OpdsFeed>();
+    let slowRequestFinished = false;
+    const client: CatalogFeedClient = {
+      async getRootFeed(): Promise<OpdsFeed> {
+        return root;
+      },
+      async fetchFeed(url: string): Promise<OpdsFeed> {
+        if (url === LIBRARIES_URL) {
+          try {
+            return await slow.promise;
+          } finally {
+            slowRequestFinished = true;
+          }
+        }
+        if (url === ALL_BOOKS_URL) return page;
+        throw new Error(`unexpected URL: ${url}`);
+      },
+    };
+    const container = document.createElement("div");
+    const browser = new CatalogBrowser(container, client);
+
+    await browser.openRoot();
+    const slowNavigation = button(container, "Libraries");
+    const fastNavigation = button(container, "All Books");
+    slowNavigation.click();
+    fastNavigation.click();
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll(".oc-catalog-acquisition-entry")).toHaveLength(3);
+    });
+
+    slow.reject(new Error("late failure"));
+    await vi.waitFor(() => {
+      expect(slowRequestFinished).toBe(true);
+    });
+    await Promise.resolve();
+
+    expect(container.querySelector("[role='alert']")).toBeNull();
+    expect(container.querySelectorAll(".oc-catalog-acquisition-entry")).toHaveLength(3);
   });
 });
 

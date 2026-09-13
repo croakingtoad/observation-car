@@ -789,3 +789,44 @@ describe("plugin wiring (substituted obsidian module)", () => {
     ).toEqual([CFI_1]);
   });
 });
+
+describe("Booklore registrations from plugin onload", () => {
+  const MANIFEST: PluginManifest = {
+    id: "observation-car",
+    name: "Observation Car",
+    version: "0.1.0",
+    minAppVersion: "1.7.2",
+    description: "test manifest",
+    author: "test",
+    isDesktopOnly: false,
+  };
+
+  function makePlugin(storedData: unknown = {}): ObservationCarPlugin {
+    const fake = makeFakeVault();
+    const plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
+    Object.assign(plugin, {
+      loadData: async (): Promise<unknown> => storedData,
+    });
+    return plugin;
+  }
+
+  it("preserves the download index through an ordinary settings update", async () => {
+    const { DEFAULT_SETTINGS } = await import("./settings");
+    const downloadIndex = {
+      "urn:booklore:book:92": {
+        vaultPath: "Books/Surprised by Grace.epub",
+        updated: "2026-09-11T12:00:00Z",
+      },
+    };
+    const plugin = makePlugin({ ...DEFAULT_SETTINGS, downloadIndex });
+
+    await plugin.onload();
+    await plugin.updateSettings({ booksFolder: "Library" });
+
+    const savedData = (plugin as unknown as { savedData: unknown[] }).savedData;
+    expect(savedData.at(-1)).toMatchObject({
+      booksFolder: "Library",
+      downloadIndex,
+    });
+  });
+});

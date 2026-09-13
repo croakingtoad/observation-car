@@ -342,6 +342,48 @@ describe("BookloreDownloader", () => {
     expect(transport).toHaveBeenCalledOnce();
   });
 
+  it("preserves the transport rejection as the unreachable error cause", async () => {
+    const harness = makeHarness();
+    const failure = new Error("socket closed");
+    const downloader = makeDownloader(harness, async () => {
+      throw failure;
+    });
+
+    await expect(
+      downloader.download(
+        { id: "book-1", title: "Unavailable", updated: "v1" },
+        EPUB_LINK,
+      ),
+    ).rejects.toMatchObject({
+      kind: "unreachable",
+      cause: failure,
+    });
+    expect(harness.writes).toEqual([]);
+  });
+
+  it("fails cleanly after exhausting the filename collision ceiling", async () => {
+    const harness = makeHarness();
+    harness.files.set("Books/Same title.epub", new ArrayBuffer(1));
+    for (let ordinal = 2; ordinal <= 10_000; ordinal += 1) {
+      harness.files.set(
+        `Books/Same title (${ordinal}).epub`,
+        new ArrayBuffer(1),
+      );
+    }
+    const downloader = makeDownloader(harness, async () => response());
+
+    await expect(
+      downloader.download(
+        { id: "book-2", title: "Same title", updated: "v1" },
+        EPUB_LINK,
+      ),
+    ).rejects.toMatchObject({
+      kind: "folder-conflict",
+      message: "Could not find an available filename after 10000 attempts.",
+    });
+    expect(harness.writes).toEqual([]);
+  });
+
   it("rejects MOBI, unsafe URLs, and auth failures without writing", async () => {
     const harness = makeHarness();
     const transport = vi.fn<BookDownloadTransport>(async () =>

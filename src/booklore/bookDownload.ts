@@ -4,7 +4,10 @@ import {
   TFolder,
   type App,
 } from "obsidian";
-import type { ObservationCarSettings } from "../settings";
+import {
+  normalizeBaseUrl,
+  type ObservationCarSettings,
+} from "../settings";
 import { basicAuthHeader } from "./opdsAuth";
 import type { OpdsEntry, OpdsLink } from "./opdsTypes";
 
@@ -60,8 +63,9 @@ export class BookDownloadError extends Error {
     kind: BookDownloadErrorKind,
     message: string,
     status?: number,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "BookDownloadError";
     this.kind = kind;
     this.status = status;
@@ -95,6 +99,7 @@ const SUPPORTED_FORMATS: Record<string, SupportedFormat> = {
 const WINDOWS_RESERVED_STEM =
   /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const MAX_FILENAME_BYTES = 240;
+const MAX_FILENAME_COLLISION_ATTEMPTS = 10_000;
 
 const defaultTransport: BookDownloadTransport = async (url, headers) => {
   const response = await requestUrl({ url, headers, throw: false });
@@ -257,10 +262,12 @@ export class BookloreDownloader {
     let response: BookDownloadTransportResult;
     try {
       response = await this.transport(url, headers);
-    } catch {
+    } catch (error) {
       throw new BookDownloadError(
         "unreachable",
         "Could not download the book from Booklore.",
+        undefined,
+        { cause: error },
       );
     }
 
@@ -351,8 +358,11 @@ export class BookloreDownloader {
     const dot = filename.lastIndexOf(".");
     const stem = filename.slice(0, dot);
     const suffix = filename.slice(dot);
-    let ordinal = 1;
-    while (true) {
+    for (
+      let ordinal = 1;
+      ordinal <= MAX_FILENAME_COLLISION_ATTEMPTS;
+      ordinal += 1
+    ) {
       const candidateName =
         ordinal === 1
           ? filename
@@ -361,8 +371,11 @@ export class BookloreDownloader {
       if ((await this.app.vault.adapter.exists(candidate)) === false) {
         return candidate;
       }
-      ordinal += 1;
     }
+    throw new BookDownloadError(
+      "folder-conflict",
+      `Could not find an available filename after ${MAX_FILENAME_COLLISION_ATTEMPTS} attempts.`,
+    );
   }
 
   private pathOwner(vaultPath: string): string | undefined {
@@ -415,9 +428,10 @@ function checkedHttpUrl(value: string): string {
 }
 
 function sameOrigin(url: string, baseUrl: string): boolean {
-  if (baseUrl.trim() === "") return false;
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  if (normalizedBaseUrl === "") return false;
   try {
-    return new URL(url).origin === new URL(baseUrl).origin;
+    return new URL(url).origin === new URL(normalizedBaseUrl).origin;
   } catch {
     return false;
   }
