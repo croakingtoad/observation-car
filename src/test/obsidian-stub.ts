@@ -19,3 +19,19 @@ function notAvailable(member: string): never {
 export function requestUrl(_options: unknown): never {
   throw notAvailable("requestUrl");
 }
+
+export function normalizePath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/\/{2,}/g, "/")
+    .replace(/^\//, "")
+    .replace(/\/$/, "");
+}
+
+export class TFolder {
+  path: string;
+
+  constructor(path: string) {
+    this.path = path;
+  }
+}
