@@ -1,5 +1,8 @@
 import { Plugin, TFile } from "obsidian";
 import { registerCreateBookNoteCommand } from "./commands/createBookNote";
+import {
+  registerRedownloadFromBookloreCommand,
+} from "./commands/redownloadFromBooklore";
 import { registerBookloreDownloads } from "./booklore/bookDownloadRegistration";
 import {
   DEFAULT_SETTINGS,
@@ -66,6 +69,7 @@ export default class ObservationCarPlugin extends Plugin {
           ?.path ?? null,
     });
     await registerBookloreDownloads(this);
+    registerRedownloadFromBookloreCommand(this);
 
     // `changed` also fires when a file's cache entry is first built, which
     // covers notes created after load; `resolved` covers the initial load
