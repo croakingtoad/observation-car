@@ -316,6 +316,39 @@ describe("Re-download from Booklore", () => {
     expect(mocks.notices).toEqual([]);
   });
 
+  it("does not report success when disposed during re-download", async () => {
+    let resolveRedownload:
+      | ((value: { status: string; vaultPath: string }) => void)
+      | undefined;
+    const allBooks = entry("urn:booklore:catalog:all", []);
+    allBooks.navigation = {
+      rel: "subsection",
+      type: "application/atom+xml",
+      href: "https://booklore.example/api/v1/opds/catalog",
+      title: "",
+    };
+    mocks.getRootFeed.mockResolvedValue(feed([allBooks]));
+    mocks.fetchFeed.mockResolvedValue(feed([entry("urn:booklore:book:92")]));
+    mocks.redownload.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRedownload = resolve;
+      }),
+    );
+    const { command, dispose, existingPaths } = setup(bookNote(92));
+    existingPaths.add("Books/Surprised by Grace.epub");
+
+    command.checkCallback?.(false);
+    await vi.waitFor(() => expect(mocks.redownload).toHaveBeenCalledOnce());
+    dispose();
+    resolveRedownload?.({
+      status: "downloaded",
+      vaultPath: "Books/Surprised by Grace.epub",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mocks.notices).toEqual([]);
+  });
+
   it("does not report a catalog failure after disposal", async () => {
     let rejectRoot: ((reason: Error) => void) | undefined;
     mocks.getRootFeed.mockReturnValue(
