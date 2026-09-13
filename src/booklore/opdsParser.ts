@@ -167,14 +167,18 @@ function textOf(element: Element | null): string {
  * parsed as HTML into a throwaway document and its body's text read back —
  * rather than stripped by a `<…>` regex, which cannot tell markup from
  * prose around bare angle brackets (`"1 < 2"`, `"I<>III"`) and deletes it.
- * HTML line breaks are changed to newlines first because `textContent`
- * otherwise removes them without leaving a word boundary.
+ * HTML line breaks and paragraph/container endings are changed to single
+ * newlines first because `textContent` otherwise removes them without
+ * leaving a word boundary. One newline preserves paragraph separation
+ * without inventing blank paragraphs in compact catalog/frontmatter text.
  */
 function summaryText(element: Element | null): string {
   if (element === null) {
     return "";
   }
-  const markup = (element.textContent ?? "").replace(/<br\s*\/?>/gi, "\n");
+  const markup = (element.textContent ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|div)\s*>/gi, "\n");
   if (markup === "") {
     return "";
   }

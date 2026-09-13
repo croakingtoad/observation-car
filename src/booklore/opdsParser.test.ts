@@ -210,13 +210,13 @@ describe("F5.1c parseOpdsFeed — live acquisition feed, page 2", () => {
     expect(entry.summary).not.toContain("</p>");
   });
 
-  it("turns every supported escaped br spelling into a newline only", () => {
+  it("turns escaped breaks and block endings into a single newline", () => {
     const parsed = parseOpdsFeed(
       `<feed><entry><summary>&lt;p&gt;one&lt;br&gt;two&lt;br/&gt;three&lt;br /&gt;four&lt;BR&gt;five&lt;/p&gt;&lt;div&gt;six&lt;/div&gt;</summary></entry></feed>`,
       PAGE2_URL,
     );
     expect(parsed.entries[0].summary).toBe(
-      "one\ntwo\nthree\nfour\nfivesix",
+      "one\ntwo\nthree\nfour\nfive\nsix",
     );
   });
 
