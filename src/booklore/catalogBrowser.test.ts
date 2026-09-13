@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_SETTINGS } from "../settings";
+import { basicAuthHeader } from "./opdsAuth";
+import { OpdsClient, type OpdsTransport } from "./opdsClient";
 import { parseOpenSearchDescription, parseOpdsFeed } from "./opdsParser";
 import type {
   OpdsEntry,
@@ -41,6 +44,15 @@ function openSearchFixture(): OpenSearchDescription {
     readFileSync(join(fixturesDir, "opensearch-description.xml"), "utf8"),
     OPEN_SEARCH_URL,
   );
+}
+
+function openSearchDocument(template: string): string {
+  return `<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+    <ShortName>Booklore</ShortName>
+    <Description>Search Booklore catalog</Description>
+    <Url type="application/atom+xml;profile=opds-catalog;kind=acquisition"
+         template="${template.replaceAll("&", "&amp;")}" />
+  </OpenSearchDescription>`;
 }
 
 function makeClient(
@@ -92,6 +104,16 @@ async function click(container: HTMLElement, label: string): Promise<void> {
   await vi.waitFor(() => {
     expect(container.querySelector("[aria-busy='true']")).toBeNull();
   });
+}
+
+function submitSearch(container: HTMLElement, query: string): void {
+  const input = container.querySelector("input[type='search']");
+  const form = container.querySelector("form[role='search']");
+  if (!(input instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) {
+    throw new Error("search form not rendered");
+  }
+  input.value = query;
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
 describe("F5.2 CatalogBrowser", () => {
@@ -254,6 +276,161 @@ describe("F5.3 CatalogBrowser search", () => {
     expect(buildOpenSearchUrl(description, "Poetic craft & form")).toBe(
       "https://booklore.example/api/v1/opds/catalog?lookup=Poetic%20craft%20%26%20form&scope=books",
     );
+  });
+
+  it("substitutes every required and optional search-terms token", () => {
+    const description = openSearchFixture();
+    description.urls[0].template =
+      "https://booklore.example/search?q={searchTerms}&echo={searchTerms?}";
+
+    expect(buildOpenSearchUrl(description, "a & b")).toBe(
+      "https://booklore.example/search?q=a%20%26%20b&echo=a%20%26%20b",
+    );
+  });
+
+  it("keeps credentials on both same-origin OpenSearch requests", async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const transport: OpdsTransport = async (url, headers) => {
+      calls.push({ url, headers });
+      if (url === ROOT_URL) {
+        return {
+          status: 200,
+          text: readFileSync(join(fixturesDir, "root-catalog.xml"), "utf8"),
+        };
+      }
+      if (url === OPEN_SEARCH_URL) {
+        return {
+          status: 200,
+          text: readFileSync(
+            join(fixturesDir, "opensearch-description.xml"),
+            "utf8",
+          ),
+        };
+      }
+      return {
+        status: 200,
+        text: readFileSync(join(fixturesDir, "catalog-search-turco.xml"), "utf8"),
+      };
+    };
+    const client = new OpdsClient({
+      settings: () => ({
+        ...DEFAULT_SETTINGS,
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: "opds-user",
+        opdsPassword: "s3cret",
+      }),
+      transport,
+    });
+    const container = document.createElement("div");
+    const browser = new CatalogBrowser(container, client);
+
+    await browser.openRoot();
+    submitSearch(container, "Turco");
+
+    await vi.waitFor(() => {
+      expect(calls).toHaveLength(3);
+      expect(container.querySelector("[aria-busy='true']")).toBeNull();
+    });
+    const authorization = basicAuthHeader("opds-user", "s3cret");
+    expect(calls[1]).toMatchObject({
+      url: OPEN_SEARCH_URL,
+      headers: { Authorization: authorization },
+    });
+    expect(calls[2]).toMatchObject({
+      url: SEARCH_URL,
+      headers: { Authorization: authorization },
+    });
+  });
+
+  it("omits credentials for a protocol-relative foreign search template", async () => {
+    const foreignSearchUrl = "https://evil.test/collect?q=Turco";
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const transport: OpdsTransport = async (url, headers) => {
+      calls.push({ url, headers });
+      if (url === ROOT_URL) {
+        return {
+          status: 200,
+          text: readFileSync(join(fixturesDir, "root-catalog.xml"), "utf8"),
+        };
+      }
+      if (url === OPEN_SEARCH_URL) {
+        return {
+          status: 200,
+          text: openSearchDocument("//evil.test/collect?q={searchTerms}"),
+        };
+      }
+      return {
+        status: 200,
+        text: readFileSync(join(fixturesDir, "catalog-search-turco.xml"), "utf8"),
+      };
+    };
+    const client = new OpdsClient({
+      settings: () => ({
+        ...DEFAULT_SETTINGS,
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: "opds-user",
+        opdsPassword: "s3cret",
+      }),
+      transport,
+    });
+    const container = document.createElement("div");
+    const browser = new CatalogBrowser(container, client);
+
+    await browser.openRoot();
+    submitSearch(container, "Turco");
+
+    await vi.waitFor(() => {
+      expect(calls).toHaveLength(3);
+      expect(container.querySelector("[aria-busy='true']")).toBeNull();
+    });
+    expect(calls[1].headers.Authorization).toBe(
+      basicAuthHeader("opds-user", "s3cret"),
+    );
+    expect(calls[2]).toEqual({
+      url: foreignSearchUrl,
+      headers: { Accept: "application/atom+xml" },
+    });
+  });
+
+  it("shows an unusable-template error without issuing a search request", async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const transport: OpdsTransport = async (url, headers) => {
+      calls.push({ url, headers });
+      if (url === ROOT_URL) {
+        return {
+          status: 200,
+          text: readFileSync(join(fixturesDir, "root-catalog.xml"), "utf8"),
+        };
+      }
+      if (url === OPEN_SEARCH_URL) {
+        return {
+          status: 200,
+          text: openSearchDocument("/api/v1/opds/catalog?q=missing-token"),
+        };
+      }
+      throw new Error(`unexpected search request: ${url}`);
+    };
+    const client = new OpdsClient({
+      settings: () => ({
+        ...DEFAULT_SETTINGS,
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: "opds-user",
+        opdsPassword: "s3cret",
+      }),
+      transport,
+    });
+    const container = document.createElement("div");
+    const browser = new CatalogBrowser(container, client);
+
+    await browser.openRoot();
+    submitSearch(container, "Turco");
+
+    await vi.waitFor(() => {
+      expect(container.querySelector("[role='alert']")?.textContent).toContain(
+        "unusable OpenSearch template",
+      );
+    });
+    expect(calls).toHaveLength(2);
   });
 });
 
