@@ -17,18 +17,24 @@ function openBookloreModal(plugin: OpenBooklorePlugin): void {
 
     async onOpen(): Promise<void> {
       this.setTitle("Open from Booklore");
-      const [{ OpenBookloreModalContent }, { OpdsClient }] = await Promise.all([
-        import("./openBookloreModal"),
-        import("./opdsClient"),
-      ]);
-      if (this.closed) return;
-      this.implementation = new OpenBookloreModalContent(this.contentEl, {
-        client: new OpdsClient({ settings: () => plugin.settings }),
-        downloader,
-        close: () => this.close(),
-        notify: (message) => new Notice(message),
-      });
-      this.implementation.open();
+      try {
+        const [{ OpenBookloreModalContent }, { OpdsClient }] = await Promise.all([
+          import("./openBookloreModal"),
+          import("./opdsClient"),
+        ]);
+        if (this.closed) return;
+        this.implementation = new OpenBookloreModalContent(this.contentEl, {
+          client: new OpdsClient({ settings: () => plugin.settings }),
+          downloader,
+          close: () => this.close(),
+          notify: (message) => new Notice(message),
+        });
+        this.implementation.open();
+      } catch (error) {
+        if (this.closed) return;
+        const detail = error instanceof Error ? error.message : "Unknown error";
+        this.contentEl.setText(`Could not open Booklore: ${detail}`);
+      }
     }
 
     onClose(): void {

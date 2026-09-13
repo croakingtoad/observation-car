@@ -67,6 +67,30 @@ function downloaderResult(
   };
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function downloadAction(container: HTMLElement, title: string): HTMLButtonElement {
+  const action = findCard(container, title).querySelector(
+    ".oc-open-booklore-download",
+  );
+  if (!(action instanceof HTMLButtonElement)) {
+    throw new Error(`download action not found: ${title}`);
+  }
+  return action;
+}
+
 describe("OpenBookloreModalContent", () => {
   it("searches the advertised OPDS endpoint and downloads the preselected EPUB", async () => {
     const results = fixture("acquisitions-mixed.xml", SEARCH_URL);
@@ -188,6 +212,7 @@ describe("OpenBookloreModalContent", () => {
 
     modal.open();
     submit(container, "Maps");
+    expect(container.querySelector("button")?.disabled).toBe(true);
     await vi.waitFor(() => {
       expect(container.querySelector("[role='alert']")?.textContent).toBe(
         "Could not reach the Booklore instance.",
@@ -221,5 +246,168 @@ describe("OpenBookloreModalContent", () => {
 
     expect(container.textContent).toBe("closed sentinel");
     expect(client.fetchOpenSearchDescription).not.toHaveBeenCalled();
+  });
+
+  it("does not write an alert when an in-flight search rejects after close", async () => {
+    const rootRequest = deferred<OpdsFeed>();
+    const client: CatalogFeedClient = {
+      getRootFeed: vi.fn(() => rootRequest.promise),
+      fetchFeed: vi.fn(),
+      fetchOpenSearchDescription: vi.fn(),
+    };
+    const container = document.createElement("div");
+    const modal = new OpenBookloreModalContent(container, {
+      client,
+      downloader: downloaderResult(),
+      close: vi.fn(),
+      notify: vi.fn(),
+    });
+
+    modal.open();
+    submit(container, "Maps");
+    modal.destroy();
+    rootRequest.reject(new Error("late search failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector("[role='alert']")).toBeNull();
+    expect(container.querySelector(".oc-open-booklore-status")?.textContent).toBe(
+      "Searching Booklore for “Maps”…",
+    );
+  });
+
+  it("does not notify or close when a download resolves after close", async () => {
+    const downloadRequest = deferred<BookDownloadResult>();
+    const downloader = {
+      download: vi.fn<OpenBookloreDownloader["download"]>(
+        () => downloadRequest.promise,
+      ),
+    };
+    const close = vi.fn();
+    const notify = vi.fn();
+    const container = document.createElement("div");
+    const modal = new OpenBookloreModalContent(container, {
+      client: makeClient(fixture("acquisitions-mixed.xml", SEARCH_URL)),
+      downloader,
+      close,
+      notify,
+    });
+
+    modal.open();
+    submit(container, "Maps");
+    await vi.waitFor(() => expect(container.querySelectorAll("article")).toHaveLength(4));
+    downloadAction(container, "Maps of Elsewhere").click();
+    await vi.waitFor(() => expect(downloader.download).toHaveBeenCalledOnce());
+    modal.destroy();
+    downloadRequest.resolve({
+      status: "downloaded",
+      vaultPath: "Books/Maps of Elsewhere.epub",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(notify).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("does not write an alert when a download rejects after close", async () => {
+    const downloadRequest = deferred<BookDownloadResult>();
+    const downloader = {
+      download: vi.fn<OpenBookloreDownloader["download"]>(
+        () => downloadRequest.promise,
+      ),
+    };
+    const close = vi.fn();
+    const notify = vi.fn();
+    const container = document.createElement("div");
+    const modal = new OpenBookloreModalContent(container, {
+      client: makeClient(fixture("acquisitions-mixed.xml", SEARCH_URL)),
+      downloader,
+      close,
+      notify,
+    });
+
+    modal.open();
+    submit(container, "Maps");
+    await vi.waitFor(() => expect(container.querySelectorAll("article")).toHaveLength(4));
+    downloadAction(container, "Maps of Elsewhere").click();
+    await vi.waitFor(() => expect(downloader.download).toHaveBeenCalledOnce());
+    modal.destroy();
+    downloadRequest.reject(new Error("late download failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector("[role='alert']")).toBeNull();
+    expect(container.querySelector(".oc-open-booklore-status")?.textContent).toBe(
+      "Downloading Maps of Elsewhere…",
+    );
+    expect(notify).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("starts only one download when its action is triggered twice", async () => {
+    const downloadRequest = deferred<BookDownloadResult>();
+    const downloader = {
+      download: vi.fn<OpenBookloreDownloader["download"]>(
+        () => downloadRequest.promise,
+      ),
+    };
+    const container = document.createElement("div");
+    const modal = new OpenBookloreModalContent(container, {
+      client: makeClient(fixture("acquisitions-mixed.xml", SEARCH_URL)),
+      downloader,
+      close: vi.fn(),
+      notify: vi.fn(),
+    });
+
+    modal.open();
+    submit(container, "Maps");
+    await vi.waitFor(() => expect(container.querySelectorAll("article")).toHaveLength(4));
+    const action = downloadAction(container, "Maps of Elsewhere");
+    action.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    action.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(downloader.download).toHaveBeenCalledOnce();
+    downloadRequest.resolve({
+      status: "downloaded",
+      vaultPath: "Books/Maps of Elsewhere.epub",
+    });
+    await Promise.resolve();
+  });
+
+  it("locks search and every result control while a download is in flight", async () => {
+    const downloadRequest = deferred<BookDownloadResult>();
+    const downloader = {
+      download: vi.fn<OpenBookloreDownloader["download"]>(
+        () => downloadRequest.promise,
+      ),
+    };
+    const container = document.createElement("div");
+    const modal = new OpenBookloreModalContent(container, {
+      client: makeClient(fixture("acquisitions-mixed.xml", SEARCH_URL)),
+      downloader,
+      close: vi.fn(),
+      notify: vi.fn(),
+    });
+
+    modal.open();
+    submit(container, "Maps");
+    await vi.waitFor(() => expect(container.querySelectorAll("article")).toHaveLength(4));
+    downloadAction(container, "Maps of Elsewhere").click();
+
+    const searchButton = container.querySelector<HTMLButtonElement>("form button");
+    const resultControls = [
+      ...container.querySelectorAll<HTMLInputElement | HTMLButtonElement>(
+        ".oc-open-booklore-results button, .oc-open-booklore-results input",
+      ),
+    ];
+    expect(searchButton?.disabled).toBe(true);
+    expect(resultControls.length).toBeGreaterThan(0);
+    expect(resultControls.every((control) => control.disabled)).toBe(true);
+    downloadRequest.resolve({
+      status: "downloaded",
+      vaultPath: "Books/Maps of Elsewhere.epub",
+    });
+    await Promise.resolve();
   });
 });
