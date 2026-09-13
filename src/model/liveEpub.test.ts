@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import ePub, { EpubCFI } from "epubjs";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { buildFragment, parseFragment } from "./anchor";
 
-const fixtureRoot = resolve("src/model/fixtures/minimal-epub");
+const fixtureRoot = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "fixtures/minimal-epub",
+);
 const fixtureFiles = [
   "mimetype",
   "META-INF/container.xml",
@@ -64,6 +68,10 @@ describe("live EPUB CFI generation", () => {
       ]);
 
       const liveLocations = await book.locations.generate(1000);
+      // Chapter 2 is archived with CRLF line endings, but :90 is the correct
+      // browser-normalized offset. A :91 (or other CR-retaining result) means
+      // the XML parser stopped normalizing CR (LOCO-474); do not edit this
+      // expectation to match. See LOCO-556 for the regression history.
       expect(liveLocations).toEqual([
         "epubcfi(/6/2[chapter-1-ref]!/4[chapter-one-body]/2[chapter-one-start],/1:0,/1:79)",
         "epubcfi(/6/4[chapter-2-ref]!/4[chapter-two-body]/2[chapter-two-start],/1:0,/1:90)",
