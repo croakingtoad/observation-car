@@ -35,3 +35,16 @@ export class TFolder {
     this.path = path;
   }
 }
+
+export class ItemView {
+  readonly contentEl = document.createElement("div");
+  navigation = false;
+
+  constructor(readonly leaf: unknown) {}
+}
+
+export class Notice {
+  constructor(_message: string) {
+    notAvailable("Notice");
+  }
+}
