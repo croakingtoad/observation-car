@@ -1,4 +1,5 @@
 import { Plugin, TFile } from "obsidian";
+import { registerCreateBookNoteCommand } from "./commands/createBookNote";
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -22,9 +23,11 @@ import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
  * so the sync layer (E004) always reads a fresh parse.
  *
  * `anchorHeadingLevel` is read from `this.settings` at parse time — never
- * snapshot the settings object: `updateSettings` replaces it wholesale, and
- * there is no settings-change event, so on-demand parsing is the
- * live-reload path for mid-session heading-level changes.
+ * snapshot the settings object: `updateSettings` replaces it wholesale.
+ * There is no settings-change event, so `updateSettings` itself re-parses
+ * the whole cache when the level changes — that re-parse (the store's
+ * live level read picking up the new value) is the live-reload path for
+ * mid-session heading-level changes.
  */
 export default class ObservationCarPlugin extends Plugin {
   settings: ObservationCarSettings = DEFAULT_SETTINGS;
@@ -40,6 +43,7 @@ export default class ObservationCarPlugin extends Plugin {
     // reader is involved. The view-type factory is called once per leaf.
     this.registerView(EPUB_VIEW_TYPE, (leaf) => new EpubView(leaf));
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
+    registerCreateBookNoteCommand(this);
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
@@ -48,6 +52,15 @@ export default class ObservationCarPlugin extends Plugin {
         return this.app.vault.read(file);
       },
       anchorHeadingLevel: () => this.settings.anchorHeadingLevel,
+      // Anchor links are matched by file identity, not string identity:
+      // Obsidian's default "shortest path when possible" link format
+      // writes [[Book.epub#…]] for a Books/Book.epub source, so the link
+      // path and the frontmatter source must resolve to the same vault
+      // file before a heading counts as an anchor (parseBookNote's
+      // resolveLink contract).
+      resolveLink: (linkpath, notePath) =>
+        this.app.metadataCache.getFirstLinkpathDest(linkpath, notePath)
+          ?.path ?? null,
     });
 
     // `changed` also fires when a file's cache entry is first built, which
@@ -65,10 +78,26 @@ export default class ObservationCarPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.metadataCache.on("resolved", () => {
-        this.reparseBookNotes().catch(() => {
-          // A failed initial-load parse is non-fatal; the next change
-          // event retries the affected note.
+        this.reparseBookNotes().catch((error) => {
+          // Per-path failures are contained and logged inside the store
+          // (a bad note keeps its last-good parse). This backstop
+          // surfaces a failure of the pass itself in the dev console.
+          console.error(
+            "[observation-car] book-note pass failed",
+            error,
+          );
         });
+      }),
+    );
+    // `metadataCache.changed` is deliberately not fired for renames
+    // (the vendored API says so at obsidian.d.ts:4449), so without this
+    // hook a renamed book note keeps its old path cached forever — and
+    // the `resolved` pass only adds, never evicts, so even a full rescan
+    // would not clear the phantom.
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        this.bookNoteStore.remove(oldPath);
+        if (file instanceof TFile) this.scheduleReparse(file);
       }),
     );
 
@@ -78,20 +107,43 @@ export default class ObservationCarPlugin extends Plugin {
     // empty until the first edit. An immediate pass is safe in either
     // ordering: while the metadata cache is not built, every cache lookup
     // returns null so nothing is parsed, and the `resolved` pass picks the
-    // notes up later.
-    this.reparseBookNotes().catch(() => {
-      // Non-fatal; the next change event retries the affected note.
-    });
+    // notes up later. The pass is awaited (it no-ops cheaply while the
+    // cache is unbuilt), so by the time onload resolves the store holds
+    // every note the metadata cache currently describes.
+    try {
+      await this.reparseBookNotes();
+    } catch (error) {
+      // Non-fatal; the same backstop as the `resolved` listener above.
+      console.error(
+        "[observation-car] initial book-note pass failed",
+        error,
+      );
+    }
   }
 
   /**
    * Merge a partial update into the settings and persist them to data.json.
    * The only writer for plugin data; keep the OPDS credentials out of
    * anything else (notes, logs, events).
+   *
+   * An `anchorHeadingLevel` change rewrites every cached note's sections
+   * (which headings count as anchors is the level's call), so the whole
+   * cache is re-parsed at the new level; the store's live level read makes
+   * the re-parse pick the change up.
    */
   async updateSettings(patch: Partial<ObservationCarSettings>): Promise<void> {
+    const previousLevel = this.settings.anchorHeadingLevel;
     this.settings = { ...this.settings, ...patch };
     await this.saveData(this.settings);
+    if (
+      patch.anchorHeadingLevel !== undefined &&
+      patch.anchorHeadingLevel !== previousLevel
+    ) {
+      for (const path of this.bookNoteStore.paths()) {
+        this.bookNoteStore.scheduleReparse(path);
+      }
+      await this.bookNoteStore.flush();
+    }
   }
 
   /** The cached parse of a book note, or undefined if the store holds none. */
@@ -116,21 +168,37 @@ export default class ObservationCarPlugin extends Plugin {
    */
   private scheduleReparse(file: TFile): void {
     if (file.extension !== "md") return;
-    if (isBookNoteCandidate(this.app.metadataCache.getFileCache(file)?.frontmatter) !== true) {
-      return;
-    }
+    if (this.wantsReparse(file) !== true) return;
     this.bookNoteStore.scheduleReparse(file.path);
+  }
+
+  /**
+   * Candidate gate for re-parse scheduling, with one carve-out: a path
+   * the store already holds is always re-parsed, even when the sniff no
+   * longer calls it a candidate. That carve-out is how a note that stops
+   * being a book note (its `source` stripped) gets the final parse in
+   * which the parser's authoritative `source` check evicts it — the sniff
+   * is a cheap filter, never the source of truth.
+   */
+  private wantsReparse(file: TFile): boolean {
+    if (this.bookNoteStore.has(file.path)) return true;
+    return (
+      isBookNoteCandidate(
+        this.app.metadataCache.getFileCache(file)?.frontmatter,
+      ) === true
+    );
   }
 
   /**
    * (Re)parse every markdown file that looks like a book note. Runs once
    * when the metadata cache resolves (initial load and vault rescans).
+   * The same candidate gate as `scheduleReparse` applies — including its
+   * carve-out for paths the store already holds, so a rescan evicts a
+   * de-book-noted file instead of leaving the stale entry behind.
    */
   private async reparseBookNotes(): Promise<void> {
     for (const file of this.app.vault.getMarkdownFiles()) {
-      if (isBookNoteCandidate(this.app.metadataCache.getFileCache(file)?.frontmatter) !== true) {
-        continue;
-      }
+      if (this.wantsReparse(file) !== true) continue;
       this.bookNoteStore.scheduleReparse(file.path);
     }
     await this.bookNoteStore.flush();

@@ -156,6 +156,139 @@ describe("parseBookNote — anchor recognition (PRD §5.2)", () => {
   });
 });
 
+describe("parseBookNote — link resolution (injected resolver)", () => {
+  const SHORT = "Surprised by Grace.epub";
+
+  /** Resolver double: a lookup table of linkpath (case-insensitive) → dest. */
+  function resolver(dest: Record<string, string | null>) {
+    return (linkpath: string): string | null =>
+      dest[linkpath.toLowerCase()] ?? null;
+  }
+
+  it("matches a shortest-path link against a full-path source (Obsidian's default link format)", () => {
+    // The QC Tier 2 probe: source is the full vault path, the heading uses
+    // Obsidian's "shortest path when possible" form. String equality
+    // silently yields zero sections; file identity must not.
+    const text = note([
+      `## [[${SHORT}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
+      "body",
+    ]);
+    const bookNote = parseBookNote(text, {
+      resolveLink: resolver({
+        [SHORT.toLowerCase()]: SOURCE,
+        [SOURCE.toLowerCase()]: SOURCE,
+      }),
+    });
+    expect(bookNote.sections).toHaveLength(1);
+    expect(bookNote.sections[0].fragment).toBe("epubcfi(/6/8!/4/2/1:0)");
+    expect(bookNote.diagnostics).toEqual([]);
+  });
+
+  it("matches a full-path link against a shortest-path source (mirror case)", () => {
+    const text = note(
+      [`## [[${SOURCE}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`, "body"],
+      ["---", `source: "[[${SHORT}]]"`, "format: epub", "---"],
+    );
+    const bookNote = parseBookNote(text, {
+      resolveLink: resolver({
+        [SHORT.toLowerCase()]: SOURCE,
+        [SOURCE.toLowerCase()]: SOURCE,
+      }),
+    });
+    expect(bookNote.sections).toHaveLength(1);
+    expect(bookNote.diagnostics).toEqual([]);
+  });
+
+  it("diagnoses an anchor link that resolves to a different file than the source", () => {
+    const text = note([
+      "## [[Books/Other.epub#epubcfi(/6/8!/4/2/1:0)|wrong book]]",
+      "body",
+    ]);
+    const bookNote = parseBookNote(text, {
+      resolveLink: resolver({
+        [SOURCE.toLowerCase()]: SOURCE,
+        "books/other.epub": "Books/Other.epub",
+      }),
+    });
+    expect(bookNote.sections).toHaveLength(0);
+    expect(bookNote.diagnostics).toHaveLength(1);
+    expect(bookNote.diagnostics[0].line).toBe(5);
+    expect(bookNote.diagnostics[0].message).toContain("Books/Other.epub");
+    expect(bookNote.diagnostics[0].message).toContain(SOURCE);
+  });
+
+  it("diagnoses an anchor link that does not resolve while the source does", () => {
+    // e.g. an ambiguous shortest path: the book file exists (so the source
+    // resolves) but the link cannot be resolved to one file.
+    const text = note([
+      `## [[${SHORT}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
+      "body",
+    ]);
+    const bookNote = parseBookNote(text, {
+      resolveLink: resolver({ [SOURCE.toLowerCase()]: SOURCE }),
+    });
+    expect(bookNote.sections).toHaveLength(0);
+    expect(bookNote.diagnostics).toHaveLength(1);
+    expect(bookNote.diagnostics[0].message).toContain(`[[${SHORT}]]`);
+  });
+
+  it("diagnoses a note source that does not name a file in the vault", () => {
+    const text = note([
+      `## [[${SHORT}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
+      "body",
+    ]);
+    const bookNote = parseBookNote(text, { resolveLink: () => null });
+    expect(bookNote.sections).toHaveLength(0);
+    expect(bookNote.diagnostics).toHaveLength(1);
+    expect(bookNote.diagnostics[0].line).toBe(5);
+    expect(bookNote.diagnostics[0].message).toContain("note's source");
+    expect(bookNote.diagnostics[0].message).toContain(SOURCE);
+    expect(bookNote.diagnostics[0].message).toContain(
+      "does not name a file in the vault",
+    );
+  });
+
+  it("falls back to string comparison when no resolver is supplied", () => {
+    // Without an Obsidian resolver (plain-Node parser use), the old
+    // case-insensitive string equality remains the compatibility path.
+    const shortLink = note([
+      `## [[${SHORT}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
+      "body",
+    ]);
+    const miss = parseBookNote(shortLink);
+    expect(miss.sections).toHaveLength(0);
+    expect(miss.diagnostics).toEqual([]);
+
+    const exact = note([
+      `## [[${SOURCE}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
+      "body",
+    ]);
+    const hit = parseBookNote(exact);
+    expect(hit.sections).toHaveLength(1);
+  });
+
+  it("compares resolved paths case-insensitively", () => {
+    const text = note([
+      `## [[${SOURCE}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
+      "body",
+    ]);
+    const bookNote = parseBookNote(text, {
+      resolveLink: resolver({
+        [SOURCE.toLowerCase()]: "books/surprised by grace.epub",
+      }),
+    });
+    expect(bookNote.sections).toHaveLength(1);
+  });
+
+  it("keeps the string-comparison behavior when no resolver is supplied", () => {
+    const text = note([
+      `## [[${SOURCE}#epubcfi(/6/8!/4/2/1:0)|Ch. 1]]`,
+      "body",
+    ]);
+    expect(parseBookNote(text).sections).toHaveLength(1);
+  });
+});
+
 describe("parseBookNote — no anchors / absent frontmatter", () => {
   it("returns no sections for a note with no anchors", () => {
     const text = note(["", "Just prose.", "", "## An ordinary heading", "More prose."]);
