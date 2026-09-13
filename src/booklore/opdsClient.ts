@@ -70,15 +70,24 @@ function checkFeedUrl(feedUrl: string, baseUrl: string): CheckedFeedUrl {
   }
 
   const requestUrl = parsedFeedUrl.toString();
+  if (
+    (parsedFeedUrl.protocol !== "http:" && parsedFeedUrl.protocol !== "https:") ||
+    parsedFeedUrl.origin === "null"
+  ) {
+    return { requestUrl, isConfiguredOrigin: false };
+  }
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   if (normalizedBaseUrl === "") {
     return { requestUrl, isConfiguredOrigin: false };
   }
   try {
+    const parsedBaseUrl = new URL(normalizedBaseUrl);
     return {
       requestUrl,
       isConfiguredOrigin:
-        parsedFeedUrl.origin === new URL(normalizedBaseUrl).origin,
+        (parsedBaseUrl.protocol === "http:" || parsedBaseUrl.protocol === "https:") &&
+        parsedBaseUrl.origin !== "null" &&
+        parsedFeedUrl.origin === parsedBaseUrl.origin,
     };
   } catch {
     return { requestUrl, isConfiguredOrigin: false };
