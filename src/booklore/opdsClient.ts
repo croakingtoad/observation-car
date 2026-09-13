@@ -81,8 +81,7 @@ function checkFeedUrl(feedUrl: string, baseUrl: string): CheckedFeedUrl {
 
   const requestUrl = parsedFeedUrl.toString();
   if (
-    (parsedFeedUrl.protocol !== "http:" && parsedFeedUrl.protocol !== "https:") ||
-    parsedFeedUrl.origin === "null"
+    parsedFeedUrl.protocol !== "http:" && parsedFeedUrl.protocol !== "https:"
   ) {
     return { requestUrl, isConfiguredOrigin: false };
   }
@@ -96,7 +95,6 @@ function checkFeedUrl(feedUrl: string, baseUrl: string): CheckedFeedUrl {
       requestUrl,
       isConfiguredOrigin:
         (parsedBaseUrl.protocol === "http:" || parsedBaseUrl.protocol === "https:") &&
-        parsedBaseUrl.origin !== "null" &&
         parsedFeedUrl.origin === parsedBaseUrl.origin,
     };
   } catch {

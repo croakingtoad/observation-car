@@ -855,3 +855,33 @@ describe("Booklore registrations from plugin onload", () => {
     });
   });
 });
+
+describe("Booklore download registration ordering", () => {
+  const MANIFEST: PluginManifest = {
+    id: "observation-car",
+    name: "Observation Car",
+    version: "0.1.0",
+    minAppVersion: "1.7.2",
+    description: "test manifest",
+    author: "test",
+    isDesktopOnly: false,
+  };
+
+  it("constructs the book-note store before registering download services", async () => {
+    vi.clearAllMocks();
+    const fake = makeFakeVault();
+    const plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
+    registrationMocks.registerBookloreDownloads.mockImplementationOnce(
+      async () => {
+        const store = (
+          plugin as unknown as { bookNoteStore?: { get(path: string): unknown } }
+        ).bookNoteStore;
+        expect(store?.get).toBeTypeOf("function");
+      },
+    );
+
+    await plugin.onload();
+
+    expect(registrationMocks.registerBookloreDownloads).toHaveBeenCalledOnce();
+  });
+});

@@ -1,12 +1,30 @@
+// @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Command } from "obsidian";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type ObservationCarPlugin from "../main";
 import type { BookNote } from "../model/bookNote";
+import { parseOpdsFeed } from "../booklore/opdsParser";
 import type { OpdsEntry, OpdsFeed } from "../booklore/opdsTypes";
 import {
   BOOKLORE_ALL_BOOKS_CATALOG_ID,
+  findBookloreEntry,
   registerRedownloadFromBookloreCommand,
 } from "./redownloadFromBooklore";
+
+const fixturesDir = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../booklore/fixtures",
+);
+const ROOT_URL = "https://booklore.example/api/v1/opds";
+const ALL_BOOKS_URL =
+  "https://booklore.example/api/v1/opds/catalog?page=1&size=50";
+
+function fixture(name: string, url: string): OpdsFeed {
+  return parseOpdsFeed(readFileSync(join(fixturesDir, name), "utf8"), url);
+}
 
 const mocks = vi.hoisted(() => ({
   notices: [] as string[],
@@ -60,6 +78,18 @@ function entry(id: string, acquisitions = [EPUB_ACQUISITION]): OpdsEntry {
     images: [],
     navigation: null,
   };
+}
+
+function allBooksEntry(): OpdsEntry {
+  const allBooks = entry(BOOKLORE_ALL_BOOKS_CATALOG_ID, []);
+  allBooks.kind = "navigation";
+  allBooks.navigation = {
+    rel: "subsection",
+    type: "application/atom+xml",
+    href: ALL_BOOKS_URL,
+    title: "",
+  };
+  return allBooks;
 }
 
 function feed(
@@ -181,15 +211,43 @@ describe("Re-download from Booklore", () => {
     );
   });
 
-  it("finds a numeric booklore_id across catalog pages and replaces the matching format", async () => {
-    const allBooks = entry("urn:booklore:catalog:all", []);
-    allBooks.kind = "navigation";
-    allBooks.navigation = {
+  it("walks the real parsed Booklore all-books subsection across catalog pages", async () => {
+    const root = fixture("root-catalog.xml", ROOT_URL);
+    const page1 = fixture("catalog-page1.xml", ALL_BOOKS_URL);
+    const page2Url = page1.pagination.next;
+    expect(page2Url).toBe(
+      "https://booklore.example/api/v1/opds/catalog?page=2&size=3",
+    );
+    if (page2Url === null) throw new Error("fixture has no second page");
+    const page2 = fixture("catalog-page2.xml", page2Url);
+    const allBooks = root.entries.find(
+      (candidate) => candidate.id === BOOKLORE_ALL_BOOKS_CATALOG_ID,
+    );
+    expect(allBooks?.navigation).toMatchObject({
       rel: "subsection",
-      type: "application/atom+xml",
-      href: "https://booklore.example/api/v1/opds/catalog?page=1&size=50",
-      title: "",
-    };
+      href: ALL_BOOKS_URL,
+    });
+    const pages = new Map<string, OpdsFeed>([
+      [ALL_BOOKS_URL, page1],
+      [page2Url, page2],
+    ]);
+    const fetchFeed = vi.fn(async (url: string) => {
+      const page = pages.get(url);
+      if (page === undefined) throw new Error(`unexpected page ${url}`);
+      return page;
+    });
+
+    const found = await findBookloreEntry(
+      { getRootFeed: async () => root, fetchFeed },
+      "urn:booklore:book:87",
+    );
+
+    expect(found?.id).toBe("urn:booklore:book:87");
+    expect(fetchFeed).toHaveBeenCalledTimes(2);
+  });
+
+  it("finds a numeric booklore_id across catalog pages and replaces the matching format", async () => {
+    const allBooks = allBooksEntry();
     mocks.getRootFeed.mockResolvedValue(feed([allBooks]));
     mocks.fetchFeed
       .mockResolvedValueOnce(
@@ -228,13 +286,7 @@ describe("Re-download from Booklore", () => {
   });
 
   it("replaces the note source and repairs a missing index record", async () => {
-    const allBooks = entry("urn:booklore:catalog:all", []);
-    allBooks.navigation = {
-      rel: "subsection",
-      type: "application/atom+xml",
-      href: "https://booklore.example/api/v1/opds/catalog",
-      title: "",
-    };
+    const allBooks = allBooksEntry();
     mocks.getRootFeed.mockResolvedValue(feed([allBooks]));
     mocks.fetchFeed.mockResolvedValue(feed([entry("urn:booklore:book:92")]));
     const { command, existingPaths } = setup(bookNote(92));
@@ -270,13 +322,7 @@ describe("Re-download from Booklore", () => {
         resolveRoot = resolve;
       }),
     );
-    const allBooks = entry("urn:booklore:catalog:all", []);
-    allBooks.navigation = {
-      rel: "subsection",
-      type: "application/atom+xml",
-      href: "https://booklore.example/api/v1/opds/catalog",
-      title: "",
-    };
+    const allBooks = allBooksEntry();
     mocks.fetchFeed.mockResolvedValue(feed([entry("urn:booklore:book:92")]));
     const { command, existingPaths } = setup(bookNote(92));
     existingPaths.add("Books/Surprised by Grace.epub");
@@ -290,19 +336,12 @@ describe("Re-download from Booklore", () => {
 
   it("does not download when disposed after a successful catalog walk", async () => {
     let resolvePage: ((value: OpdsFeed) => void) | undefined;
-    const allBooks = entry("urn:booklore:catalog:all", []);
-    allBooks.navigation = {
-      rel: "subsection",
-      type: "application/atom+xml",
-      href: "https://booklore.example/api/v1/opds/catalog",
-      title: "",
-    };
+    const allBooks = allBooksEntry();
     mocks.getRootFeed.mockResolvedValue(feed([allBooks]));
-    mocks.fetchFeed.mockReturnValue(
-      new Promise<OpdsFeed>((resolve) => {
-        resolvePage = resolve;
-      }),
-    );
+    const pagePromise = new Promise<OpdsFeed>((resolve) => {
+      resolvePage = resolve;
+    });
+    mocks.fetchFeed.mockReturnValue(pagePromise);
     const { command, dispose, existingPaths } = setup(bookNote(92));
     existingPaths.add("Books/Surprised by Grace.epub");
 
@@ -310,8 +349,7 @@ describe("Re-download from Booklore", () => {
     await vi.waitFor(() => expect(mocks.fetchFeed).toHaveBeenCalledOnce());
     dispose();
     resolvePage?.(feed([entry("urn:booklore:book:92")]));
-    await Promise.resolve();
-    await Promise.resolve();
+    await pagePromise;
     expect(mocks.redownload).not.toHaveBeenCalled();
     expect(mocks.notices).toEqual([]);
   });
@@ -320,20 +358,16 @@ describe("Re-download from Booklore", () => {
     let resolveRedownload:
       | ((value: { status: string; vaultPath: string }) => void)
       | undefined;
-    const allBooks = entry("urn:booklore:catalog:all", []);
-    allBooks.navigation = {
-      rel: "subsection",
-      type: "application/atom+xml",
-      href: "https://booklore.example/api/v1/opds/catalog",
-      title: "",
-    };
+    const allBooks = allBooksEntry();
     mocks.getRootFeed.mockResolvedValue(feed([allBooks]));
     mocks.fetchFeed.mockResolvedValue(feed([entry("urn:booklore:book:92")]));
-    mocks.redownload.mockReturnValue(
-      new Promise((resolve) => {
-        resolveRedownload = resolve;
-      }),
-    );
+    const redownloadPromise = new Promise<{
+      status: string;
+      vaultPath: string;
+    }>((resolve) => {
+      resolveRedownload = resolve;
+    });
+    mocks.redownload.mockReturnValue(redownloadPromise);
     const { command, dispose, existingPaths } = setup(bookNote(92));
     existingPaths.add("Books/Surprised by Grace.epub");
 
@@ -344,8 +378,7 @@ describe("Re-download from Booklore", () => {
       status: "downloaded",
       vaultPath: "Books/Surprised by Grace.epub",
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await redownloadPromise;
     expect(mocks.notices).toEqual([]);
   });
 
@@ -381,14 +414,7 @@ describe("Re-download from Booklore", () => {
   });
 
   it("shows a readable error for a stale booklore_id", async () => {
-    const allBooks = entry("urn:booklore:catalog:all", []);
-    allBooks.kind = "navigation";
-    allBooks.navigation = {
-      rel: "subsection",
-      type: "application/atom+xml",
-      href: "https://booklore.example/api/v1/opds/catalog",
-      title: "",
-    };
+    const allBooks = allBooksEntry();
     mocks.getRootFeed.mockResolvedValue(feed([allBooks]));
     mocks.fetchFeed.mockResolvedValue(feed([entry("urn:booklore:book:91")]));
     const { command, existingPaths } = setup(bookNote("92"));
