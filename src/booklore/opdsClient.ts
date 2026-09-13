@@ -4,8 +4,15 @@ import {
   type ObservationCarSettings,
 } from "../settings";
 import { basicAuthHeader } from "./opdsAuth";
-import { parseOpdsFeed } from "./opdsParser";
-import { OpdsError, type OpdsFeed } from "./opdsTypes";
+import {
+  parseOpenSearchDescription,
+  parseOpdsFeed,
+} from "./opdsParser";
+import {
+  OpdsError,
+  type OpdsFeed,
+  type OpenSearchDescription,
+} from "./opdsTypes";
 
 /**
  * F5.1 — OPDS client for a self-hosted Booklore instance.
@@ -60,6 +67,9 @@ interface CheckedFeedUrl {
   requestUrl: string;
   isConfiguredOrigin: boolean;
 }
+
+const ATOM_TYPE = "application/atom+xml";
+const OPEN_SEARCH_TYPE = "application/opensearchdescription+xml";
 
 function checkFeedUrl(feedUrl: string, baseUrl: string): CheckedFeedUrl {
   let parsedFeedUrl: URL;
@@ -119,13 +129,54 @@ export class OpdsClient {
    *   include credentials, the URL, or the body.
    */
   async fetchFeed(feedUrl: string): Promise<OpdsFeed> {
+    const body = await this.fetchDocument(feedUrl, ATOM_TYPE);
+    try {
+      return parseOpdsFeed(body, feedUrl);
+    } catch (error) {
+      if (error instanceof OpdsError) {
+        throw error;
+      }
+      throw new OpdsError("not-opds", "Booklore returned an unreadable feed.");
+    }
+  }
+
+  /**
+   * Fetch and parse the OpenSearch document advertised by an OPDS feed.
+   *
+   * This deliberately shares the feed transport, live settings reads,
+   * configured-origin credential boundary, and error classification. An
+   * OpenSearch document is not an Atom feed, so routing it through
+   * {@link fetchFeed} would incorrectly classify a valid response as
+   * `not-opds`.
+   */
+  async fetchOpenSearchDescription(
+    descriptionUrl: string,
+  ): Promise<OpenSearchDescription> {
+    const body = await this.fetchDocument(descriptionUrl, OPEN_SEARCH_TYPE);
+    try {
+      return parseOpenSearchDescription(body, descriptionUrl);
+    } catch (error) {
+      if (error instanceof OpdsError) {
+        throw error;
+      }
+      throw new OpdsError(
+        "not-opds",
+        "Booklore returned an unreadable OpenSearch description.",
+      );
+    }
+  }
+
+  private async fetchDocument(
+    documentUrl: string,
+    accept: string,
+  ): Promise<string> {
     const credentials = this.settings();
     const checkedFeedUrl = checkFeedUrl(
-      feedUrl,
+      documentUrl,
       credentials.bookloreBaseUrl,
     );
     const headers: Record<string, string> = {
-      Accept: "application/atom+xml",
+      Accept: accept,
     };
     if (
       checkedFeedUrl.isConfiguredOrigin &&
@@ -161,13 +212,6 @@ export class OpdsClient {
       );
     }
 
-    try {
-      return parseOpdsFeed(result.text, feedUrl);
-    } catch (error) {
-      if (error instanceof OpdsError) {
-        throw error;
-      }
-      throw new OpdsError("not-opds", "Booklore returned an unreadable feed.");
-    }
+    return result.text;
   }
 }

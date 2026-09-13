@@ -1,9 +1,16 @@
-import type { OpdsEntry, OpdsFeed, OpdsLink } from "./opdsTypes";
+import type {
+  OpdsEntry,
+  OpdsFeed,
+  OpdsLink,
+  OpenSearchDescription,
+  OpenSearchUrl,
+} from "./opdsTypes";
 
 /** The read-only client surface needed by the catalog browser. */
 export interface CatalogFeedClient {
   getRootFeed(): Promise<OpdsFeed>;
   fetchFeed(url: string): Promise<OpdsFeed>;
+  fetchOpenSearchDescription(url: string): Promise<OpenSearchDescription>;
 }
 
 export type AcquisitionEntryHandler = (entry: OpdsEntry) => void;
@@ -123,11 +130,48 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Could not load this catalog feed.";
 }
 
+function isAcquisitionFeed(searchUrl: OpenSearchUrl): boolean {
+  const mediaType = searchUrl.type
+    .toLowerCase()
+    .split(";")
+    .map((part) => part.trim());
+  return (
+    mediaType[0] === "application/atom+xml" &&
+    mediaType.includes("profile=opds-catalog") &&
+    mediaType.includes("kind=acquisition")
+  );
+}
+
+/** Fill the acquisition template advertised by the OpenSearch document. */
+export function buildOpenSearchUrl(
+  description: OpenSearchDescription,
+  query: string,
+): string {
+  const searchUrl = description.urls.find(isAcquisitionFeed);
+  if (searchUrl === undefined) {
+    throw new Error("Booklore does not advertise an OPDS acquisition search.");
+  }
+
+  // OpenSearch marks optional parameters with a trailing `?`. Booklore's live
+  // template uses the required form, but accepting both avoids hardcoding its
+  // `q` parameter name or reconstructing the server URL ourselves.
+  const searchTerms = /\{searchTerms\??\}/g;
+  if (searchTerms.test(searchUrl.template) === false) {
+    throw new Error("Booklore advertised an unusable OpenSearch template.");
+  }
+  return searchUrl.template.replace(
+    searchTerms,
+    encodeURIComponent(query),
+  );
+}
+
 /** Stateful renderer for root, navigation, and paged acquisition feeds. */
 export class CatalogBrowser {
   private readonly container: HTMLElement;
   private readonly client: CatalogFeedClient;
   private feeds: OpdsFeed[] = [];
+  private readonly searchDescriptions = new Map<string, OpenSearchDescription>();
+  private searchQuery = "";
   private requestEpoch = 0;
   private disposed = false;
 
@@ -138,7 +182,11 @@ export class CatalogBrowser {
 
   /** Load the root only when the view opens; no child or next feed is prefetched. */
   async openRoot(): Promise<void> {
-    await this.load(() => this.client.getRootFeed(), "root", true);
+    await this.load(
+      () => this.client.getRootFeed(),
+      () => this.openRoot(),
+      true,
+    );
   }
 
   destroy(): void {
@@ -149,7 +197,7 @@ export class CatalogBrowser {
 
   private async load(
     request: () => Promise<OpdsFeed>,
-    retryKey: string,
+    retry: () => Promise<void>,
     reset: boolean,
   ): Promise<void> {
     const epoch = ++this.requestEpoch;
@@ -162,18 +210,41 @@ export class CatalogBrowser {
     } catch (error) {
       if (this.disposed || epoch !== this.requestEpoch) return;
       this.renderCurrentFeed();
-      this.renderError(errorMessage(error), () => {
-        if (retryKey === "root") {
-          void this.openRoot();
-        } else {
-          void this.navigate(retryKey);
-        }
-      });
+      this.renderError(errorMessage(error), () => void retry());
     }
   }
 
   private async navigate(url: string): Promise<void> {
-    await this.load(() => this.client.fetchFeed(url), url, false);
+    await this.load(
+      () => this.client.fetchFeed(url),
+      () => this.navigate(url),
+      false,
+    );
+  }
+
+  private async search(
+    descriptionUrl: string,
+    query: string,
+  ): Promise<void> {
+    const normalizedQuery = query.trim();
+    if (normalizedQuery === "") return;
+    this.searchQuery = normalizedQuery;
+    await this.load(
+      async () => {
+        let description = this.searchDescriptions.get(descriptionUrl);
+        if (description === undefined) {
+          description = await this.client.fetchOpenSearchDescription(
+            descriptionUrl,
+          );
+          this.searchDescriptions.set(descriptionUrl, description);
+        }
+        return this.client.fetchFeed(
+          buildOpenSearchUrl(description, normalizedQuery),
+        );
+      },
+      () => this.search(descriptionUrl, normalizedQuery),
+      false,
+    );
   }
 
   private renderLoading(): void {
@@ -210,6 +281,9 @@ export class CatalogBrowser {
         this.renderCurrentFeed();
       });
       toolbar.append(home);
+    }
+    if (feed.search !== null) {
+      toolbar.append(this.renderSearch(feed.search.href));
     }
     fragment.append(toolbar);
 
@@ -258,6 +332,31 @@ export class CatalogBrowser {
     }
 
     this.container.replaceChildren(fragment);
+  }
+
+  private renderSearch(descriptionUrl: string): HTMLFormElement {
+    const form = element("form", "oc-catalog-search");
+    form.setAttribute("role", "search");
+    const input = element("input");
+    input.type = "search";
+    input.name = "query";
+    input.required = true;
+    input.placeholder = "Title or author";
+    input.value = this.searchQuery;
+    input.setAttribute("aria-label", "Search Booklore by title or author");
+    const submit = button("Search");
+    submit.type = "submit";
+    form.append(input, submit);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const query = input.value.trim();
+      if (query === "") {
+        input.focus();
+        return;
+      }
+      void this.search(descriptionUrl, query);
+    });
+    return form;
   }
 
   private renderDetail(entry: OpdsEntry): void {

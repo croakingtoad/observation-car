@@ -96,6 +96,19 @@ vi.mock("./readers/EpubView", () => ({
   EpubView: class {},
 }));
 
+const registrationMocks = vi.hoisted(() => ({
+  registerBookloreCatalog: vi.fn(),
+  registerBookloreDownloads: vi.fn(async () => {}),
+}));
+
+vi.mock("./booklore/catalogRegistration", () => ({
+  registerBookloreCatalog: registrationMocks.registerBookloreCatalog,
+}));
+
+vi.mock("./booklore/bookDownloadRegistration", () => ({
+  registerBookloreDownloads: registrationMocks.registerBookloreDownloads,
+}));
+
 type Handler = (...args: unknown[]) => void;
 
 /**
@@ -289,6 +302,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
+    vi.clearAllMocks();
     fake = makeFakeVault();
     addBookFile(SOURCE);
     plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
@@ -358,6 +372,17 @@ describe("plugin wiring (substituted obsidian module)", () => {
   async function settleCommand(): Promise<void> {
     await settle();
   }
+
+  it("registers the Booklore catalog and downloads on plugin load", () => {
+    expect(registrationMocks.registerBookloreCatalog).toHaveBeenCalledTimes(1);
+    expect(
+      registrationMocks.registerBookloreCatalog,
+    ).toHaveBeenCalledWith(plugin);
+    expect(registrationMocks.registerBookloreDownloads).toHaveBeenCalledTimes(1);
+    expect(
+      registrationMocks.registerBookloreDownloads,
+    ).toHaveBeenCalledWith(plugin);
+  });
 
   it("registers the mobile-capable command without writing on plugin load", async () => {
     const command = getCreateBookNoteCommand();
