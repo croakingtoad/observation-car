@@ -44,7 +44,12 @@ export class ItemView {
 }
 
 export class Notice {
-  constructor(_message: string) {
-    notAvailable("Notice");
+  static readonly messages: string[] = [];
+
+  readonly message: string;
+
+  constructor(message: string) {
+    this.message = message;
+    Notice.messages.push(message);
   }
 }

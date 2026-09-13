@@ -47,7 +47,6 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
     registerCreateBookNoteCommand(this);
     registerBookloreCatalog(this);
-    await registerBookloreDownloads(this);
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
@@ -66,6 +65,7 @@ export default class ObservationCarPlugin extends Plugin {
         this.app.metadataCache.getFirstLinkpathDest(linkpath, notePath)
           ?.path ?? null,
     });
+    await registerBookloreDownloads(this);
 
     // `changed` also fires when a file's cache entry is first built, which
     // covers notes created after load; `resolved` covers the initial load

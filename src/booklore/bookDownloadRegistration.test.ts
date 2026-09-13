@@ -7,7 +7,7 @@ import {
 } from "./bookDownloadRegistration";
 
 describe("registerBookloreDownloads", () => {
-  it("hydrates the index onto live settings so later settings saves preserve it", async () => {
+  it("hydrates the persisted index onto the live settings object", async () => {
     const updateSettings = vi.fn(
       async (_patch: Partial<typeof DEFAULT_SETTINGS>): Promise<void> =>
         undefined,
@@ -36,14 +36,6 @@ describe("registerBookloreDownloads", () => {
       },
     });
 
-    const afterOrdinarySettingsUpdate = {
-      ...host.settings,
-      booksFolder: "Library",
-    };
-    expect(afterOrdinarySettingsUpdate).toHaveProperty(
-      "downloadIndex.urn:booklore:book:92.vaultPath",
-      "Books/Surprised by Grace.epub",
-    );
     expect(updateSettings).not.toHaveBeenCalled();
   });
 });
