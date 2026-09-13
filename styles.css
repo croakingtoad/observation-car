@@ -11,6 +11,116 @@
   font-size: var(--font-ui-small);
 }
 
+/* F5.2 — root/navigation/acquisition OPDS catalog browser. */
+.oc-catalog-view {
+  overflow-y: auto;
+  padding: var(--size-4-4);
+}
+
+.oc-catalog-toolbar,
+.oc-catalog-pager {
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: center;
+}
+
+.oc-catalog-header {
+  margin-block: var(--size-4-4);
+}
+
+.oc-catalog-header h2,
+.oc-catalog-header p {
+  margin-block: 0;
+}
+
+.oc-catalog-count,
+.oc-catalog-entry-author {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.oc-catalog-entries {
+  display: grid;
+  gap: var(--size-4-2);
+  margin-block: var(--size-4-4);
+}
+
+.oc-catalog-navigation-entry {
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.oc-catalog-navigation-entry button {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-accent);
+  font-weight: var(--font-semibold);
+}
+
+.oc-catalog-navigation-entry p {
+  margin: var(--size-4-1) 0 0;
+  color: var(--text-muted);
+}
+
+.oc-catalog-acquisition-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--size-4-1) var(--size-4-3);
+  width: 100%;
+  padding: var(--size-4-3);
+  text-align: left;
+  white-space: normal;
+}
+
+.oc-catalog-entry-title {
+  overflow-wrap: anywhere;
+  font-weight: var(--font-semibold);
+}
+
+.oc-catalog-entry-author {
+  grid-column: 1;
+}
+
+.oc-catalog-entry-formats {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: var(--size-4-1);
+  align-items: center;
+}
+
+.oc-catalog-format-badge {
+  padding: 1px var(--size-4-1);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.oc-catalog-error {
+  display: flex;
+  gap: var(--size-4-3);
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-error);
+  border-radius: var(--radius-m);
+  background: var(--background-modifier-error-hover);
+}
+
+.oc-catalog-loading {
+  color: var(--text-muted);
+}
+
+.oc-catalog-book-detail {
+  max-width: 48rem;
+}
+
 /*
  * F2.1 — EPUB reader view. Forked from src/styles.css in
  * vinceRV/obsidian-epub-reader (MIT), commit

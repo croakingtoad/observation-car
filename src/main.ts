@@ -12,6 +12,7 @@ import {
 } from "./model/bookNote";
 import { BookNoteStore } from "./model/bookNoteStore";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
+import { registerBookloreCatalog } from "./booklore/catalogRegistration";
 
 /**
  * Observation Car — plugin entry point.
@@ -44,6 +45,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerView(EPUB_VIEW_TYPE, (leaf) => new EpubView(leaf));
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
     registerCreateBookNoteCommand(this);
+    registerBookloreCatalog(this);
 
     this.bookNoteStore = new BookNoteStore({
       readText: async (path) => {
