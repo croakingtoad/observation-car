@@ -225,6 +225,38 @@ describe("BookloreDownloader", () => {
     expect(harness.saves).toEqual([]);
   });
 
+  it("forcibly re-downloads and replaces its indexed vault copy", async () => {
+    const harness = makeHarness();
+    const oldBody = new Uint8Array([1]).buffer;
+    const newBody = new Uint8Array([9, 8, 7]).buffer;
+    harness.files.set("Books/Existing.epub", oldBody);
+    const transport = vi.fn<BookDownloadTransport>(async (_url, headers) => {
+      expect(headers["If-None-Match"]).toBeUndefined();
+      return response(newBody, { ETag: '"new"' });
+    });
+    const downloader = makeDownloader(harness, transport, {
+      "book-1": {
+        vaultPath: "Books/Existing.epub",
+        updated: "same",
+        etag: '"old"',
+      },
+    });
+
+    await expect(
+      downloader.redownload(
+        { id: "book-1", title: "Existing", updated: "same" },
+        EPUB_LINK,
+      ),
+    ).resolves.toEqual({
+      status: "downloaded",
+      vaultPath: "Books/Existing.epub",
+    });
+    expect(transport).toHaveBeenCalledOnce();
+    expect(harness.writes).toEqual(["Books/Existing.epub"]);
+    expect(harness.files.get("Books/Existing.epub")).toBe(newBody);
+    expect(harness.saves.at(-1)?.["book-1"]?.etag).toBe('"new"');
+  });
+
   it("uses ETag conditionally and accepts 304 when the feed timestamp changes", async () => {
     const harness = makeHarness();
     harness.files.set("Books/Existing.epub", new ArrayBuffer(1));

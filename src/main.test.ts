@@ -99,6 +99,7 @@ vi.mock("./readers/EpubView", () => ({
 const registrationMocks = vi.hoisted(() => ({
   registerBookloreCatalog: vi.fn(),
   registerBookloreDownloads: vi.fn(async () => {}),
+  registerRedownloadFromBookloreCommand: vi.fn(),
 }));
 
 vi.mock("./booklore/catalogRegistration", () => ({
@@ -107,6 +108,11 @@ vi.mock("./booklore/catalogRegistration", () => ({
 
 vi.mock("./booklore/bookDownloadRegistration", () => ({
   registerBookloreDownloads: registrationMocks.registerBookloreDownloads,
+}));
+
+vi.mock("./commands/redownloadFromBooklore", () => ({
+  registerRedownloadFromBookloreCommand:
+    registrationMocks.registerRedownloadFromBookloreCommand,
 }));
 
 type Handler = (...args: unknown[]) => void;
@@ -787,5 +793,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(
       plugin.getBookNote("Reading/A.md")?.sections.map((s) => s.fragment),
     ).toEqual([CFI_1]);
+  });
+
+  it("registers the Booklore re-download command on plugin load", () => {
+    expect(
+      registrationMocks.registerRedownloadFromBookloreCommand,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      registrationMocks.registerRedownloadFromBookloreCommand,
+    ).toHaveBeenCalledWith(plugin);
   });
 });
