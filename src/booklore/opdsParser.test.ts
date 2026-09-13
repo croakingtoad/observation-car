@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -210,13 +210,13 @@ describe("F5.1c parseOpdsFeed — live acquisition feed, page 2", () => {
     expect(entry.summary).not.toContain("</p>");
   });
 
-  it("turns every supported escaped br spelling into a newline only", () => {
+  it("turns escaped breaks and block endings into a single newline", () => {
     const parsed = parseOpdsFeed(
       `<feed><entry><summary>&lt;p&gt;one&lt;br&gt;two&lt;br/&gt;three&lt;br /&gt;four&lt;BR&gt;five&lt;/p&gt;&lt;div&gt;six&lt;/div&gt;</summary></entry></feed>`,
       PAGE2_URL,
     );
     expect(parsed.entries[0].summary).toBe(
-      "one\ntwo\nthree\nfour\nfivesix",
+      "one\ntwo\nthree\nfour\nfive\nsix",
     );
   });
 
@@ -305,6 +305,40 @@ describe("F5.1c parseOpdsFeed — live acquisition feed, page 23 (final page)", 
     expect(entry.summary).toContain(
       '"the best couple therapist in the world," according to bestselling relationship expert',
     );
+  });
+
+  it("collapses live boundary whitespace without creating blank paragraphs", () => {
+    const fredRogers = feed().entries[1].summary;
+    expect(fredRogers).toContain("Inside!\nMister Rogers");
+    expect(fredRogers).not.toMatch(/[ \t]+\n/);
+
+    const page17 = parseOpdsFeed(
+      readFixture("catalog-page17.xml"),
+      PAGE17_URL,
+    );
+    expect(
+      page17.entries.every(
+        (entry) => entry.summary.includes("\n\n") === false,
+      ),
+    ).toBe(true);
+
+    const allSummaries = readdirSync(fixturesDir)
+      .filter((name) => name.endsWith(".xml"))
+      .flatMap((name) => {
+        try {
+          return parseOpdsFeed(
+            readFixture(name),
+            `https://booklore.example/fixtures/${name}`,
+          ).entries.map((entry) => entry.summary);
+        } catch (error) {
+          if (error instanceof OpdsError) return [];
+          throw error;
+        }
+      });
+    expect(allSummaries).toHaveLength(32);
+    expect(
+      allSummaries.every((summary) => summary.includes("\n\n") === false),
+    ).toBe(true);
   });
 
   it("classifies the zero-acquisition entry with a null navigation link", () => {
@@ -569,6 +603,16 @@ describe("F5.1 parseOpdsFeed — summary text decoding", () => {
       "https://booklore.example/api/v1/opds/catalog",
     ).entries[0];
     expect(entry.summary).toBe("Hello, & welcome.");
+  });
+
+  it("collapses escaped CRLF after line and block boundaries", () => {
+    const entry = parseOpdsFeed(
+      entryFeed(
+        "&lt;p&gt;one&lt;br&gt;&#13;&#10;two&lt;/p&gt;&#13;&#10;&lt;p&gt;three&lt;/p&gt;",
+      ),
+      "https://booklore.example/api/v1/opds/catalog",
+    ).entries[0];
+    expect(entry.summary).toBe("one\ntwo\nthree");
   });
 });
 

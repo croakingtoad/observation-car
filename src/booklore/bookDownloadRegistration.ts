@@ -1,11 +1,11 @@
 import type { App } from "obsidian";
 import type { ObservationCarSettings } from "../settings";
 import {
-  BookloreDownloader,
   DOWNLOAD_INDEX_KEY,
   readDownloadIndex,
   type BookloreDownloadIndex,
 } from "./bookDownload";
+import { BookNoteOpeningDownloader } from "./bookNoteOpening";
 
 interface BookloreDownloadHost {
   app: App;
@@ -18,7 +18,7 @@ type SettingsWithDownloadIndex = ObservationCarSettings & {
   [DOWNLOAD_INDEX_KEY]: BookloreDownloadIndex;
 };
 
-const registeredDownloaders = new WeakMap<object, BookloreDownloader>();
+const registeredDownloaders = new WeakMap<object, BookNoteOpeningDownloader>();
 
 /**
  * Register the F5.5 service and preserve its index through the plugin's
@@ -26,11 +26,12 @@ const registeredDownloaders = new WeakMap<object, BookloreDownloader>();
  */
 export async function registerBookloreDownloads(
   host: BookloreDownloadHost,
-): Promise<BookloreDownloader> {
+): Promise<BookNoteOpeningDownloader> {
   const index = readDownloadIndex(await host.loadData());
   attachIndex(host.settings, index);
 
-  const downloader = new BookloreDownloader({
+  const downloader = new BookNoteOpeningDownloader({
+    host,
     app: host.app,
     settings: () => host.settings,
     initialIndex: index,
@@ -48,7 +49,7 @@ export async function registerBookloreDownloads(
 /** Look up the service registered during plugin load for F5.4/F5.7 callers. */
 export function getBookloreDownloader(
   host: object,
-): BookloreDownloader | undefined {
+): BookNoteOpeningDownloader | undefined {
   return registeredDownloaders.get(host);
 }
 
