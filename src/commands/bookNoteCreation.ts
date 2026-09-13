@@ -6,8 +6,6 @@ export interface BookloreNoteSeed {
   author: string;
   bookloreId: number;
   bookloreUrl: string;
-  /** Vault path of a saved cover, without wikilink syntax. */
-  coverPath?: string;
 }
 
 export interface BookNoteCreationHost {
@@ -58,10 +56,8 @@ export async function createOrOpenBookNote(
       author: booklore.author,
       booklore_id: booklore.bookloreId,
       booklore_url: booklore.bookloreUrl,
-      cover:
-        booklore.coverPath === undefined
-          ? ""
-          : `[[${normalizePath(booklore.coverPath)}]]`,
+      // F5.5 does not persist covers, so no local wikilink exists to seed.
+      cover: "",
     });
   }
 

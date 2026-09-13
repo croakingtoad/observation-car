@@ -199,4 +199,25 @@ describe("BookNoteOpeningDownloader", () => {
       notePath,
     ]);
   });
+
+  it("opens a concurrently created winner without overwriting it", async () => {
+    const harness = makeHarness();
+    const notePath = "Reading/A Title- With YAML.md";
+    const winner = "---\ntype: book-note\n---\n\nThe winning invocation's notes.";
+    harness.create.mockImplementationOnce(async (path: string) => {
+      harness.files.set(path, new TFileDouble(path));
+      harness.contents.set(path, winner);
+      throw new Error("File already exists");
+    });
+
+    await downloader(harness).download(ENTRY, ACQUISITION);
+
+    expect(harness.create).toHaveBeenCalledOnce();
+    expect(harness.contents.get(notePath)).toBe(winner);
+    expect(harness.modify).not.toHaveBeenCalled();
+    expect(harness.opened.map(({ path }) => path)).toEqual([
+      "Books/A Title- With YAML.epub",
+      notePath,
+    ]);
+  });
 });

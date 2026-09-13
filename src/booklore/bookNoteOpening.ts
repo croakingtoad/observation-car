@@ -28,9 +28,10 @@ export interface BookNoteOpeningDownloaderOptions
 }
 
 /**
- * F5.6's adapter around the F5.5 downloader. F5.4 already calls `download`
- * with the complete OPDS objects, so this preserves that seam while adding
- * note seeding and the reader/note split after the vault write succeeds.
+ * F5.6's adapter around the F5.5 downloader. No UI in this consolidated base
+ * invokes `download` yet; it preserves the signature F5.4's separately landed
+ * UI calls with complete OPDS objects while adding note seeding and the
+ * reader/note split after the vault write.
  */
 export class BookNoteOpeningDownloader extends BookloreDownloader {
   private readonly host: BookNoteOpeningHost;
