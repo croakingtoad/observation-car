@@ -7,11 +7,20 @@ import type { BookNote } from "../model/bookNote";
 
 export const REDOWNLOAD_FROM_BOOKLORE_COMMAND_ID =
   "redownload-from-booklore";
+export const BOOKLORE_ALL_BOOKS_CATALOG_ID = "urn:booklore:catalog:all";
 
 /** Register F5.7's explicit refresh for the currently open book note. */
 export function registerRedownloadFromBookloreCommand(
   plugin: ObservationCarPlugin,
 ): void {
+  let requestEpoch = 0;
+  let disposed = false;
+  let inFlight = false;
+  plugin.register(() => {
+    disposed = true;
+    requestEpoch += 1;
+  });
+
   plugin.addCommand({
     id: REDOWNLOAD_FROM_BOOKLORE_COMMAND_ID,
     name: "Re-download from Booklore",
@@ -20,8 +29,19 @@ export function registerRedownloadFromBookloreCommand(
       const note = currentBookNote(plugin);
       if (note === null) return false;
 
-      if (checking === false) {
-        void redownloadOpenBook(plugin, note);
+      if (checking === false && inFlight === false) {
+        const epoch = ++requestEpoch;
+        inFlight = true;
+        const stale = (): boolean =>
+          disposed || epoch !== requestEpoch;
+        const run = async (): Promise<void> => {
+          try {
+            await redownloadOpenBook(plugin, note, stale);
+          } finally {
+            if (epoch === requestEpoch) inFlight = false;
+          }
+        };
+        void run();
       }
       return true;
     },
@@ -37,6 +57,7 @@ function currentBookNote(plugin: ObservationCarPlugin): BookNote | null {
 async function redownloadOpenBook(
   plugin: ObservationCarPlugin,
   note: BookNote,
+  stale: () => boolean,
 ): Promise<void> {
   const id = normalizeBookloreId(note.frontmatter.data["booklore_id"]);
   if (id === null) {
@@ -51,8 +72,22 @@ async function redownloadOpenBook(
   }
 
   try {
+    const replacementPath = await resolveReplacementPath(
+      plugin,
+      downloader.getDownloadIndex(),
+      id.canonical,
+      note.frontmatter.source,
+    );
+    if (replacementPath === null) {
+      new Notice(
+        `Could not re-download booklore_id ${id.display}: this note does not identify an existing vault book.`,
+      );
+      return;
+    }
+
     const client = new OpdsClient({ settings: () => plugin.settings });
     const entry = await findBookloreEntry(client, id.canonical);
+    if (stale()) return;
     if (entry === null) {
       new Notice(
         `Booklore has no book matching booklore_id ${id.display}. The ID may be stale.`,
@@ -67,14 +102,42 @@ async function redownloadOpenBook(
       return;
     }
 
-    const result = await downloader.redownload(entry, acquisition);
+    const result = await downloader.redownload(
+      entry,
+      acquisition,
+      replacementPath,
+    );
+    if (stale()) return;
     new Notice(`Re-downloaded ${result.vaultPath} from Booklore.`);
   } catch (error) {
+    if (stale()) return;
     console.error("[observation-car] could not re-download from Booklore", error);
     const message =
       error instanceof Error ? error.message : "Unknown error.";
     new Notice(`Could not re-download from Booklore: ${message}`);
   }
+}
+
+async function resolveReplacementPath(
+  plugin: ObservationCarPlugin,
+  index: Record<string, { vaultPath: string }>,
+  bookloreId: string,
+  noteSource: string | null,
+): Promise<string | null | undefined> {
+  const indexedPath = index[bookloreId]?.vaultPath;
+  if (
+    indexedPath !== undefined &&
+    (await plugin.app.vault.adapter.exists(indexedPath))
+  ) {
+    return undefined;
+  }
+  if (
+    noteSource !== null &&
+    (await plugin.app.vault.adapter.exists(noteSource))
+  ) {
+    return noteSource;
+  }
+  return null;
 }
 
 interface CatalogClient {
@@ -89,7 +152,7 @@ export async function findBookloreEntry(
 ): Promise<OpdsEntry | null> {
   const root = await client.getRootFeed();
   const catalogUrl = root.entries.find(
-    (entry) => entry.id === "urn:booklore:catalog:all",
+    (entry) => entry.id === BOOKLORE_ALL_BOOKS_CATALOG_ID,
   )?.navigation?.href;
   if (catalogUrl === undefined) {
     throw new Error("Booklore did not advertise its book catalog.");

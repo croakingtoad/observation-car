@@ -211,19 +211,21 @@ export class BookloreDownloader {
   /**
    * Re-fetch an indexed book even when its OPDS timestamp is unchanged.
    * The existing owned vault path is retained and replaced only after a
-   * successful response, so a failed refresh leaves the current copy intact.
+   * successful response, so a failed fetch leaves the current copy intact.
    */
   async redownload(
     entry: Pick<OpdsEntry, "id" | "title" | "updated">,
     acquisition: Pick<OpdsLink, "href" | "type">,
+    replacementPath?: string,
   ): Promise<BookDownloadResult> {
-    return this.runDownload(entry, acquisition, true);
+    return this.runDownload(entry, acquisition, true, replacementPath);
   }
 
   private async runDownload(
     entry: Pick<OpdsEntry, "id" | "title" | "updated">,
     acquisition: Pick<OpdsLink, "href" | "type">,
     force: boolean,
+    replacementPath?: string,
   ): Promise<BookDownloadResult> {
     const previous = this.lock;
     let release: (() => void) | undefined;
@@ -232,7 +234,12 @@ export class BookloreDownloader {
     });
     await previous;
     try {
-      return await this.downloadLocked(entry, acquisition, force);
+      return await this.downloadLocked(
+        entry,
+        acquisition,
+        force,
+        replacementPath,
+      );
     } finally {
       release?.();
     }
@@ -242,6 +249,7 @@ export class BookloreDownloader {
     entry: Pick<OpdsEntry, "id" | "title" | "updated">,
     acquisition: Pick<OpdsLink, "href" | "type">,
     force: boolean,
+    replacementPath?: string,
   ): Promise<BookDownloadResult> {
     if (entry.id.trim() === "") {
       throw new BookDownloadError(
@@ -319,6 +327,7 @@ export class BookloreDownloader {
       format.extension,
       existing,
       folder,
+      replacementPath,
     );
     await this.app.vault.adapter.writeBinary(
       vaultPath,
@@ -360,7 +369,23 @@ export class BookloreDownloader {
     extension: SupportedFormat["extension"],
     existing: BookloreDownloadRecord | undefined,
     folder: string,
+    replacementPath?: string,
   ): Promise<string> {
+    if (replacementPath !== undefined) {
+      const normalized = safeStoredVaultPath(replacementPath);
+      if (
+        normalized === null ||
+        normalized.toLowerCase().endsWith(`.${extension}`) === false ||
+        (await this.app.vault.adapter.exists(normalized)) === false
+      ) {
+        throw new BookDownloadError(
+          "invalid-entry",
+          "The book note's vault copy no longer exists.",
+        );
+      }
+      return normalized;
+    }
+
     if (
       existing !== undefined &&
       existing.vaultPath.toLowerCase().endsWith(`.${extension}`) &&
