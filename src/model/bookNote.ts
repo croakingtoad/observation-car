@@ -26,6 +26,14 @@
  * says a hand-reordered note is tolerated and consumers sort by
  * `comparePositions(section.position)`.
  *
+ * Anchor matching is by file identity when the caller injects a
+ * `resolveLink` (the Obsidian-side wiring does): both the link path and
+ * the frontmatter `source` are resolved to vault files and compared.
+ * Without a resolver they are compared as case-insensitive strings — the
+ * pure-Node fallback. Resolution matters because Obsidian's default
+ * "shortest path when possible" link format writes `[[Book.epub#…]]` for
+ * a `Books/Book.epub` source, which a string compare silently misses.
+ *
  * `chapter` is the 0-based spine item index, derivable only from an EPUB
  * CFI anchor: the chapter component `/6/N!` encodes `(itemIndex + 1) * 2`
  * in `N` (see epub.js `EpubCFI.generateChapterComponent`), so
@@ -57,6 +65,15 @@ export interface ParseBookNoteOptions {
    * Defaults to 2 (PRD §5.2).
    */
   anchorHeadingLevel?: number;
+  /**
+   * Resolve a link path — a wikilink target or the note's `source` — to
+   * the vault path of the file it points at, or null when it does not
+   * resolve. The Obsidian-side wiring supplies
+   * `metadataCache.getFirstLinkpathDest(linkpath, notePath)?.path`; when
+   * no resolver is supplied the parser falls back to case-insensitive
+   * string comparison, which keeps it callable from plain Node.
+   */
+  resolveLink?: (linkpath: string) => string | null;
 }
 
 export interface BookNoteFrontmatter {
@@ -124,6 +141,7 @@ export function parseBookNote(
   options?: ParseBookNoteOptions,
 ): BookNote {
   const anchorHeadingLevel = options?.anchorHeadingLevel ?? DEFAULT_ANCHOR_HEADING_LEVEL;
+  const resolveLink = options?.resolveLink;
   const lines = text.split(/\r?\n/);
   const data = parseFrontmatter(lines);
   const source = extractSource(data);
@@ -147,7 +165,14 @@ export function parseBookNote(
     if (source === null) continue; // Nothing can be an anchor without a source.
     const heading = parseAtxHeading(line);
     if (heading === null || heading.level !== anchorHeadingLevel) continue;
-    const resolved = resolveAnchor(heading.text, lineIndex, source, format, diagnostics);
+    const resolved = resolveAnchor(
+      heading.text,
+      lineIndex,
+      source,
+      format,
+      diagnostics,
+      resolveLink,
+    );
     if (resolved !== null) {
       anchors.push({ line: lineIndex, ...resolved });
     }
@@ -252,12 +277,62 @@ function resolveAnchor(
   source: string,
   format: "epub" | "pdf" | null,
   diagnostics: BookNoteDiagnostic[],
+  resolveLink: ((linkpath: string) => string | null) | undefined,
 ): ResolvedAnchor | null {
   const sourceKey = source.toLowerCase();
-  const candidate = extractWikilinks(headingText).find(
-    (link) => link.fragment !== "" && link.path.toLowerCase() === sourceKey,
-  );
-  if (candidate === undefined) return null;
+  // The source is resolved once per heading; null when there is no
+  // resolver or the source does not name a file in the vault.
+  const sourceDest = resolveLink === undefined ? null : resolveLink(source);
+  const links = extractWikilinks(headingText);
+
+  if (resolveLink !== undefined && sourceDest === null) {
+    if (links.some((link) => link.fragment !== "")) {
+      diagnostics.push({
+        line,
+        message: `The note's source ${source} does not name a file in the vault, so this heading cannot be anchored`,
+      });
+    }
+    return null;
+  }
+
+  let candidate: Wikilink | undefined;
+  let mismatch: { path: string; dest: string } | null = null;
+  let unresolvable: string | null = null;
+  for (const link of links) {
+    if (link.fragment === "") continue;
+    const linkDest = resolveLink === undefined ? null : resolveLink(link.path);
+    const matches =
+      linkDest !== null && sourceDest !== null
+        ? linkDest.toLowerCase() === sourceDest.toLowerCase()
+        : link.path.toLowerCase() === sourceKey;
+    if (matches) {
+      candidate = link;
+      break;
+    }
+    // Remember the first explainable miss so a non-matching heading can
+    // report why it was not anchored instead of vanishing: a silent
+    // zero-section note is the one outcome this must never produce.
+    if (linkDest !== null && sourceDest !== null) {
+      if (mismatch === null) mismatch = { path: link.path, dest: linkDest };
+    } else if (linkDest === null && sourceDest !== null) {
+      if (unresolvable === null) unresolvable = link.path;
+    }
+  }
+
+  if (candidate === undefined) {
+    if (mismatch !== null) {
+      diagnostics.push({
+        line,
+        message: `Anchor link [[${mismatch.path}]] resolves to ${mismatch.dest}, not the note's source ${source}`,
+      });
+    } else if (unresolvable !== null) {
+      diagnostics.push({
+        line,
+        message: `Anchor link [[${unresolvable}]] does not resolve to a file in the vault, so it cannot match the note's source ${source}`,
+      });
+    }
+    return null;
+  }
 
   let position: AnchorPosition;
   try {
