@@ -604,6 +604,16 @@ describe("F5.1 parseOpdsFeed — summary text decoding", () => {
     ).entries[0];
     expect(entry.summary).toBe("Hello, & welcome.");
   });
+
+  it("collapses escaped CRLF after line and block boundaries", () => {
+    const entry = parseOpdsFeed(
+      entryFeed(
+        "&lt;p&gt;one&lt;br&gt;&#13;&#10;two&lt;/p&gt;&#13;&#10;&lt;p&gt;three&lt;/p&gt;",
+      ),
+      "https://booklore.example/api/v1/opds/catalog",
+    ).entries[0];
+    expect(entry.summary).toBe("one\ntwo\nthree");
+  });
 });
 
 describe("F5.1 parseOpdsFeed — OpenSearch count validation", () => {

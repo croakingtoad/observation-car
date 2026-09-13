@@ -177,8 +177,8 @@ function summaryText(element: Element | null): string {
     return "";
   }
   const markup = (element.textContent ?? "")
-    .replace(/[ \t]*<br\s*\/?>[ \t]*\n?/gi, "\n")
-    .replace(/[ \t]*<\/(?:p|div)\s*>[ \t]*\n?/gi, "\n");
+    .replace(/[ \t\r]*<br\s*\/?>[ \t\r]*\r?\n?/gi, "\n")
+    .replace(/[ \t\r]*<\/(?:p|div)\s*>[ \t\r]*\r?\n?/gi, "\n");
   if (markup === "") {
     return "";
   }
