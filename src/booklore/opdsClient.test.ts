@@ -339,6 +339,23 @@ describe("F5.1 OpdsClient — credential origin boundary", () => {
     });
   });
 
+  it("omits credentials when two opaque URLs both serialize their origin as null", async () => {
+    const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "data:text/plain,configured",
+        opdsUsername: USERNAME,
+        opdsPassword: PASSWORD,
+      }),
+      transport,
+    );
+
+    await client.fetchFeed("data:text/plain,feed");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({ Accept: "application/atom+xml" });
+  });
+
   it.each([
     ["different host", "https://evil.example.net:8443/collect"],
     ["different scheme", "http://booklore.example:8443/api/v1/opds"],

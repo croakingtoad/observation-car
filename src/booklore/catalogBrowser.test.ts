@@ -251,6 +251,9 @@ describe("F5.2 CatalogBrowser", () => {
       async fetchFeed(): Promise<OpdsFeed> {
         throw new Error("not used");
       },
+      async fetchOpenSearchDescription(): Promise<OpenSearchDescription> {
+        throw new Error("not used");
+      },
     };
     const container = document.createElement("div");
     const browser = new CatalogBrowser(container, client);
@@ -281,6 +284,9 @@ describe("F5.2 CatalogBrowser", () => {
         }
         if (url === ALL_BOOKS_URL) return page;
         throw new Error(`unexpected URL: ${url}`);
+      },
+      async fetchOpenSearchDescription(): Promise<OpenSearchDescription> {
+        throw new Error("not used");
       },
     };
     const container = document.createElement("div");
@@ -324,6 +330,9 @@ describe("F5.2 CatalogBrowser", () => {
         }
         if (url === ALL_BOOKS_URL) return page;
         throw new Error(`unexpected URL: ${url}`);
+      },
+      async fetchOpenSearchDescription(): Promise<OpenSearchDescription> {
+        throw new Error("not used");
       },
     };
     const container = document.createElement("div");

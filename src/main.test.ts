@@ -818,9 +818,10 @@ describe("Booklore registrations from plugin onload", () => {
         updated: "2026-09-11T12:00:00Z",
       },
     };
-    const plugin = makePlugin({ ...DEFAULT_SETTINGS, downloadIndex });
+    const plugin = makePlugin(DEFAULT_SETTINGS);
 
     await plugin.onload();
+    Object.assign(plugin.settings, { downloadIndex });
     await plugin.updateSettings({ booksFolder: "Library" });
 
     const savedData = (plugin as unknown as { savedData: unknown[] }).savedData;
