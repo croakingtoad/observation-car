@@ -197,8 +197,8 @@ function sectionRange(
   const startLine = Math.max(section.headingLine, section.bodyRange.start, 0);
   const endLine = Math.min(section.bodyRange.end, editorState.doc.lines - 1);
   if (startLine > endLine) return null;
-  return {
-    from: editorState.doc.line(startLine + 1).from,
-    to: editorState.doc.line(endLine + 1).to,
-  };
+  const from = editorState.doc.line(startLine + 1).from;
+  const to = editorState.doc.line(endLine + 1).to;
+  if (from === to) return null;
+  return { from, to };
 }

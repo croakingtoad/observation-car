@@ -126,6 +126,24 @@ describe("focus-mode CM6 decoration", () => {
     expect(view.state.doc.toString()).toBe(NOTE);
   });
 
+  it("ignores a stale section that resolves to a trailing blank line", () => {
+    view = createView("## Current\nbody\n");
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const current = section(0, 1, 0);
+
+    setFocusModeDecoration(editor, true);
+    expect(() =>
+      setFocusSectionsDecoration(
+        editor,
+        [current, section(2, 5, 1)],
+        current,
+      ),
+    ).not.toThrow();
+
+    expect(foldedWidgets(view)).toEqual([]);
+    expect(view.state.doc.toString()).toBe("## Current\nbody\n");
+  });
+
   it("seeds a first controller toggle from live pairing state", async () => {
     view = createView();
     const controller = new FocusModeController();
