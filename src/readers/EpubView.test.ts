@@ -10,7 +10,11 @@ import {
 } from "vitest";
 import type { TFile, WorkspaceLeaf } from "obsidian";
 import { DEFAULT_SETTINGS } from "../settings";
-import { EpubView, type EpubViewHost } from "./EpubView";
+import {
+  EpubView,
+  type EpubLocationEvent,
+  type EpubViewHost,
+} from "./EpubView";
 
 /**
  * Fake epubjs: counts every Book/Rendition built and whether it was
@@ -22,6 +26,7 @@ const epubMock = vi.hoisted(() => {
   const state = {
     failDisplay: false,
     currentDisplayGate: null as Promise<void> | null,
+    navigationFailure: null as unknown,
   };
 
   class FakeRendition {
@@ -56,6 +61,7 @@ const epubMock = vi.hoisted(() => {
     prev = vi.fn();
     next = vi.fn();
     themes = { register: vi.fn(), select: vi.fn(), override: vi.fn() };
+    epubcfi = { compare: vi.fn(() => 0) };
 
     constructor() {
       FakeRendition.instances.push(this);
@@ -77,8 +83,25 @@ const epubMock = vi.hoisted(() => {
     destroyed = false;
     readonly rendition: FakeRendition;
     readonly loaded = {
-      navigation: Promise.resolve({ toc: [] }),
+      get navigation(): Promise<{
+        toc: Array<{ id: string; label: string; href: string }>;
+      }> {
+        return state.navigationFailure === null
+          ? Promise.resolve({
+              toc: [
+                {
+                  id: "toc-ch1",
+                  label: "The Opening Image",
+                  href: "chapters/ch1.xhtml",
+                },
+              ],
+            })
+          : Promise.reject(state.navigationFailure);
+      },
       metadata: Promise.resolve({ title: "Fake Book" }),
+    };
+    readonly spine = {
+      get: (target: string) => ({ href: target }),
     };
     renderTo = vi.fn((_el: HTMLElement, _options: unknown) => this.rendition);
     destroy = vi.fn(() => {
@@ -204,6 +227,7 @@ beforeEach(() => {
   epubMock.epub.mockReset();
   state.failDisplay = false;
   state.currentDisplayGate = null;
+  state.navigationFailure = null;
   FakeBook.instances.length = 0;
   FakeRendition.instances.length = 0;
   FakeMutationObserver.instances.length = 0;
@@ -668,5 +692,173 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
 
     expect(FakeBook.instances).toHaveLength(0);
     expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
+  });
+});
+
+function relocatedAt(cfi: string, href: string) {
+  return {
+    start: { index: 3, href, cfi, displayed: { page: 1, total: 1 } },
+    end: { index: 3, href, cfi, displayed: { page: 1, total: 1 } },
+    atStart: true,
+    atEnd: false,
+  };
+}
+
+describe("EpubView location events (F2.5)", () => {
+  it("logs navigation failures and keeps chapter-label fallback", async () => {
+    vi.useFakeTimers();
+    const failure = new Error("malformed navigation document");
+    state.navigationFailure = failure;
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const events: EpubLocationEvent[] = [];
+    view.on("location", (location) => events.push(location));
+
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[observation-car] could not resolve EPUB navigation",
+      failure,
+    );
+    expect(events[0]?.label).toBe("Ch. 3");
+    await view.onClose();
+  });
+
+  it("emits a debounced LocationChanged with {file, fragment, chapter, label}", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const events: EpubLocationEvent[] = [];
+    view.on("location", (location) => events.push(location));
+    const openedFile = file("Books/Test.epub");
+
+    await view.onLoadFile(openedFile);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(149);
+    expect(events).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      file: openedFile,
+      fragment: "#epubcfi(/6/8!/4/2/1:0)",
+      chapter: 3,
+      label: "The Opening Image",
+    });
+    await view.onClose();
+  });
+
+  it("delivers the first relocation to subscribers attached before the book loads", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const events: EpubLocationEvent[] = [];
+    const unsubscribe = view.on("location", (location) => events.push(location));
+
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    const rendition = FakeRendition.instances[0];
+    rendition.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    expect(events).toHaveLength(1);
+
+    unsubscribe();
+    rendition.emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/14!/4/2/12:0)", "chapters/ch3.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    expect(events).toHaveLength(1);
+    await view.onClose();
+  });
+
+  it("keeps the subscription alive across a book swap in the same leaf", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const events: EpubLocationEvent[] = [];
+    view.on("location", (location) => events.push(location));
+
+    const first = file("Books/One.epub");
+    await view.onLoadFile(first);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/2/2!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    expect(events[0]).toMatchObject({ file: first, chapter: 0 });
+
+    const second = file("Books/Two.epub");
+    await view.onLoadFile(second);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeRendition.instances[1].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ file: second, chapter: 3 });
+    await view.onClose();
+  });
+
+  it("cancels a pending event on close", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    const events: EpubLocationEvent[] = [];
+    view.on("location", (location) => events.push(location));
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+
+    await view.onClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(events).toHaveLength(0);
+  });
+
+  it("detaches the rendition listener on close", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    const rendition = FakeRendition.instances[0];
+    const listenersBeforeClose = rendition.listenerCount("relocated");
+    await view.onClose();
+
+    expect(rendition.listenerCount("relocated")).toBe(
+      listenersBeforeClose - 1,
+    );
+  });
+
+  it("adds no listeners to document or window", async () => {
+    vi.useFakeTimers();
+    const windowSpy = vi.spyOn(window, "addEventListener");
+    const documentSpy = vi.spyOn(document, "addEventListener");
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(150);
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    await view.onClose();
+
+    expect(windowSpy).not.toHaveBeenCalled();
+    expect(documentSpy).not.toHaveBeenCalled();
   });
 });

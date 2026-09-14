@@ -22,6 +22,8 @@ export interface ObservationCarSettings {
   noteTemplate: string;
   /** Whether focus mode starts on when a book note opens beside its reader. */
   focusModeDefault: boolean;
+  /** Whether opening a reader also opens its book note beside it. */
+  autoOpenBookNote: boolean;
   /**
    * F2.2 — EPUB reader flow mode. Persisted as a global plugin setting;
    * per-book state is F2.4's job (LOCO-29).
@@ -82,6 +84,7 @@ export const DEFAULT_SETTINGS: ObservationCarSettings = {
   noteTemplate: DEFAULT_NOTE_TEMPLATE,
   focusModeDefault: false,
   epubFlowMode: "paginated",
+  autoOpenBookNote: false,
   pdfChapterWindowPages: 10,
   splitReadRatioPercent: 60,
   splitWriteRatioPercent: 40,
@@ -147,6 +150,9 @@ export function mergeSettings(stored: unknown): ObservationCarSettings {
     (partial.epubFlowMode === "paginated" || partial.epubFlowMode === "scrolled")
   ) {
     settings.epubFlowMode = partial.epubFlowMode;
+  }
+  if (typeof partial.autoOpenBookNote === "boolean") {
+    settings.autoOpenBookNote = partial.autoOpenBookNote;
   }
   if (typeof partial.pdfChapterWindowPages === "number") {
     settings.pdfChapterWindowPages = clampInt(

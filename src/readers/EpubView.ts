@@ -370,8 +370,12 @@ export class EpubView extends FileView {
     // a book without one keeps the "Ch. N" fallback.
     void book.loaded.navigation
       .then((navigation) => tracker.setToc(navigation.toc))
-      .catch(() => {
+      .catch((error: unknown) => {
         // An unresolvable TOC is not fatal; labels stay "Ch. N".
+        console.warn(
+          "[observation-car] could not resolve EPUB navigation",
+          error,
+        );
       });
 
     const forward = tracker.on((loc) => {
