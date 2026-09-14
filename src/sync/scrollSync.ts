@@ -89,6 +89,10 @@ export class ScrollSync {
   private readonly lastEditorChange = new WeakMap<ScrollEditor, number>();
   private readonly currentSection = new Map<WorkspaceLeaf, CurrentSection>();
   private readonly lastEditor = new Map<WorkspaceLeaf, WeakRef<ScrollEditor>>();
+  private readonly focusSectionDocuments = new WeakMap<
+    readonly BookNoteSection[],
+    WeakMap<ScrollEditor, object>
+  >();
 
   constructor(deps: ScrollSyncDeps) {
     this.deps = deps;
@@ -286,7 +290,10 @@ export class ScrollSync {
       this.deps.focusMode?.reset(previousEditor);
     }
     this.setCurrentSection(editor, section);
-    if (this.deps.focusMode !== undefined) {
+    if (
+      this.deps.focusMode !== undefined &&
+      this.focusSectionsMatchDocument(editor, pairing.bookNote.sections)
+    ) {
       if (focusWasActive && !isFocusModeDecorationEnabled(editor)) {
         this.deps.focusMode.toggle(editor, pairing.bookNote.sections, section);
       }
@@ -298,6 +305,30 @@ export class ScrollSync {
       { key, section, editor: new WeakRef(editor) },
     );
     this.lastEditor.set(leaf, new WeakRef(editor));
+  }
+
+  /**
+   * Bind each immutable parse result to the CM6 document it first described.
+   * A document edit invalidates focus decorations immediately; do not let the
+   * same pre-edit sections clear that invalidation before the store reparses.
+   */
+  private focusSectionsMatchDocument(
+    editor: ScrollEditor,
+    sections: readonly BookNoteSection[],
+  ): boolean {
+    const cm = codeMirrorView(editor);
+    if (cm === null) return true;
+    let documents = this.focusSectionDocuments.get(sections);
+    if (documents === undefined) {
+      documents = new WeakMap<ScrollEditor, object>();
+      this.focusSectionDocuments.set(sections, documents);
+    }
+    const stampedDocument = documents.get(editor);
+    if (stampedDocument === undefined) {
+      documents.set(editor, cm.state.doc);
+      return true;
+    }
+    return stampedDocument === cm.state.doc;
   }
 
   private setCurrentSection(
