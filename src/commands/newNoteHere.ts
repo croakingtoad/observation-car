@@ -17,6 +17,8 @@ import type {
 
 export const NEW_NOTE_HERE_COMMAND_ID = "new-note-here";
 
+const EXCERPT_CHARACTER_LIMIT = 60;
+
 interface ReaderSelection {
   readonly text: string;
   readonly fragment: string;
@@ -201,10 +203,7 @@ function insertOrJump(
 }
 
 function focusSection(editor: Editor, section: BookNoteSection): void {
-  const position = { line: section.headingLine, ch: 0 };
-  editor.setCursor(position);
-  editor.scrollIntoView({ from: position, to: position }, true);
-  editor.focus();
+  focusEditorAt(editor, { line: section.headingLine, ch: 0 });
 }
 
 function focusEditorAt(editor: Editor, position: EditorPosition): void {
@@ -222,7 +221,7 @@ function renderSection(
   eol: string,
 ): string {
   const detail = selection === null ? "note" : excerpt(selection.text);
-  const alias = safeAlias(`${chapterLabel} — ${detail}`);
+  const alias = safeAlias(`${collapseWhitespace(chapterLabel)} — ${detail}`);
   const heading = `${"#".repeat(headingLevel)} [[${source}${withHash(fragment)}|${alias}]]`;
   if (selection === null) return `${heading}${eol}${eol}`;
   const quote = normalizedSelectionLines(selection.text)
@@ -251,11 +250,15 @@ function quoteLineCount(text: string): number {
 }
 
 function excerpt(text: string): string {
-  const collapsed = text.trim().replace(/\s+/g, " ");
+  const collapsed = collapseWhitespace(text);
   const characters = Array.from(collapsed);
-  return characters.length <= 60
+  return characters.length <= EXCERPT_CHARACTER_LIMIT
     ? collapsed
-    : `${characters.slice(0, 59).join("")}…`;
+    : `${characters.slice(0, EXCERPT_CHARACTER_LIMIT - 1).join("")}…`;
+}
+
+function collapseWhitespace(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
 }
 
 function safeAlias(alias: string): string {
