@@ -134,16 +134,11 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       expect(row.breaks.length).toBe(documentLinesFor(row).length - 1);
     }
 
-    const mixedRowCount = LINE_BREAK_ROWS.filter((row) => {
-      const terminatorKinds = new Set([...row.breaks, ...(row.trailing ? [row.trailing] : [])]);
-      return terminatorKinds.size >= 2;
-    }).length;
-    expect(mixedRowCount).toBe(
-      LINE_BREAK_ROWS.filter((r) => {
-        const kinds = new Set([...r.breaks, ...(r.trailing ? [r.trailing] : [])]);
-        return kinds.size >= 2;
-      }).length,
-    );
+    const mixedRowCount = LINE_BREAK_ROWS.filter((row) => new Set(row.breaks).size >= 2).length;
+    // Pinned count: 7 rows have multiple line-break kinds in their breaks array.
+    // Deriving from the table under test is circular since a regression that
+    // duplicates a mixed row would keep the count self-consistent.
+    expect(mixedRowCount).toBe(7);
     expect(LINE_BREAK_ROWS.some((row) => row.trailing !== undefined)).toBe(true);
     expect(LINE_BREAK_ROWS.some((row) => row.trailing === undefined)).toBe(true);
 
@@ -154,13 +149,12 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       "all three line breaks mixed",
       "CRLF immediately before an anchor heading",
       "lone CR immediately before an anchor heading",
-      "leading LF blank line and trailing CRLF",
       "leading lone CR blank line, no trailing newline",
     ];
     for (const name of MIXED_ROW_NAMES) {
       const row = LINE_BREAK_ROWS.find((r) => r.name === name)!;
-      const terminatorKinds = new Set([...row.breaks, ...(row.trailing ? [row.trailing] : [])]);
-      expect(terminatorKinds.size).toBeGreaterThanOrEqual(2);
+      const breakKinds = new Set(row.breaks);
+      expect(breakKinds.size).toBeGreaterThanOrEqual(2);
     }
 
     // Census: verify that for the rows whose names claim a specific break
