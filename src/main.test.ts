@@ -13,6 +13,7 @@ import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
 import { DEFAULT_SETTINGS } from "./settings";
 import { ReaderRegistry } from "./sync/ReaderRegistry";
+import { FocusModeController } from "./sync/focusMode";
 import { currentSectionViewPlugin } from "./sync/currentSectionDecoration";
 import {
   DEFAULT_SCROLL_DEBOUNCE_MS,
@@ -1190,6 +1191,15 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     const book = fake.files.get(SOURCE);
     if (book === undefined) throw new Error("book fixture is missing");
+    const markdownView = new MarkdownViewDouble(
+      noteFile,
+      {
+        hasFocus: () => true,
+        lineCount: () => 20,
+        scrollIntoView: vi.fn(),
+      },
+    );
+    fake.leaves.add({ view: markdownView });
     const { view } = openEpubReader(book);
     const retargetedSource = "Books/Retargeted.epub";
     addBookFile(retargetedSource);
@@ -1727,6 +1737,66 @@ describe("plugin wiring (substituted obsidian module)", () => {
       false,
     );
     expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("notices missing pairing or editor when toggling focus mode", async () => {
+    expect(plugin.toggleFocusMode()).toBeUndefined();
+    expect(noticeMessages).toEqual([
+      "Open or create this book's note before toggling focus mode.",
+    ]);
+
+    noticeMessages.length = 0;
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    openEpubReader(book);
+    plugin.toggleFocusMode();
+    expect(noticeMessages).toEqual([
+      "Open this book's note before toggling focus mode.",
+    ]);
+  });
+
+  it("seeds focus mode on first toggle from the live reader location", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const markdownView = new MarkdownViewDouble(
+      noteFile,
+      {
+        hasFocus: () => true,
+        getViewType: () => "markdown",
+        lineCount: () => 20,
+        scrollIntoView: vi.fn(),
+      },
+    );
+    fake.leaves.add({ view: markdownView });
+    const { view } = openEpubReader(book);
+    view.emitLocation(`#${CFI_2}`);
+    await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    const toggle = vi.spyOn(
+      (plugin as unknown as { focusMode: FocusModeController }).focusMode,
+      "toggle",
+    );
+    plugin.toggleFocusMode();
+
+    expect(noticeMessages).toEqual([]);
+    expect(toggle).toHaveBeenCalledWith(
+      expect.objectContaining({ hasFocus: expect.any(Function) }),
+      expect.arrayContaining([
+        expect.objectContaining({ headingLine: 6 }),
+        expect.objectContaining({ headingLine: 9 }),
+      ]),
+      expect.objectContaining({ headingLine: 9 }),
+    );
   });
 
   it("releases scroll sync and its pending timer when a reader leaf closes", async () => {

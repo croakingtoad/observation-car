@@ -237,6 +237,23 @@ describe("ScrollSync", () => {
     expect(rig.setCurrentSection).toHaveBeenLastCalledWith(rig.editor, null);
   });
 
+  it("exposes the last matching section for focus-mode seeding", () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+
+    expect(rig.sync.getCurrentSection(rig.editor)).toBeNull();
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(rig.sync.getCurrentSection(rig.editor)).toEqual({
+      headingLine: 6,
+      bodyRange: { start: 6, end: 8 },
+      fragment: `epubcfi(${CFI_1})`,
+      position: expect.any(Object),
+      chapter: 0,
+    });
+  });
+
   it("does not move before the first anchor, then scrolls when the first anchor is reached", () => {
     vi.useFakeTimers();
     const rig = makeRig();

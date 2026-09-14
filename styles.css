@@ -243,3 +243,22 @@
   right: 0.1em;
   z-index: 30;
 }
+
+/* F4.5 — collapsed sections outside the reader's current chapter. */
+.markdown-source-view.mod-cm6 .cm-line .oc-focus-fold {
+  display: block;
+  width: 100%;
+  margin: 6px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-align: center;
+}
+
+.markdown-source-view.mod-cm6 .cm-line .oc-focus-fold:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}

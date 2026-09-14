@@ -1,4 +1,10 @@
-import { MarkdownView, Plugin, TFile, type WorkspaceLeaf } from "obsidian";
+import {
+  MarkdownView,
+  Notice,
+  Plugin,
+  TFile,
+  type WorkspaceLeaf,
+} from "obsidian";
 import { registerCreateBookNoteCommand } from "./commands/createBookNote";
 import {
   openBookNoteBesideRecentReader,
@@ -327,9 +333,20 @@ export default class ObservationCarPlugin extends Plugin {
   /** Toggle read-only focus decoration for the active paired note. */
   toggleFocusMode(): void {
     const pairing = activePairing(this);
-    if (pairing === undefined) return;
+    if (pairing === undefined) {
+      new Notice("Open or create this book's note before toggling focus mode.");
+      return;
+    }
     const editor = this.findOpenEditor(pairing.notePath);
-    if (editor !== null) this.focusMode.toggle(editor);
+    if (editor === null) {
+      new Notice("Open this book's note before toggling focus mode.");
+      return;
+    }
+    this.focusMode.toggle(
+      editor,
+      pairing.bookNote.sections,
+      this.scrollSync.getCurrentSection(editor),
+    );
   }
 
   onunload(): void {

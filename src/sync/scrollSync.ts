@@ -69,6 +69,7 @@ interface PendingScroll {
 
 interface CurrentSection {
   readonly key: string;
+  readonly section: BookNoteSection;
   /** Non-retaining handle to the exact editor that received the class. */
   readonly editor: WeakRef<ScrollEditor>;
 }
@@ -105,6 +106,14 @@ export class ScrollSync {
   /** Record an editor mutation so scrolling waits for a full idle window. */
   markEditorChanged(editor: ScrollEditor): void {
     this.lastEditorChange.set(editor, this.now());
+  }
+
+  /** The last section a location event matched to this editor, if any. */
+  getCurrentSection(editor: ScrollEditor): BookNoteSection | null {
+    for (const current of this.currentSection.values()) {
+      if (current.editor.deref() === editor) return current.section;
+    }
+    return null;
   }
 
   /** Release subscriptions for reader leaves that have closed. */
@@ -266,7 +275,10 @@ export class ScrollSync {
       this.deps.focusMode.setSections(editor, pairing.bookNote.sections);
       this.deps.focusMode.setCurrentSection(editor, section);
     }
-    this.currentSection.set(leaf, { key, editor: new WeakRef(editor) });
+    this.currentSection.set(
+      leaf,
+      { key, section, editor: new WeakRef(editor) },
+    );
   }
 
   private setCurrentSection(

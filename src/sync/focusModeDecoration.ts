@@ -1,4 +1,5 @@
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
+import type { Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -53,7 +54,9 @@ class FoldedSectionWidget extends WidgetType {
 const focusStateField = StateField.define<FocusState>({
   create: () => INITIAL_FOCUS_STATE,
   update(currentState, transaction) {
-    let nextState = transaction.docChanged ? INITIAL_FOCUS_STATE : currentState;
+    let nextState = transaction.docChanged
+      ? { ...currentState, sections: [], currentSection: null }
+      : currentState;
 
     for (const effect of transaction.effects) {
       if (effect.is(setFocusModeEffect)) {
@@ -125,17 +128,39 @@ function buildDecorations(
   );
   if (folded.length === 0) return Decoration.none;
 
-  const decorations = [];
-  for (const section of folded) {
-    const range = sectionRange(editorState, section);
-    if (range === null) continue;
+  const decorations: Range<Decoration>[] = [];
+  let runCount = 0;
+  let runStart = 0;
+  let runEnd = 0;
+
+  const finishRun = () => {
+    if (runCount === 0) return;
     decorations.push(
       Decoration.replace({
-        widget: new FoldedSectionWidget(folded.length),
+        widget: new FoldedSectionWidget(runCount),
         side: 1,
-      }).range(range.from, range.to),
+      }).range(runStart, runEnd),
     );
+  };
+
+  for (const [sectionIndex, section] of folded.entries()) {
+    const range = sectionRange(editorState, section);
+    if (range === null) {
+      finishRun();
+      runCount = 0;
+      continue;
+    }
+    if (range.from !== sectionIndex - runCount) {
+      finishRun();
+      runCount = 0;
+    }
+    if (runCount === 0) {
+      runStart = range.from;
+    }
+    runCount += 1;
+    runEnd = range.to;
   }
+  finishRun();
   return Decoration.set(decorations, true);
 }
 

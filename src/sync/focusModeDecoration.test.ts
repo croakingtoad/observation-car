@@ -47,8 +47,32 @@ describe("focus-mode CM6 decoration", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(foldedWidgets(view).map((widget) => widget.textContent)).toEqual([
-      "2 sections in other chapters folded",
-      "2 sections in other chapters folded",
+      "1 section in other chapters folded",
+      "1 section in other chapters folded",
+    ]);
+    expect(view.state.doc.toString()).toBe(NOTE);
+  });
+
+  it("replaces each contiguous run with one widget using its own count", async () => {
+    view = createView();
+
+    setFocusModeDecoration({ cm: view }, true);
+    setFocusSectionsDecoration(
+      { cm: view },
+      [
+        section(0, 1, 1),
+        section(2, 3, 0),
+        section(4, 5, 0),
+        section(6, 6, 1),
+      ],
+      section(6, 6, 1),
+    );
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(foldedWidgets(view).map((widget) => widget.textContent)).toEqual([
+      "1 section in other chapters folded",
+      "1 section in other chapters folded",
     ]);
     expect(view.state.doc.toString()).toBe(NOTE);
   });
@@ -95,6 +119,19 @@ describe("focus-mode CM6 decoration", () => {
     });
 
     expect(foldedWidgets(view)).toEqual([]);
+  });
+
+  it("clears folding after an in-document edit while preserving the note", async () => {
+    view = createView();
+    enableFocus(section(4, 5, 0));
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)).toHaveLength(2);
+
+    view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
+
+    expect(foldedWidgets(view)).toEqual([]);
+    expect(view.state.doc.toString()).toBe(`typed first\n${NOTE}`);
   });
 
   it("ignores editors without a live CM6 EditorView", () => {

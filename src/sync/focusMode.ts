@@ -10,14 +10,26 @@ import type { ScrollEditor } from "./scrollSync";
 export class FocusModeController {
   private readonly editors = new WeakMap<ScrollEditor, FocusModeEditor>();
 
-  /** One enabled note/editor pair; sections and location update separately. */
-  toggle(editor: ScrollEditor): void {
+  /**
+   * One enabled note/editor pair. Pass the live pairing state when it is
+   * available so a first press can fold immediately, before any location
+   * event has had a chance to arrive after the toggle.
+   */
+  toggle(
+    editor: ScrollEditor,
+    sections: readonly BookNoteSection[] = [],
+    currentSection: BookNoteSection | null = null,
+  ): void {
     const state = this.editors.get(editor) ?? {
       enabled: false,
       sections: [],
       currentSection: null,
     };
-    this.editors.set(editor, { ...state, enabled: !state.enabled });
+    this.editors.set(editor, {
+      enabled: !state.enabled,
+      sections: sections.length > 0 ? sections : state.sections,
+      currentSection: currentSection ?? state.currentSection,
+    });
     apply(editor, this.editors.get(editor) ?? null);
   }
 
