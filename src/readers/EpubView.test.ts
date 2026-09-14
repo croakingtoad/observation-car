@@ -879,8 +879,8 @@ describe("EpubView forwarded-keystroke leaf attribution", () => {
   it("activates the leaf that owns a chord forwarded from its iframe", async () => {
     const bookA = file("Books/A.epub");
     const bookB = file("Books/B.epub");
-    const leafA = {} as WorkspaceLeaf;
-    const leafB = {} as WorkspaceLeaf;
+    const leafA = { probe: "A" } as unknown as WorkspaceLeaf;
+    const leafB = { probe: "B" } as unknown as WorkspaceLeaf;
     const setActiveLeaf = vi.fn();
     const viewA = makeView(
       vi.fn().mockResolvedValue(new Uint8Array([1])),
@@ -929,9 +929,7 @@ describe("EpubView forwarded-keystroke leaf attribution", () => {
       iframe: readerFrame,
       window: readerFrame.contentWindow,
     };
-    for (const listener of renderedA["listeners"].get("rendered") ?? []) {
-      listener({}, contentsA);
-    }
+    renderedA.emit("rendered", {}, contentsA);
     const event = new KeyboardEvent("keydown", {
       key: "j",
       code: "KeyJ",
@@ -940,6 +938,7 @@ describe("EpubView forwarded-keystroke leaf attribution", () => {
     });
     bookADocument.dispatchEvent(event);
 
+    expect(setActiveLeaf).toHaveBeenCalledTimes(1);
     expect(setActiveLeaf).toHaveBeenCalledWith(leafA, { focus: false });
 
     await viewA.onClose();
