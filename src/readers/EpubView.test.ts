@@ -875,6 +875,78 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
   });
 });
 
+describe("EpubView forwarded-keystroke leaf attribution", () => {
+  it("activates the leaf that owns a chord forwarded from its iframe", async () => {
+    const bookA = file("Books/A.epub");
+    const bookB = file("Books/B.epub");
+    const leafA = {} as WorkspaceLeaf;
+    const leafB = {} as WorkspaceLeaf;
+    const setActiveLeaf = vi.fn();
+    const viewA = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+    );
+    Object.assign(viewA, {
+      app: {
+        vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([1])) },
+        workspace: { setActiveLeaf },
+      },
+    });
+    Object.defineProperty(viewA, "leaf", {
+      configurable: true,
+      get: () => leafA,
+    });
+    const viewB = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([2])),
+    );
+    Object.assign(viewB, {
+      app: {
+        vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([2])) },
+        workspace: { setActiveLeaf },
+      },
+    });
+    Object.defineProperty(viewB, "leaf", {
+      configurable: true,
+      get: () => leafB,
+    });
+
+    await viewA.onLoadFile(bookA);
+    await viewB.onLoadFile(bookB);
+    expect(viewA.file).toBe(bookA);
+    expect(viewB.file).toBe(bookB);
+
+    const hostFrame = document.createElement("iframe");
+    document.body.append(hostFrame);
+    const hostDocument = hostFrame.contentDocument;
+    if (hostDocument === null) throw new Error("test host frame has no document");
+    const readerFrame = hostDocument.createElement("iframe");
+    hostDocument.body.append(readerFrame);
+    const bookADocument = readerFrame.contentDocument;
+    if (bookADocument === null) throw new Error("test book frame has no document");
+    const renderedA = FakeRendition.instances[0];
+    const contentsA = {
+      contents: {},
+      document: bookADocument,
+      iframe: readerFrame,
+      window: readerFrame.contentWindow,
+    };
+    for (const listener of renderedA["listeners"].get("rendered") ?? []) {
+      listener({}, contentsA);
+    }
+    const event = new KeyboardEvent("keydown", {
+      key: "j",
+      code: "KeyJ",
+      bubbles: true,
+      cancelable: true,
+    });
+    bookADocument.dispatchEvent(event);
+
+    expect(setActiveLeaf).toHaveBeenCalledWith(leafA, { focus: false });
+
+    await viewA.onClose();
+    await viewB.onClose();
+  });
+});
+
 function relocatedAt(cfi: string, href: string) {
   return {
     start: { index: 3, href, cfi, displayed: { page: 1, total: 1 } },

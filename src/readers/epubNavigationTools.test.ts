@@ -193,6 +193,96 @@ describe("EpubKeyBridge", () => {
   });
 
   it.each([
+    ["ArrowLeft", { code: "ArrowLeft", keyCode: 37 }],
+    ["ArrowRight", { code: "ArrowRight", keyCode: 39 }],
+    ["PageUp", { code: "PageUp", keyCode: 33 }],
+    ["PageDown", { code: "PageDown", keyCode: 34 }],
+    ["c", { code: "KeyC", keyCode: 67, ctrlKey: true }],
+    ["c", { code: "KeyC", keyCode: 67, metaKey: true }],
+  ] as const)(
+    "does not fire beforeForward for reader-owned or native %s",
+    (key, init) => {
+      const { host, iframe } = documents();
+      const rendition = new FakeRendition();
+      const beforeForward = vi.fn();
+      const bridge = new EpubKeyBridge(rendition, host, vi.fn(), beforeForward);
+      rendition.render(iframe);
+
+      iframe.dispatchEvent(
+        keyboardEvent(iframe, key, { ...init, bubbles: true, cancelable: true }),
+      );
+
+      expect(beforeForward).not.toHaveBeenCalled();
+      bridge.destroy();
+    },
+  );
+
+  it("fires beforeForward before a forwarded non-paging key", () => {
+    const { host, iframe } = documents();
+    const rendition = new FakeRendition();
+    const invocationOrder: string[] = [];
+    const beforeForward = vi.fn(() => invocationOrder.push("beforeForward"));
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), beforeForward);
+    rendition.render(iframe);
+    host.addEventListener("keydown", () => invocationOrder.push("forwarded"));
+
+    iframe.dispatchEvent(
+      keyboardEvent(iframe, "j", {
+        code: "KeyJ",
+        keyCode: 74,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(invocationOrder).toEqual(["beforeForward", "forwarded"]);
+    bridge.destroy();
+  });
+
+  it("does not fire beforeForward from an interactive book target", () => {
+    const { host, iframe } = documents();
+    const rendition = new FakeRendition();
+    const beforeForward = vi.fn();
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), beforeForward);
+    rendition.render(iframe);
+    const button = iframe.createElement("button");
+    iframe.body.append(button);
+
+    button.dispatchEvent(
+      keyboardEvent(iframe, "j", {
+        code: "KeyJ",
+        keyCode: 74,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(beforeForward).not.toHaveBeenCalled();
+    bridge.destroy();
+  });
+
+  it("does not fire beforeForward for a consumed key", () => {
+    const { host, iframe } = documents();
+    const rendition = new FakeRendition();
+    const beforeForward = vi.fn();
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), beforeForward);
+    iframe.addEventListener("keydown", (event) => event.preventDefault());
+    rendition.render(iframe);
+
+    iframe.dispatchEvent(
+      keyboardEvent(iframe, "j", {
+        code: "KeyJ",
+        keyCode: 74,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(beforeForward).not.toHaveBeenCalled();
+    bridge.destroy();
+  });
+
+  it.each([
     ["ArrowLeft", "prev"],
     ["ArrowRight", "next"],
   ] as const)("consumes %s for reader paging", (key, method) => {
