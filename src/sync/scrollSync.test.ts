@@ -543,6 +543,37 @@ describe("ScrollSync", () => {
     }
   });
 
+  it("does not enable focus mode on displacement when it was never toggled on", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const sections = [section(1, CFI_1, 0), section(3, CFI_2, 1)];
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(sections),
+    );
+    const first = focusEditor();
+    const second = focusEditor();
+    rig.currentEditor = first.editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      rig.currentEditor = second.editor;
+      rig.reader.emit(CFI_2);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      expect(isFocusModeDecorationEnabled(second.editor)).toBe(false);
+      expect(focusWidgetCount(second.view)).toBe(0);
+    } finally {
+      first.view.destroy();
+      second.view.destroy();
+    }
+  });
+
   it("resets focus mode on a displaced editor when a replacement editor appears", async () => {
     vi.useFakeTimers();
     const focusMode = new FocusModeController();
