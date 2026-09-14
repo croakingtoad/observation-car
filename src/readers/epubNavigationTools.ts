@@ -41,15 +41,48 @@ import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 const EPUBCFI_WRAPPER = "epubcfi(";
 
 interface EpubRenderedView {
+  contents?: unknown;
   document: Document;
+  iframe?: unknown;
   window: Window;
 }
 
-type RenderedContents = Pick<Contents, "document">;
+type EpubFrameElement = Element & Pick<HTMLIFrameElement, "contentDocument">;
+type RenderedContents = EpubRenderedView;
 type RenderedHandler = (
   section: unknown,
   contents: RenderedContents,
 ) => void;
+
+function isEpubFrameElement(element: Element): element is EpubFrameElement {
+  return element.localName === "iframe" && "contentDocument" in element;
+}
+
+function captureFrameElement(view: EpubRenderedView): EpubFrameElement | null {
+  if (
+    "contents" in view &&
+    view.contents === undefined &&
+    "iframe" in view &&
+    view.iframe === undefined
+  ) {
+    return null;
+  }
+  const frameElement = view.window.frameElement;
+  if (frameElement === null || !isEpubFrameElement(frameElement)) {
+    throw new Error("epub.js rendered contents without an iframe frame element");
+  }
+  return frameElement;
+}
+
+function isDiscardedView(
+  document: Document,
+  frameElement: EpubFrameElement,
+): boolean {
+  return (
+    frameElement.isConnected === false ||
+    frameElement.contentDocument !== document
+  );
+}
 
 export interface EpubKeyBridgeRendition {
   on(event: "rendered", handler: RenderedHandler): unknown;
@@ -72,15 +105,20 @@ function hasClosest(
  * cancels the relay, so browser-native actions such as copy run only once.
  */
 export class EpubKeyBridge {
-  private readonly documents = new Set<Document>();
+  private readonly documents = new Map<Document, EpubFrameElement>();
   private destroyed = false;
 
   private readonly onRendered: RenderedHandler = (_section, contents) => {
     if (this.destroyed) {
       return;
     }
+    const frameElement = captureFrameElement(contents);
+    if (frameElement === null) {
+      return;
+    }
+    this.pruneDiscardedDocuments();
     contents.document.addEventListener("keydown", this.onKeyDown);
-    this.documents.add(contents.document);
+    this.documents.set(contents.document, frameElement);
 
     // Keep focus on the iframe so page keys keep working.
     contents.document.body?.setAttribute("tabindex", "0");
@@ -145,10 +183,19 @@ export class EpubKeyBridge {
     }
     this.destroyed = true;
     this.rendition.off("rendered", this.onRendered);
-    for (const document of this.documents) {
+    for (const document of this.documents.keys()) {
       document.removeEventListener("keydown", this.onKeyDown);
     }
     this.documents.clear();
+  }
+
+  private pruneDiscardedDocuments(): void {
+    for (const [document, frameElement] of this.documents) {
+      if (isDiscardedView(document, frameElement)) {
+        document.removeEventListener("keydown", this.onKeyDown);
+        this.documents.delete(document);
+      }
+    }
   }
 
   private forwardToHost(event: KeyboardEvent): void {
@@ -341,11 +388,11 @@ export function addPagingListeners(
   doc: Document,
   mode: EpubFlowMode,
   page: (direction: "prev" | "next") => void,
-): void {
+): () => void {
   // Scrolled mode is vertical: tap zones and horizontal swipe are inert,
   // so it needs neither pointer listeners nor a touch-action override.
   if (mode !== "paginated") {
-    return;
+    return () => {};
   }
 
   // Keep native vertical pan while handing horizontal gestures to the
@@ -354,7 +401,7 @@ export function addPagingListeners(
 
   let press: PointerPress | null = null;
 
-  doc.addEventListener("pointerdown", (event: PointerEvent) => {
+  const downHandler = (event: PointerEvent): void => {
     if (event.button !== 0) {
       return; // primary button only; touch and pen report 0 too
     }
@@ -364,9 +411,9 @@ export function addPagingListeners(
       startStamp: event.timeStamp,
       distance: 0,
     };
-  });
+  };
 
-  doc.addEventListener("pointermove", (event: PointerEvent) => {
+  const moveHandler = (event: PointerEvent): void => {
     if (press === null) {
       return;
     }
@@ -374,14 +421,14 @@ export function addPagingListeners(
     if (travelled > press.distance) {
       press.distance = travelled;
     }
-  });
+  };
 
   // A native pan or scroll cancels the press; it must not page.
-  doc.addEventListener("pointercancel", () => {
+  const cancelHandler = (): void => {
     press = null;
-  });
+  };
 
-  doc.addEventListener("pointerup", (event: PointerEvent) => {
+  const upHandler = (event: PointerEvent): void => {
     if (press === null) {
       return;
     }
@@ -429,8 +476,34 @@ export function addPagingListeners(
       }
       page(action.direction);
     }
-  });
+  };
+
+  doc.addEventListener("pointerdown", downHandler);
+  doc.addEventListener("pointermove", moveHandler);
+  doc.addEventListener("pointercancel", cancelHandler);
+  doc.addEventListener("pointerup", upHandler);
+
+  const remove = (): void => {
+    doc.removeEventListener("pointerdown", downHandler);
+    doc.removeEventListener("pointermove", moveHandler);
+    doc.removeEventListener("pointercancel", cancelHandler);
+    doc.removeEventListener("pointerup", upHandler);
+    doc.documentElement.style.removeProperty("touch-action");
+  };
+
+  return remove;
 }
+
+type PagingListeners = {
+  document: Document;
+  frameElement: EpubFrameElement;
+  remove: () => void;
+};
+
+type DocumentListeners = {
+  frameElement: EpubFrameElement;
+  listeners: Map<string, Set<EventListener>>;
+};
 
 const FONT_SIZE_DEFAULT = 100;
 const FONT_SIZE_MIN = 80;
@@ -543,10 +616,133 @@ export class EpubNavigationTools {
   private locations: Promise<Locations> | null = null;
   private currentLocation: Location | null = null;
   private needsCorrection = false;
+  private destroyed = false;
   private readonly keyBridge: EpubKeyBridge;
   private readonly onNewNoteClick = (event: MouseEvent): void => {
     event.stopPropagation();
     this.actions?.onNewNote();
+  };
+  private bookTitle: Promise<string> | null = null;
+  private readonly documentListeners = new Map<Document, DocumentListeners>();
+  private readonly hostKeyListeners = new Set<{
+    target: HTMLElement;
+    type: string;
+    listener: EventListener;
+  }>();
+  private readonly pagingListeners = new Set<PagingListeners>();
+
+  private readonly onRelocated = (loc: Location): void => {
+    // The selection's section may no longer be on screen (page
+    // turn); a same-section relocation (scroll) keeps it.
+    this.selectionTracker.clearUnlessInLocation(loc.start.cfi);
+    if (this.needsCorrection) {
+      this.needsCorrection = false;
+      void this.rendition.display(this.currentLocation?.start.cfi);
+    } else {
+      this.currentLocation = loc;
+    }
+  };
+
+  private readonly onResized = (): void => {
+    this.needsCorrection = true;
+  };
+
+  private readonly onRendered = (
+    _section: unknown,
+    contents: EpubRenderedView,
+  ): void => {
+    if (this.destroyed) {
+      return;
+    }
+
+    const frameElement = captureFrameElement(contents);
+    if (frameElement === null) {
+      return;
+    }
+    this.pruneDiscardedViewListeners();
+
+    // A rendered view has no selection yet. In particular, epub.js
+    // destroys and replaces the iframe on resize before relocating
+    // to the same CFI, so relocation alone cannot detect this clear.
+    this.selectionTracker.clear();
+
+    // The rendition never emits `selected` for a collapsed range,
+    // so a tap-away inside the book is caught on the iframe's own
+    // selectionchange to clear the retained selection (F2.6).
+    const selectionChangeHandler = () => {
+      this.onIframeSelectionChange(contents);
+    };
+    contents.document.addEventListener("selectionchange", selectionChangeHandler);
+    this.addDocumentListener(
+      contents.document,
+      frameElement,
+      "selectionchange",
+      selectionChangeHandler,
+    );
+
+    // Keep focus on the iframe so page keys keep working.
+    (contents.document.body as HTMLElement).setAttribute("tabindex", "0");
+    (contents.document.body as HTMLElement).focus();
+  };
+
+  private readonly onTocRendered = (
+    _section: unknown,
+    contents: Contents,
+  ): void => {
+    if (this.destroyed) {
+      return;
+    }
+
+    const frameElement = captureFrameElement(contents);
+    if (frameElement === null) {
+      return;
+    }
+    contents.document.addEventListener("mousedown", this.onDocumentMouseDown);
+    this.addDocumentListener(
+      contents.document,
+      frameElement,
+      "mousedown",
+      this.onDocumentMouseDown,
+    );
+  };
+
+  private readonly onPageRendered = (
+    _section: unknown,
+    view: EpubRenderedView,
+  ): void => {
+    if (this.destroyed || this.flow?.mode !== "paginated") {
+      return;
+    }
+
+    const frameElement = captureFrameElement(view);
+    if (frameElement === null) {
+      return;
+    }
+    this.pruneDiscardedViewListeners();
+
+    const removePagingListeners = addPagingListeners(
+      view.document,
+      this.flow.mode,
+      (direction) => {
+        if (this.destroyed) {
+          return;
+        }
+        void (direction === "next" ? this.rendition.next() : this.rendition.prev());
+      },
+    );
+    this.pagingListeners.add({
+      document: view.document,
+      frameElement,
+      remove: removePagingListeners,
+    });
+  };
+
+  private readonly onSelected = (cfiRange: string, contents: Contents): void => {
+    void this.showSelection(cfiRange, contents);
+  };
+
+  private readonly onDocumentMouseDown = (): void => {
+    this.toggleTocVisibility(false);
   };
 
   constructor(
@@ -567,58 +763,92 @@ export class EpubNavigationTools {
     );
     this.createFlowButton(viewerEl);
     this.createNewNoteButton(viewerEl);
-    this.registerPagingListeners();
     this.keyBridge = new EpubKeyBridge(
       rendition,
       viewerEl.ownerDocument,
       (key) => this.pageKeyJump(key),
     );
-    this.addKeyListeners();
-    void this.addSelectionListener(viewerEl).catch((error: unknown) =>
+    this.bookTitle = this.book.loaded.metadata
+      .then((metadata) => metadata.title)
+      .catch(() => "Untitled");
+    void this.addSelectionListener().catch((error: unknown) =>
       this.reportSetupFailure(viewerEl, "Selection copying", error),
     );
 
     // Pane/layout changes make epub.js reflow and report a fresh
     // location; re-display the one we had so the page does not jump.
-    this.rendition.on("relocated", (loc: Location) => {
-      // The selection's section may no longer be on screen (page
-      // turn); a same-section relocation (scroll) keeps it.
-      this.selectionTracker.clearUnlessInLocation(loc.start.cfi);
-      if (this.needsCorrection) {
-        this.needsCorrection = false;
-        void this.rendition.display(this.currentLocation?.start.cfi);
-      } else {
-        this.currentLocation = loc;
-      }
-    });
-    this.rendition.on("resized", () => {
-      this.needsCorrection = true;
-    });
+    this.rendition.on("relocated", this.onRelocated);
+    this.rendition.on("resized", this.onResized);
+    this.rendition.on("rendered", this.onRendered);
+    this.rendition.on("rendered", this.onPageRendered);
   }
 
-  private addKeyListeners(): void {
-    this.rendition.on("rendered", (_section: unknown, contents: EpubRenderedView) => {
-      // A rendered view has no selection yet. In particular, epub.js
-      // destroys and replaces the iframe on resize before relocating
-      // to the same CFI, so relocation alone cannot detect this clear.
-      this.selectionTracker.clear();
-
-      // The rendition never emits `selected` for a collapsed range,
-      // so a tap-away inside the book is caught on the iframe's own
-      // selectionchange to clear the retained selection (F2.6).
-      contents.document.addEventListener("selectionchange", () => {
-        this.onIframeSelectionChange(contents);
-      });
-
-      // Keep focus on the iframe so page keys keep working.
-      (contents.document.body as HTMLElement).setAttribute("tabindex", "0");
-      (contents.document.body as HTMLElement).focus();
-    });
-  }
-
-  /** Release host/iframe keyboard relays before this rendition is replaced. */
+  /** Release host/iframe listeners before this rendition is replaced. */
   destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
     this.keyBridge.destroy();
+    for (const { target, type, listener } of this.hostKeyListeners) {
+      target.removeEventListener(type, listener);
+    }
+    this.hostKeyListeners.clear();
+    this.rendition.off("relocated", this.onRelocated);
+    this.rendition.off("resized", this.onResized);
+    this.rendition.off("rendered", this.onRendered);
+    this.rendition.off("rendered", this.onTocRendered);
+    this.rendition.off("rendered", this.onPageRendered);
+    this.rendition.off("selected", this.onSelected);
+
+    for (const [document, viewListeners] of this.documentListeners) {
+      for (const [type, handlers] of viewListeners.listeners) {
+        for (const handler of handlers) {
+          document.removeEventListener(type, handler);
+        }
+      }
+    }
+    this.documentListeners.clear();
+    for (const pagingListener of this.pagingListeners) {
+      pagingListener.remove();
+    }
+    this.pagingListeners.clear();
+  }
+
+  private addDocumentListener(
+    document: Document,
+    frameElement: EpubFrameElement,
+    type: string,
+    handler: EventListener,
+  ): void {
+    const listeners = this.documentListeners.get(document)?.listeners ?? new Map();
+    listeners.set(type, (listeners.get(type) ?? new Set()).add(handler));
+    this.documentListeners.set(document, { frameElement, listeners });
+  }
+
+  private pruneDiscardedViewListeners(): void {
+    for (const [document, viewListeners] of this.documentListeners) {
+      if (isDiscardedView(document, viewListeners.frameElement)) {
+        for (const [type, handlers] of viewListeners.listeners) {
+          for (const handler of handlers) {
+            document.removeEventListener(type, handler);
+          }
+        }
+        this.documentListeners.delete(document);
+      }
+    }
+
+    for (const pagingListener of this.pagingListeners) {
+      if (
+        isDiscardedView(
+          pagingListener.document,
+          pagingListener.frameElement,
+        )
+      ) {
+        pagingListener.remove();
+        this.pagingListeners.delete(pagingListener);
+      }
+    }
   }
 
   /**
@@ -636,34 +866,6 @@ export class EpubNavigationTools {
     if (active === false) {
       this.selectionTracker.clear();
     }
-  }
-
-  /**
-   * F2.2 — tap-zone and swipe paging. The gesture is decided by
-   * `pagingGestures` (pure, unit-tested); this is the capture side.
-   *
-   * Listeners live on the rendered document — pointer events in the
-   * iframe never reach the host element — and are torn down with the
-   * rendition: a mode toggle or a second book in the same leaf destroys
-   * the rendition, which destroys these documents with them.
-   *
-   * Zones are decided from the pointer's x inside the document, never
-   * from an overlay div: an overlay over the page is exactly what swallows
-   * text selection. A tap is ignored when a non-empty selection exists,
-   * when the pointer moved past the slop, when the press was long, or
-   * when it lands on an in-content link (epub.js owns those).
-   */
-  private registerPagingListeners(): void {
-    const mode = this.flow?.mode;
-    if (mode !== "paginated") {
-      return;
-    }
-
-    this.rendition.on("rendered", (_section: unknown, view: { document: Document }) => {
-      addPagingListeners(view.document, mode, (direction) => {
-        void (direction === "next" ? this.rendition.next() : this.rendition.prev());
-      });
-    });
   }
 
   /**
@@ -719,43 +921,57 @@ export class EpubNavigationTools {
     }
   }
 
-  private async addSelectionListener(viewerEl: HTMLElement): Promise<void> {
-    const metadata = await this.book.loaded.metadata;
-    const title = metadata.title;
+  private async addSelectionListener(): Promise<void> {
+    await this.book.loaded.metadata;
+    if (this.destroyed) {
+      return;
+    }
+    this.rendition.on("selected", this.onSelected);
+  }
 
-    this.rendition.on("selected", (cfiRange: string, contents: Contents) => {
-      const selection = contents.window.getSelection();
-      if (cfiRange.length === 0 || selection === null || selection.rangeCount === 0) {
-        this.selectionTracker.clear();
-        return;
-      }
-      this.selectionTracker.setSelected(cfiRange, selection.toString(), contents);
+  private async showSelection(cfiRange: string, contents: Contents): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
+    const title = (await this.bookTitle) ?? "Untitled";
+    if (this.destroyed) {
+      return;
+    }
+    const viewerEl = this.copyPanel.parentElement;
+    if (viewerEl === null) {
+      return;
+    }
+    const selection = contents.window.getSelection();
+    if (cfiRange.length === 0 || selection === null || selection.rangeCount === 0) {
+      this.selectionTracker.clear();
+      return;
+    }
+    this.selectionTracker.setSelected(cfiRange, selection.toString(), contents);
 
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      const iframeRect = contents.document.defaultView?.frameElement?.getBoundingClientRect();
-      const viewerRect = viewerEl.getBoundingClientRect();
-      let left: number;
-      let top: number;
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    const iframeRect = contents.document.defaultView?.frameElement?.getBoundingClientRect();
+    const viewerRect = viewerEl.getBoundingClientRect();
+    let left: number;
+    let top: number;
 
-      if (iframeRect) {
-        left = rect.left + iframeRect.left - viewerRect.left;
-        top = rect.bottom + iframeRect.top - viewerRect.top + 2;
-      } else {
-        left = rect.left - viewerRect.left;
-        top = rect.bottom - viewerRect.top + 2;
-      }
-      this.copyPanel.style.left = `${left}px`;
-      this.copyPanel.style.top = `${top}px`;
+    if (iframeRect) {
+      left = rect.left + iframeRect.left - viewerRect.left;
+      top = rect.bottom + iframeRect.top - viewerRect.top + 2;
+    } else {
+      left = rect.left - viewerRect.left;
+      top = rect.bottom - viewerRect.top + 2;
+    }
+    this.copyPanel.style.left = `${left}px`;
+    this.copyPanel.style.top = `${top}px`;
 
-      this.setCopyHandler(".epub-cfi-copy", (e) =>
-        void this.copyLinkToCFIToClipboard(e, title, cfiRange),
-      );
-      this.setCopyHandler(".epub-cfi-quote", (e) =>
-        void this.copyQuoteAndLinkToClipboard(e, title, cfiRange, selection),
-      );
-      this.copyPanel.classList.add("open");
-    });
+    this.setCopyHandler(".epub-cfi-copy", (e) =>
+      void this.copyLinkToCFIToClipboard(e, title, cfiRange),
+    );
+    this.setCopyHandler(".epub-cfi-quote", (e) =>
+      void this.copyQuoteAndLinkToClipboard(e, title, cfiRange, selection),
+    );
+    this.copyPanel.classList.add("open");
   }
 
   private createCopyPanel(viewerEl: HTMLElement): HTMLDivElement {
@@ -789,6 +1005,9 @@ export class EpubNavigationTools {
       this.book.loaded.navigation,
       this.book.loaded.metadata,
     ]);
+    if (this.destroyed) {
+      return;
+    }
     const bookTitle = metadata.title;
 
     const tocButton = document.createElement("button");
@@ -813,21 +1032,24 @@ export class EpubNavigationTools {
 
     // Escape closes the drawer while it is open and returns focus to the
     // toggle so keyboard users are not left on an off-screen element.
-    viewerEl.addEventListener("keydown", (event: KeyboardEvent) => {
+    const KeyboardEventConstructor =
+      viewerEl.ownerDocument.defaultView?.KeyboardEvent ?? KeyboardEvent;
+    const tocKeydownListener = (event: Event): void => {
+      if (!(event instanceof KeyboardEventConstructor)) {
+        return;
+      }
       if (event.key === "Escape" && this.isTocOpen) {
         event.preventDefault();
         event.stopPropagation();
         this.toggleTocVisibility(false);
         this.tocButton?.focus();
       }
-    });
+    };
+    viewerEl.addEventListener("keydown", tocKeydownListener);
+    this.hostKeyListeners.add({ target: viewerEl, type: "keydown", listener: tocKeydownListener });
 
     // Hide the TOC panel when the reader is clicked.
-    this.rendition.on("rendered", (_section: unknown, contents: Contents) => {
-      contents.document.addEventListener("mousedown", () => {
-        this.toggleTocVisibility(false);
-      });
-    });
+    this.rendition.on("rendered", this.onTocRendered);
   }
 
   /** Build one TOC row (label + copy button) for a flattened entry. */

@@ -8,9 +8,35 @@ import {
   type EpubViewHost,
 } from "./EpubView";
 
+/**
+ * Recording double for EpubStyles — captures every instance’s constructor
+ * args and wraps destroy in a spy. Reset before each test via
+ * epubStylesDouble.reset().
+ */
+const epubStylesDouble = vi.hoisted(() => {
+  const instances: Array<{
+    book: unknown;
+    rendition: unknown;
+    destroy: () => void;
+  }> = [];
+  return {
+    instances,
+    reset() {
+      instances.length = 0;
+    },
+  };
+});
+
 vi.mock("./epubStyles", () => ({
   EpubStyles: class {
-    destroy(): void {}
+    destroy: () => void;
+    constructor(
+      public readonly book: unknown,
+      public readonly rendition: unknown,
+    ) {
+      this.destroy = vi.fn();
+      epubStylesDouble.instances.push(this);
+    }
   },
 }));
 
@@ -136,6 +162,7 @@ const makeHost = (overrides: Partial<EpubViewHost> = {}): EpubViewHost => {
 
 beforeEach(() => {
   epub.reset();
+  epubStylesDouble.reset();
   // Obsidian extends HTMLElement with createDiv/empty; jsdom does not.
   const proto = HTMLElement.prototype as unknown as {
     createDiv?: ((info?: { cls?: string }) => HTMLDivElement) | undefined;
@@ -161,6 +188,53 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+
+describe("EpubStyles wiring (CSP regression guard)", () => {
+  it("constructs EpubStyles once with the book and rendition objects", async () => {
+    vi.useFakeTimers();
+    const view = new EpubView(makeLeaf(), makeHost());
+    await view.onLoadFile(makeFile("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(epubStylesDouble.instances).toHaveLength(1);
+    const instance = epubStylesDouble.instances[0];
+    expect(instance.book).toBe(epub.book);
+    expect(instance.rendition).toBe(epub.book.renderTo());
+
+    await view.onClose();
+  });
+
+  it("calls destroy on the disposed instance when a render fails after styles are built", async () => {
+    vi.useFakeTimers();
+    epub.setDisplay(async () => {
+      throw new Error("rendition display failed");
+    });
+
+    const view = new EpubView(makeLeaf(), makeHost());
+    await expect(
+      view.onLoadFile(makeFile("Books/Test.epub")),
+    ).rejects.toThrow();
+
+    expect(epubStylesDouble.instances).toHaveLength(1);
+    expect(epubStylesDouble.instances[0].destroy).toHaveBeenCalledTimes(1);
+    await view.onClose();
+  });
+
+  it("calls destroy on the live instance when the view closes", async () => {
+    vi.useFakeTimers();
+    const view = new EpubView(makeLeaf(), makeHost());
+    await view.onLoadFile(makeFile("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const instance = epubStylesDouble.instances[0];
+    const destroySpy = vi.spyOn(instance, "destroy");
+
+    await view.onClose();
+
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("EpubView location events (F2.5)", () => {

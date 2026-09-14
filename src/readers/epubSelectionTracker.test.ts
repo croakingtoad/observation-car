@@ -12,7 +12,6 @@ const ZERO_RECT = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
 
 interface FakeContents extends Contents {
   state: { text: string; collapsed: boolean };
-  events: Map<string, (event?: unknown) => void>;
 }
 
 function makeContents(
@@ -22,32 +21,30 @@ function makeContents(
     text: options.text ?? "",
     collapsed: options.collapsed ?? false,
   };
-  const events = new Map<string, (event?: unknown) => void>();
+  const iframe = document.createElement("iframe");
+  document.body.appendChild(iframe);
+  const iframeDocument = iframe.contentDocument;
+  const iframeWindow = iframe.contentWindow;
+  if (iframeDocument === null || iframeWindow === null) {
+    throw new Error("jsdom did not create an iframe browsing context");
+  }
+  Object.defineProperty(iframeWindow, "getSelection", {
+    configurable: true,
+    value: () => ({
+      get rangeCount() {
+        return 1;
+      },
+      toString: () => state.text,
+      getRangeAt: () => ({
+        collapsed: state.collapsed,
+        getBoundingClientRect: () => ZERO_RECT,
+      }),
+    }),
+  });
   const contents = {
     state,
-    events,
-    document: {
-      addEventListener: (type: string, callback: (event?: unknown) => void) => {
-        events.set(type, callback);
-      },
-      body: {
-        setAttribute: () => undefined,
-        focus: () => undefined,
-      },
-      defaultView: null,
-    },
-    window: {
-      getSelection: () => ({
-        get rangeCount() {
-          return 1;
-        },
-        toString: () => state.text,
-        getRangeAt: () => ({
-          collapsed: state.collapsed,
-          getBoundingClientRect: () => ZERO_RECT,
-        }),
-      }),
-    },
+    document: iframeDocument,
+    window: iframeWindow,
   };
   return contents as unknown as FakeContents;
 }
@@ -192,6 +189,7 @@ describe("EpubNavigationTools — rendition event wiring", () => {
     const { emit } = await makeTools(tracker);
 
     emit("selected", CFI_RANGE, makeContents({ text: "quoted words" }));
+    await flush();
 
     expect(tracker.getSelection()).toEqual({
       text: "quoted words",
@@ -216,10 +214,11 @@ describe("EpubNavigationTools — rendition event wiring", () => {
 
     emit("rendered", undefined, contents);
     emit("selected", CFI_RANGE, contents);
+    await flush();
     expect(tracker.getSelection()).not.toBeNull();
 
     contents.state.collapsed = true;
-    contents.events.get("selectionchange")?.();
+    contents.document.dispatchEvent(new Event("selectionchange"));
 
     expect(tracker.getSelection()).toBeNull();
   });
@@ -228,6 +227,7 @@ describe("EpubNavigationTools — rendition event wiring", () => {
     const tracker = new EpubSelectionTracker();
     const { emit } = await makeTools(tracker);
     emit("selected", CFI_RANGE, makeContents({ text: "quoted words" }));
+    await flush();
     expect(tracker.getSelection()).not.toBeNull();
 
     emit("rendered", undefined, makeContents());

@@ -684,7 +684,7 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     await openA;
 
     expect(renditionA.listenerCount("relocated")).toBe(
-      listenersBeforeTeardown - 1,
+      listenersBeforeTeardown - 2,
     );
   });
 
@@ -948,7 +948,7 @@ describe("EpubView location events (F2.5)", () => {
     await view.onClose();
 
     expect(rendition.listenerCount("relocated")).toBe(
-      listenersBeforeClose - 1,
+      listenersBeforeClose - 2,
     );
   });
 
