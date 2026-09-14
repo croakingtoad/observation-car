@@ -1,4 +1,8 @@
-import { setFocusModeDecoration, setFocusSectionsDecoration } from "./focusModeDecoration";
+import {
+  isFocusModeDecorationEnabled,
+  setFocusModeDecoration,
+  setFocusSectionsDecoration,
+} from "./focusModeDecoration";
 import type { BookNoteSection } from "../model/bookNote";
 import type { ScrollEditor } from "./scrollSync";
 
@@ -21,16 +25,17 @@ export class FocusModeController {
     currentSection: BookNoteSection | null = null,
   ): void {
     const state = this.editors.get(editor) ?? {
-      enabled: false,
       sections: [],
       currentSection: null,
     };
-    this.editors.set(editor, {
-      enabled: !state.enabled,
+    const enabled = !isFocusModeDecorationEnabled(editor);
+    const next = {
       sections: sections.length > 0 ? sections : state.sections,
       currentSection: currentSection ?? state.currentSection,
-    });
-    apply(editor, this.editors.get(editor) ?? null);
+    };
+    this.editors.set(editor, next);
+    setFocusModeDecoration(editor, enabled);
+    apply(editor, next);
   }
 
   /** Set the cached sections; enables folding only for enabled notes. */
@@ -61,7 +66,6 @@ export class FocusModeController {
 }
 
 interface FocusModeEditor {
-  readonly enabled: boolean;
   readonly sections: readonly BookNoteSection[];
   readonly currentSection: BookNoteSection | null;
 }
@@ -71,6 +75,5 @@ function apply(
   next: FocusModeEditor | null,
 ): void {
   if (next === null) return;
-  setFocusModeDecoration(editorReference, next.enabled);
   setFocusSectionsDecoration(editorReference, next.sections, next.currentSection);
 }

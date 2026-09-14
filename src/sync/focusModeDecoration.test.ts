@@ -49,33 +49,47 @@ describe("focus-mode CM6 decoration", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(foldedWidgets(view).map((widget) => widget.textContent)).toEqual([
-      "1 section in other chapters folded",
-      "1 section in other chapters folded",
+      "2 sections in other chapters folded",
     ]);
     expect(view.state.doc.toString()).toBe(NOTE);
   });
 
-  it("replaces each contiguous run with one widget using its own count", async () => {
+  it("replaces each split run with one widget using its own count", async () => {
     view = createView();
 
     setFocusModeDecoration({ cm: view }, true);
     setFocusSectionsDecoration(
       { cm: view } as unknown as ScrollEditor,
       [
-        section(0, 1, 1),
+        section(0, 1, 0),
         section(2, 3, 0),
-        section(4, 5, 0),
-        section(6, 6, 1),
+        section(4, 5, 1),
+        section(6, 6, 0),
       ],
-      section(6, 6, 1),
+      section(4, 5, 1),
     );
     view.requestMeasure();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(foldedWidgets(view).map((widget) => widget.textContent)).toEqual([
-      "1 section in other chapters folded",
+      "2 sections in other chapters folded",
       "1 section in other chapters folded",
     ]);
+    expect(view.state.doc.toString()).toBe(NOTE);
+  });
+
+  it("does not create an inverted replacement for hand-reordered sections", () => {
+    view = createView();
+
+    setFocusModeDecoration({ cm: view }, true);
+
+    expect(() =>
+      setFocusSectionsDecoration(
+        { cm: view } as unknown as ScrollEditor,
+        [section(4, 5, 2), section(0, 1, 2), section(8, 9, 0)],
+        section(8, 9, 0),
+      ),
+    ).not.toThrow();
     expect(view.state.doc.toString()).toBe(NOTE);
   });
 
@@ -91,8 +105,7 @@ describe("focus-mode CM6 decoration", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(foldedWidgets(view).map((widget) => widget.textContent)).toEqual([
-      "1 section in other chapters folded",
-      "1 section in other chapters folded",
+      "2 sections in other chapters folded",
     ]);
   });
 
@@ -145,7 +158,7 @@ describe("focus-mode CM6 decoration", () => {
     enableFocus(section(4, 5, 0));
     view.requestMeasure();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(foldedWidgets(view)).toHaveLength(2);
+    expect(foldedWidgets(view)).toHaveLength(1);
 
     view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
 
@@ -164,8 +177,52 @@ describe("focus-mode CM6 decoration", () => {
       section(5, 6, 2),
     );
 
-    expect(foldedWidgets(view)).toHaveLength(2);
+    expect(foldedWidgets(view)).toHaveLength(1);
     expect(view.state.doc.toString()).toBe(`typed first\n${NOTE}`);
+  });
+
+  it("restores folding with one controller toggle after an in-document edit", () => {
+    view = createView();
+    const controller = new FocusModeController();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const initialSections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
+      section(4, 5, 2),
+    ];
+    controller.toggle(editor, initialSections, initialSections[2] ?? null);
+
+    view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
+    const edited = view.state.doc.toString();
+    const shiftedSections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
+      section(5, 6, 2),
+    ];
+    controller.toggle(editor, shiftedSections, shiftedSections[2] ?? null);
+
+    expect(foldedWidgets(view)).toHaveLength(1);
+    expect(view.state.doc.toString()).toBe(edited);
+  });
+
+  it("keeps the note unchanged through repeated toggles and reset", () => {
+    view = createView();
+    const controller = new FocusModeController();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const sections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
+      section(4, 5, 2),
+    ];
+    const original = view.state.doc.toString();
+
+    controller.toggle(editor, sections, sections[2] ?? null);
+    controller.toggle(editor, sections, sections[2] ?? null);
+    controller.toggle(editor, sections, sections[2] ?? null);
+    controller.reset(editor);
+
+    expect(foldedWidgets(view)).toEqual([]);
+    expect(view.state.doc.toString()).toBe(original);
   });
 
   it("ignores editors without a live CM6 EditorView", () => {

@@ -1,9 +1,13 @@
+// @vitest-environment jsdom
+
+import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { TFile, WorkspaceLeaf } from "obsidian";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BookNote, BookNoteSection } from "../model/bookNote";
 import { parseFragment } from "../model/anchor";
 import { FocusModeController } from "./focusMode";
+import { focusModeViewPlugin } from "./focusModeDecoration";
 import { DEFAULT_LOCATION_DEBOUNCE_MS } from "../readers/epubLocation";
 import type { Reader, ReaderPairing } from "./ReaderRegistry";
 import {
@@ -254,19 +258,57 @@ describe("ScrollSync", () => {
     });
   });
 
-  it("ignores focus-mode setSections before the first controller state exists", () => {
+  it("keeps focus mode inert before the first controller state exists", () => {
     vi.useFakeTimers();
-    const setFocusSections = vi.fn();
     const focusMode = new FocusModeController();
-    const rig = makeRig({
-      focusMode,
-      setFocusSections,
-    } as Partial<ConstructorParameters<typeof ScrollSync>[0]>);
+    const setSections = vi.spyOn(focusMode, "setSections");
+    const rig = makeRig({ focusMode });
+    const cm = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: "note",
+        extensions: [focusModeViewPlugin],
+      }),
+    });
+    const editor: ScrollEditor & { readonly cm: EditorView } = {
+      cm,
+      lineCount: () => cm.state.doc.lines,
+      scrollIntoView: vi.fn(),
+    };
+    rig.currentEditor = editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      expect(setSections).toHaveBeenCalledWith(
+        editor,
+        rig.pairing?.bookNote.sections,
+      );
+      expect(cm.dom.querySelectorAll(".oc-focus-fold")).toHaveLength(0);
+    } finally {
+      cm.destroy();
+    }
+  });
+
+  it("passes the paired sections and resolved section to focus mode", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const setSections = vi.spyOn(focusMode, "setSections");
+    const setCurrentSection = vi.spyOn(focusMode, "setCurrentSection");
+    const rig = makeRig({ focusMode });
 
     rig.reader.emit(CFI_1);
     vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
 
-    expect(setFocusSections).not.toHaveBeenCalled();
+    expect(setSections).toHaveBeenCalledWith(
+      rig.editor,
+      rig.pairing?.bookNote.sections,
+    );
+    expect(setCurrentSection).toHaveBeenCalledWith(
+      rig.editor,
+      expect.objectContaining({ headingLine: 6 }),
+    );
   });
 
   it("does not move before the first anchor, then scrolls when the first anchor is reached", () => {

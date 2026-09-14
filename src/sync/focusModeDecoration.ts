@@ -17,12 +17,14 @@ export const setFocusSectionsEffect = StateEffect.define<{
 
 interface FocusState {
   readonly enabled: boolean;
+  readonly invalidated: boolean;
   readonly sections: readonly BookNoteSection[];
   readonly currentSection: BookNoteSection | null;
 }
 
 const INITIAL_FOCUS_STATE: FocusState = {
   enabled: false,
+  invalidated: false,
   sections: [],
   currentSection: null,
 };
@@ -55,7 +57,12 @@ const focusStateField = StateField.define<FocusState>({
   create: () => INITIAL_FOCUS_STATE,
   update(currentState, transaction) {
     let nextState = transaction.docChanged
-      ? { ...currentState, sections: [], currentSection: null }
+      ? {
+          ...currentState,
+          invalidated: true,
+          sections: [],
+          currentSection: null,
+        }
       : currentState;
 
     for (const effect of transaction.effects) {
@@ -63,11 +70,13 @@ const focusStateField = StateField.define<FocusState>({
         nextState = {
           ...(nextState ?? INITIAL_FOCUS_STATE),
           enabled: effect.value,
+          invalidated: false,
         };
       }
       if (effect.is(setFocusSectionsEffect)) {
         nextState = {
           ...(nextState ?? INITIAL_FOCUS_STATE),
+          invalidated: false,
           sections: effect.value.sections,
           currentSection: effect.value.currentSection,
         };
@@ -99,6 +108,14 @@ export function setFocusModeDecoration(editor: unknown, enabled: boolean): void 
   view.dispatch({ effects: setFocusModeEffect.of(enabled) });
 }
 
+/** Whether the live CM6 field currently treats the next toggle as disable. */
+export function isFocusModeDecorationEnabled(editor: unknown): boolean {
+  const view = codeMirrorView(editor);
+  if (view === null) return false;
+  const state = view.state.field(focusStateField, false);
+  return state?.enabled === true && state.invalidated === false;
+}
+
 /**
  * Provide the note's current sections for folding. Passing `null` as the
  * current section means no reader location is known, so nothing is folded.
@@ -123,8 +140,10 @@ function buildDecorations(
     return Decoration.none;
   }
 
-  const folded = state.sections.filter(
-    (section) => section.chapter !== state.currentSection?.chapter,
+  const folded = state.sections.flatMap((section, index) =>
+    section.chapter === state.currentSection?.chapter
+      ? []
+      : [{ section, index }],
   );
   if (folded.length === 0) return Decoration.none;
 
@@ -132,6 +151,7 @@ function buildDecorations(
   let runCount = 0;
   let runStart = 0;
   let runEnd = 0;
+  let previousIndex: number | null = null;
 
   const finishRun = () => {
     if (runCount === 0) return;
@@ -143,14 +163,20 @@ function buildDecorations(
     );
   };
 
-  for (const [sectionIndex, section] of folded.entries()) {
+  for (const { section, index } of folded) {
     const range = sectionRange(editorState, section);
     if (range === null) {
       finishRun();
       runCount = 0;
+      previousIndex = null;
       continue;
     }
-    if (range.from !== sectionIndex - runCount) {
+    if (
+      runCount > 0 &&
+      (previousIndex === null ||
+        index !== previousIndex + 1 ||
+        range.from < runEnd)
+    ) {
       finishRun();
       runCount = 0;
     }
@@ -159,6 +185,7 @@ function buildDecorations(
     }
     runCount += 1;
     runEnd = range.to;
+    previousIndex = index;
   }
   finishRun();
   return Decoration.set(decorations, true);
