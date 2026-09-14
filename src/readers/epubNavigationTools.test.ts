@@ -131,12 +131,26 @@ function childDocument(parent: Document): Document {
   return frame.contentDocument;
 }
 
-function renderedContents(document: Document): Pick<Contents, "document" | "window"> {
+type RenderedView = Pick<Contents, "document" | "window"> & {
+  contents: object;
+  iframe: Element;
+};
+
+function renderedContents(document: Document): RenderedView {
   const renderedWindow = document.defaultView;
   if (renderedWindow === null) {
     throw new Error("test rendered document has no window");
   }
-  return { document, window: renderedWindow };
+  const frameElement = renderedWindow.frameElement;
+  if (frameElement === null) {
+    throw new Error("test rendered document has no frame element");
+  }
+  return {
+    contents: {},
+    document,
+    iframe: frameElement,
+    window: renderedWindow,
+  };
 }
 
 describe("EpubKeyBridge", () => {
@@ -552,6 +566,53 @@ describe("EpubNavigationTools setup failures (Tier 2 finding 3)", () => {
 
 
 describe("EpubNavigationTools teardown", () => {
+  it("ignores a rendered event from an already-destroyed view", async () => {
+    const { rendition } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    await vi.waitFor(() => {
+      expect(rendition.handlers.get("rendered")).toHaveLength(4);
+    });
+    const destroyedDocument = childDocument(document);
+    const destroyedWindow = destroyedDocument.defaultView;
+    if (destroyedWindow === null) {
+      throw new Error("test destroyed document has no window");
+    }
+    Object.defineProperty(destroyedWindow, "frameElement", {
+      configurable: true,
+      value: null,
+    });
+
+    expect(() =>
+      rendition.fire("rendered", {}, {
+        contents: undefined,
+        document: destroyedDocument,
+        iframe: undefined,
+        window: destroyedWindow,
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["null", null],
+    ["non-iframe", document.createElement("div")],
+  ])("rejects a live rendered view with a %s frame handle", async (_name, handle) => {
+    const { rendition } = makeTools();
+    await vi.waitFor(() => {
+      expect(rendition.handlers.get("rendered")).toHaveLength(4);
+    });
+    const liveDocument = childDocument(document);
+    const liveView = renderedContents(liveDocument);
+    Object.defineProperty(liveView.window, "frameElement", {
+      configurable: true,
+      value: handle,
+    });
+
+    expect(() => rendition.fire("rendered", {}, liveView)).toThrow(
+      "epub.js rendered contents without an iframe frame element",
+    );
+  });
+
   it("prunes discarded iframe listeners while the book stays open", async () => {
     const { rendition, tools } = makeTools({
       flow: { mode: "paginated", onToggle: vi.fn() },
@@ -575,7 +636,14 @@ describe("EpubNavigationTools teardown", () => {
       };
     };
 
+    const registeredTypes = [
+      "keydown",
+      "selectionchange",
+      "mousedown",
+      ...PAGING_EVENT_TYPES,
+    ];
     let lastDocument: Document | null = null;
+    let previousRemovedTypes: string[] | null = null;
     for (let viewIndex = 0; viewIndex < 40; viewIndex += 1) {
       const frame = document.createElement("iframe");
       document.body.append(frame);
@@ -593,6 +661,9 @@ describe("EpubNavigationTools teardown", () => {
       });
 
       rendition.fire("rendered", {}, renderedContents(frameDocument));
+      if (previousRemovedTypes !== null) {
+        expect(new Set(previousRemovedTypes)).toEqual(new Set(registeredTypes));
+      }
       const counts = readCounts();
       expect(counts.documentListeners).toBeLessThanOrEqual(1);
       expect(counts.keyBridgeDocuments).toBeLessThanOrEqual(1);
@@ -603,11 +674,21 @@ describe("EpubNavigationTools teardown", () => {
       for (const type of PAGING_EVENT_TYPES) {
         expect(countListeners(frameDocument, type, implForWrapper)).toBe(1);
       }
+      const removedTypes: string[] = [];
+      const removeEventListener = frameDocument.removeEventListener.bind(frameDocument);
+      vi.spyOn(frameDocument, "removeEventListener").mockImplementation(
+        (type, listener, options) => {
+          removedTypes.push(type);
+          removeEventListener(type, listener, options);
+        },
+      );
+      previousRemovedTypes = removedTypes;
       lastDocument = frameDocument;
       frame.remove();
     }
     tools.destroy();
 
+    expect(new Set(previousRemovedTypes)).toEqual(new Set(registeredTypes));
     expect(readCounts()).toEqual({
       documentListeners: 0,
       keyBridgeDocuments: 0,
@@ -615,6 +696,51 @@ describe("EpubNavigationTools teardown", () => {
     });
     expect(lastDocument?.documentElement.style.touchAction).toBe("");
   });
+
+  it.each([
+    {
+      flow: {
+        mode: "scrolled-doc",
+        onToggle: vi.fn(),
+      } as unknown as EpubFlowControls,
+      name: "scrolled-doc flow",
+    },
+    { flow: undefined, name: "omitted flow" },
+  ] satisfies Array<{ flow: EpubFlowControls | undefined; name: string }>)(
+    "prunes discarded document listeners with $name",
+    async ({ flow }) => {
+      const { rendition, tools } = makeTools({ flow });
+      await vi.waitFor(() => {
+        expect(rendition.handlers.get("rendered")).toHaveLength(4);
+      });
+      const discardedFrame = document.createElement("iframe");
+      const replacementFrame = document.createElement("iframe");
+      document.body.append(discardedFrame, replacementFrame);
+      const discardedDocument = discardedFrame.contentDocument;
+      const replacementDocument = replacementFrame.contentDocument;
+      if (discardedDocument === null || replacementDocument === null) {
+        throw new Error("test iframe has no document");
+      }
+
+      rendition.fire("rendered", {}, renderedContents(discardedDocument));
+      const removedTypes: string[] = [];
+      const removeEventListener =
+        discardedDocument.removeEventListener.bind(discardedDocument);
+      vi.spyOn(discardedDocument, "removeEventListener").mockImplementation(
+        (type, listener, options) => {
+          removedTypes.push(type);
+          removeEventListener(type, listener, options);
+        },
+      );
+      discardedFrame.remove();
+      rendition.fire("rendered", {}, renderedContents(replacementDocument));
+
+      expect(removedTypes).toEqual(
+        expect.arrayContaining(["selectionchange", "mousedown"]),
+      );
+      tools.destroy();
+    },
+  );
 
   it("removes discarded paging listeners on the next rendered view", async () => {
     const { rendition, tools } = makeTools({

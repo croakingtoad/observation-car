@@ -41,12 +41,14 @@ import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 const EPUBCFI_WRAPPER = "epubcfi(";
 
 interface EpubRenderedView {
+  contents?: unknown;
   document: Document;
+  iframe?: unknown;
   window: Window;
 }
 
 type EpubFrameElement = Element & Pick<HTMLIFrameElement, "contentDocument">;
-type RenderedContents = Pick<Contents, "document" | "window">;
+type RenderedContents = EpubRenderedView;
 type RenderedHandler = (
   section: unknown,
   contents: RenderedContents,
@@ -56,7 +58,15 @@ function isEpubFrameElement(element: Element): element is EpubFrameElement {
   return element.localName === "iframe" && "contentDocument" in element;
 }
 
-function captureFrameElement(view: EpubRenderedView): EpubFrameElement {
+function captureFrameElement(view: EpubRenderedView): EpubFrameElement | null {
+  if (
+    "contents" in view &&
+    view.contents === undefined &&
+    "iframe" in view &&
+    view.iframe === undefined
+  ) {
+    return null;
+  }
   const frameElement = view.window.frameElement;
   if (frameElement === null || !isEpubFrameElement(frameElement)) {
     throw new Error("epub.js rendered contents without an iframe frame element");
@@ -103,6 +113,9 @@ export class EpubKeyBridge {
       return;
     }
     const frameElement = captureFrameElement(contents);
+    if (frameElement === null) {
+      return;
+    }
     this.pruneDiscardedDocuments();
     contents.document.addEventListener("keydown", this.onKeyDown);
     this.documents.set(contents.document, frameElement);
@@ -643,6 +656,9 @@ export class EpubNavigationTools {
     }
 
     const frameElement = captureFrameElement(contents);
+    if (frameElement === null) {
+      return;
+    }
     this.pruneDiscardedViewListeners();
 
     // A rendered view has no selection yet. In particular, epub.js
@@ -678,6 +694,9 @@ export class EpubNavigationTools {
     }
 
     const frameElement = captureFrameElement(contents);
+    if (frameElement === null) {
+      return;
+    }
     contents.document.addEventListener("mousedown", this.onDocumentMouseDown);
     this.addDocumentListener(
       contents.document,
@@ -696,6 +715,9 @@ export class EpubNavigationTools {
     }
 
     const frameElement = captureFrameElement(view);
+    if (frameElement === null) {
+      return;
+    }
     this.pruneDiscardedViewListeners();
 
     const removePagingListeners = addPagingListeners(
