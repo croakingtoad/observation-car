@@ -112,14 +112,18 @@ function fakeEditor(initial: string): FakeEditor {
 
 function makeHarness(options: {
   level?: number;
+  eol?: "\n" | "\r\n";
   location?: ReturnType<NonNullable<Harness["reader"]["getLocation"]>>;
   selection?: ReturnType<NonNullable<Harness["reader"]["getSelection"]>>;
   hasLocationCapability?: boolean;
   hasSelectionCapability?: boolean;
   noteOpen?: boolean;
+  noteMostRecent?: boolean;
 } = {}): Harness {
   const level = options.level ?? 2;
-  const editor = fakeEditor(noteText(level));
+  const editor = fakeEditor(
+    noteText(level).replaceAll("\n", options.eol ?? "\n"),
+  );
   const bookFile = new TFileDouble(SOURCE);
   const noteFile = new TFileDouble(NOTE_PATH);
   const reader: Harness["reader"] = {
@@ -172,7 +176,8 @@ function makeHarness(options: {
       },
       workspace: {
         rootSplit,
-        getMostRecentLeaf: () => readerLeaf,
+        getMostRecentLeaf: () =>
+          options.noteMostRecent === true ? noteLeaf : readerLeaf,
         getLeavesOfType: (type: string) =>
           type === "markdown" && options.noteOpen !== false ? [noteLeaf] : [],
         createLeafBySplit: vi.fn(() => splitLeaf),
@@ -210,6 +215,20 @@ describe("new note here", () => {
     });
     expect(harness.commands[0].mobileOnly).not.toBe(true);
     expect(harness.commands[0].checkCallback?.(true)).toBe(true);
+  });
+
+  it("executes from the focused paired Markdown note", async () => {
+    const harness = makeHarness({ noteMostRecent: true });
+    registerNewNoteHereCommand(harness.plugin);
+
+    expect(harness.commands[0].checkCallback?.(false)).toBe(true);
+    await vi.waitFor(() =>
+      expect(harness.editor.setValue).toHaveBeenCalledOnce(),
+    );
+
+    expect(harness.editor.value()).toContain(
+      `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`,
+    );
   });
 
   it("inserts a selected range at sorted position using the configured heading level", async () => {
@@ -269,6 +288,50 @@ describe("new note here", () => {
     });
   });
 
+  it("treats a whitespace-only selection as no selection", async () => {
+    const harness = makeHarness({
+      selection: { text: " \r\n\t ", fragment: MIDDLE },
+    });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    expect(harness.editor.value()).toContain(
+      `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`,
+    );
+    expect(harness.editor.value()).not.toContain("> ");
+  });
+
+  it.each([
+    ["pipe", "quoted | selection", "quoted ｜ selection"],
+    ["left bracket", "quoted [ selection", "quoted ［ selection"],
+    ["right bracket", "quoted ] selection", "quoted ］ selection"],
+    ["double left bracket", "quoted [[ selection", "quoted ［［ selection"],
+    ["balanced brackets", "quoted [sic] selection", "quoted ［sic］ selection"],
+  ])("escapes %s in the anchor alias", async (_case, text, safeText) => {
+    const harness = makeHarness({
+      selection: { text, fragment: MIDDLE },
+    });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    expect(harness.editor.value()).toContain(`|Ch. 2 — ${safeText}]]`);
+    expect(
+      parseBookNote(harness.editor.value()).sections.some(
+        (section) => section.fragment === MIDDLE.slice(1),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves CRLF line endings when inserting a section", async () => {
+    const harness = makeHarness({ eol: "\r\n" });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    const outputWithoutCrLf = harness.editor.value().replaceAll("\r\n", "");
+    expect(harness.editor.value()).toContain("\r\n");
+    expect(outputWithoutCrLf).not.toContain("\n");
+  });
+
   it("opens the paired note in an ordinary Markdown editor before inserting", async () => {
     const harness = makeHarness({ noteOpen: false });
 
@@ -320,6 +383,25 @@ describe("new note here", () => {
     expect(harness.editor.setValue).not.toHaveBeenCalled();
     expect(notices).toEqual([
       "No anchorable reader location is available yet.",
+    ]);
+  });
+
+  it("reports an actionable error without requiring a developer console", async () => {
+    const harness = makeHarness();
+    const failure = new Error("location failure");
+    harness.reader.getLocation = () => {
+      throw failure;
+    };
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    expect(console.error).toHaveBeenCalledWith(
+      "[observation-car] could not add note at reader location",
+      failure,
+    );
+    expect(notices).toEqual([
+      "Could not add an anchored section to the paired book note.",
     ]);
   });
 });

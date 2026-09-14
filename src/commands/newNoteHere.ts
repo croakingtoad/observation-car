@@ -101,9 +101,7 @@ async function addNoteAtPairing(
     insertOrJump(plugin, editor, pairing.notePath, location, selection);
   } catch (error) {
     console.error("[observation-car] could not add note at reader location", error);
-    new Notice(
-      "Could not add a note at this location. Check the developer console for details.",
-    );
+    new Notice("Could not add an anchored section to the paired book note.");
   }
 }
 
@@ -261,7 +259,10 @@ function excerpt(text: string): string {
 }
 
 function safeAlias(alias: string): string {
-  return alias.replaceAll("|", "｜").replaceAll("]", "］");
+  return alias
+    .replaceAll("|", "｜")
+    .replaceAll("[", "［")
+    .replaceAll("]", "］");
 }
 
 function withHash(fragment: string): string {
