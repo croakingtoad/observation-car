@@ -280,12 +280,12 @@ describe("new note here", () => {
 
   it("normalizes blank-line separators for an empty note", async () => {
     const harness = makeHarness({ initialText: emptyNoteText() });
+    const initialText = emptyNoteText();
 
     await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
 
-    expect(harness.editor.value()).toContain(
-      `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`,
-    );
+    const heading = `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`;
+    expect(harness.editor.value().startsWith(`${initialText}\n\n${heading}`)).toBe(true);
   });
 
   it("does not write anything when the focused leaf has no reader pairing", async () => {
