@@ -35,6 +35,7 @@ interface RecordedCommand {
   hotkeys?: Array<{ modifiers: string[]; key: string }>;
   editorCallback?: (editor: unknown, context: unknown) => unknown;
   checkCallback?: (checking: boolean) => boolean | void;
+  callback?: () => void
 }
 
 /**
@@ -862,6 +863,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     ).editorExtensions;
 
     expect(extensions).toContain(currentSectionViewPlugin);
+    expect(extensions).toContain(focusModeViewPlugin);
   });
 
   it("registers the reader/note split-ratio toggle command", () => {
@@ -872,6 +874,21 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(command?.name).toBe("Toggle reader/note split ratio");
     expect(command?.checkCallback).toBeTypeOf("function");
   });
+  it("registers the toggle-focus-mode command", () => {
+    const command = fake.registeredCommands.get(
+      "toggle-focus-mode",
+    );
+    expect(command).toBeDefined();
+    expect(command?.name).toBe("Toggle focus mode");
+
+    const toggle = vi.spyOn(
+      plugin as unknown as { toggleFocusMode: () => void },
+      "toggleFocusMode",
+    );
+    command?.callback?.();
+    expect(toggle).toHaveBeenCalled();
+  });
+
 
   it("creates a templated note in the configured folder only when invoked", async () => {
     plugin.settings = {
@@ -1956,6 +1973,53 @@ describe("plugin wiring (substituted obsidian module)", () => {
       expect.objectContaining({ headingLine: 9 }),
     );
   });
+  it("propagates location events through the assembled ScrollSync to the plugin\'s FocusModeController", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const markdownView = new MarkdownViewDouble(
+      noteFile,
+      {
+        hasFocus: () => true,
+        getViewType: () => "markdown",
+        lineCount: () => 20,
+        scrollIntoView: vi.fn(),
+      },
+    );
+    fake.leaves.add({ view: markdownView });
+    const { view } = openEpubReader(book);
+    view.emitLocation(`#${CFI_1}`);
+    await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    const setSections = vi.spyOn(
+      (plugin as unknown as { focusMode: FocusModeController }).focusMode,
+      "setSections",
+    );
+    const setCurrentSection = vi.spyOn(
+      (plugin as unknown as { focusMode: FocusModeController }).focusMode,
+      "setCurrentSection",
+    );
+
+    view.emitLocation(`#${CFI_2}`);
+    await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(setSections).toHaveBeenCalledWith(
+      expect.objectContaining({ hasFocus: expect.any(Function) }),
+      expect.arrayContaining([
+        expect.objectContaining({ headingLine: 6 }),
+        expect.objectContaining({ headingLine: 9 }),
+      ]),
+    );
+    expect(setCurrentSection).toHaveBeenCalledWith(
+      expect.objectContaining({ hasFocus: expect.any(Function) }),
+      expect.objectContaining({ headingLine: 9 }),
+    );
+  });
+
 
   it("releases scroll sync and its pending timer when a reader leaf closes", async () => {
     fake.linkDests.set("surprised by grace.epub", SOURCE);
