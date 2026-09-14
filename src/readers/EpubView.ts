@@ -25,6 +25,8 @@ import { EpubLocationTracker, type EpubLocation } from "./epubLocation";
 import type { EpubFlowMode, ObservationCarSettings } from "../settings";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
+const FRAGMENT_OPEN_TIMEOUT_MS = 5_000;
+const INITIAL_DISPLAY_TIMEOUT_MS = 5_000;
 
 /**
  * A LocationChanged event (F2.5): PRD §8's Location plus the file the
@@ -237,7 +239,7 @@ export class EpubView extends FileView {
         activeRendition.on("relocated", onRelocated);
         timeout = window.setTimeout(() => {
           finish(new Error("the reader did not report the new location"));
-        }, 5000);
+        }, FRAGMENT_OPEN_TIMEOUT_MS);
         void activeRendition.display(target).catch(finish);
       });
     } catch (error) {
@@ -314,7 +316,37 @@ export class EpubView extends FileView {
         file,
         generation,
       );
-      await rendition.display();
+      const initialRendition = rendition;
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let timeout = 0;
+
+        function settle(): boolean {
+          if (settled) {
+            return false;
+          }
+          settled = true;
+          window.clearTimeout(timeout);
+          return true;
+        }
+
+        function finish(): void {
+          if (settle()) {
+            resolve();
+          }
+        }
+
+        function fail(error: unknown): void {
+          if (settle()) {
+            reject(error);
+          }
+        }
+
+        timeout = window.setTimeout(() => {
+          fail(new Error("the reader did not display the book"));
+        }, INITIAL_DISPLAY_TIMEOUT_MS);
+        void initialRendition.display().then(finish, fail);
+      });
     } catch (error) {
       // A bad book can fail anywhere in the build; dispose what was
       // created before the failure propagates, so no partial reader

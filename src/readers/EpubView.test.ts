@@ -398,24 +398,32 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
   });
 
   it("routes the reader toolbar action through the exact reader leaf", async () => {
-    const leaf = {} as WorkspaceLeaf;
+    const leafA = { probe: "A" } as unknown as WorkspaceLeaf;
+    const leafB = { probe: "B" } as unknown as WorkspaceLeaf;
     const newNoteHereFromReader = vi.fn();
     const host: EpubViewHost = {
       ...makeHost(),
       newNoteHereFromReader,
     };
-    const view = new EpubView(leaf, host);
-    Object.assign(view, {
+    const viewA = new EpubView(leafA, host);
+    Object.assign(viewA, {
       app: { vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([1])) } },
     });
-    await view.onLoadFile(file("library/a.epub"));
+    const viewB = new EpubView(leafB, host);
+    Object.assign(viewB, {
+      app: { vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([2])) } },
+    });
+    await viewA.onLoadFile(file("library/a.epub"));
+    await viewB.onLoadFile(file("library/b.epub"));
 
-    view.contentEl
+    viewA.contentEl
       .querySelector<HTMLButtonElement>(".epub-new-note-button")
       ?.click();
 
-    expect(newNoteHereFromReader).toHaveBeenCalledWith(leaf);
-    await view.onClose();
+    expect(newNoteHereFromReader).toHaveBeenCalledTimes(1);
+    expect(newNoteHereFromReader).toHaveBeenCalledWith(leafA);
+    await viewA.onClose();
+    await viewB.onClose();
   });
 
   it("reopens a book at its recorded CFI through openAtFragment", async () => {
@@ -856,6 +864,25 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
       "display blew up",
     );
 
+    expect(FakeBook.instances).toHaveLength(1);
+    expect(FakeBook.instances[0].destroyed).toBe(true);
+    expect(FakeBook.instances[0].rendition.destroyed).toBe(true);
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
+  });
+
+  it("a render whose display never settles times out, disposes, and rethrows", async () => {
+    vi.useFakeTimers();
+    const displayGate = deferred();
+    state.currentDisplayGate = displayGate.promise;
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    let rejection: unknown;
+
+    void view.onLoadFile(file("library/corrupt.epub")).catch((error: unknown) => {
+      rejection = error;
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(rejection).toEqual(new Error("the reader did not display the book"));
     expect(FakeBook.instances).toHaveLength(1);
     expect(FakeBook.instances[0].destroyed).toBe(true);
     expect(FakeBook.instances[0].rendition.destroyed).toBe(true);

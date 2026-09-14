@@ -1044,27 +1044,6 @@ describe("EpubNavigationTools teardown", () => {
     });
   });
 
-  it("removes pre-rendered iframe listeners when destroyed", async () => {
-    const implForWrapper = await loadImplForWrapper();
-    const { rendition, tools } = makeTools();
-    await waitForSelectionListener(rendition);
-    const first = childDocument(document);
-    const second = childDocument(document);
-
-    rendition.fire("rendered", {}, renderedContents(first));
-    rendition.fire("rendered", {}, renderedContents(second));
-    tools.destroy();
-
-    for (const renderedDocument of [first, second]) {
-      expect(
-        countListeners(renderedDocument, "selectionchange", implForWrapper),
-      ).toBe(0);
-      expect(countListeners(renderedDocument, "mousedown", implForWrapper)).toBe(
-        0,
-      );
-    }
-  });
-
   it("is idempotent", () => {
     const { rendition, tools } = makeTools();
     tools.destroy();

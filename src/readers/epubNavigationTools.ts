@@ -39,6 +39,8 @@ import type { EpubFlowMode } from "../settings";
 import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 
 const EPUBCFI_WRAPPER = "epubcfi(";
+const LOCATION_CHARACTERS_PER_BREAK = 1_000;
+const COPY_FEEDBACK_DURATION_MS = 1_000;
 
 interface EpubRenderedView {
   contents?: unknown;
@@ -1204,7 +1206,7 @@ export class EpubNavigationTools {
     if (this.locations === null) {
       this.locations = (async () => {
         await this.book.ready;
-        await this.book.locations.generate(1000);
+        await this.book.locations.generate(LOCATION_CHARACTERS_PER_BREAK);
         return this.book.locations;
       })();
     }
@@ -1224,7 +1226,7 @@ export class EpubNavigationTools {
     btn.textContent = "✔";
     setTimeout(() => {
       btn.textContent = original;
-    }, 1000);
+    }, COPY_FEEDBACK_DURATION_MS);
   }
 
   /**
@@ -1241,7 +1243,7 @@ export class EpubNavigationTools {
     setTimeout(() => {
       btn.textContent = originalText;
       btn.title = originalTitle;
-    }, 1000);
+    }, COPY_FEEDBACK_DURATION_MS);
   }
 
   /**
