@@ -189,6 +189,7 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
     }
     expect(LINE_BREAK_ROWS.filter((r) => r.trailing !== undefined).length).toBe(12);
     expect(LINE_BREAK_ROWS.filter((r) => r.trailing === undefined).length).toBe(4);
+    expect(Object.keys(TRAILING).sort()).toEqual(LINE_BREAK_ROWS.map((r) => r.name).sort());
 
     const MIXED_ROW_NAMES: readonly string[] = [
       "mixed LF and CRLF",
@@ -259,10 +260,11 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       expect(u2028text).toContain("\u2028");
       expect(u2028text).toContain("\u2029");
       const doc = EditorState.create({ doc: u2028text }).doc;
-      for (let i = 1; i <= doc.lines; i++) {
-        if (doc.line(i).text.includes("\u2028")) {
-          expect(doc.line(i).text).toBe("first\u2028second");
-        }
+      {
+        const lines = Array.from({ length: doc.lines }, (_, i) => doc.line(i + 1).text);
+        expect(doc.lines).toBe(10);
+        expect(lines.filter((t) => t.includes("\u2028"))).toEqual(["first\u2028second"]);
+        expect(lines.filter((t) => t.includes("\u2029"))).toEqual(["body one\u2029continued"]);
       }
     }
   });
