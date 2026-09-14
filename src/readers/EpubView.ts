@@ -17,7 +17,7 @@
 import { FileView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
 import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
-import { EpubStyles } from "./epubStyles";
+import { EpubStyles, type EpubStylesheetMode } from "./epubStyles";
 import { type Location as EpubRenditionLocation } from "epubjs/types/rendition";
 import { buildEpubCfiFragment, parseFragment } from "../model/anchor";
 import { EpubThemes } from "./epubThemes";
@@ -50,6 +50,8 @@ export interface EpubViewHost {
   updateSettings(patch: Partial<ObservationCarSettings>): Promise<void>;
   getLastEpubLocation(path: string): string | null;
   rememberEpubLocation(path: string, fragment: string): Promise<void>;
+  getEpubStylesheetMode(path: string): EpubStylesheetMode;
+  setEpubStylesheetMode(path: string, mode: EpubStylesheetMode): Promise<void>;
   /** Add an anchored section from this exact reader leaf (F4.6). */
   newNoteHereFromReader?: (leaf: WorkspaceLeaf) => void;
 }
@@ -83,7 +85,8 @@ export class EpubView extends FileView {
   /** Whether the latest rendition relocation came from a reader move. */
   private persistPendingLocation = true;
   private renderedFlowMode: EpubFlowMode | null = null;
-  private flowModeChange: Promise<void> | null = null;
+  private renderedStylesheetMode: EpubStylesheetMode | null = null;
+  private readerChange: Promise<void> | null = null;
   /** The book whose initial relocation must not overwrite its saved CFI. */
   private restoringFile: TFile | null = null;
 
@@ -258,6 +261,9 @@ export class EpubView extends FileView {
   private async renderBook(
     file: TFile,
     flowMode: EpubFlowMode = this.host.settings.epubFlowMode,
+    stylesheetMode: EpubStylesheetMode = this.host.getEpubStylesheetMode(
+      file.path,
+    ),
   ): Promise<boolean> {
     this.disposeReader();
     const generation = this.renderGeneration;
@@ -283,7 +289,7 @@ export class EpubView extends FileView {
         height: "100%",
         flow: flowMode,
       });
-      styles = new EpubStyles(book, rendition);
+      styles = new EpubStyles(book, rendition, stylesheetMode);
       navigationTools = new EpubNavigationTools(
         viewerEl,
         file.path,
@@ -351,6 +357,7 @@ export class EpubView extends FileView {
     this.locationRelocatedHandler = locationEvents.relocatedHandler;
     this.locationForward = locationEvents.forward;
     this.renderedFlowMode = flowMode;
+    this.renderedStylesheetMode = stylesheetMode;
     return true;
   }
 
@@ -506,9 +513,8 @@ export class EpubView extends FileView {
    * afterwards so the reader does not lose its place on a toggle.
    */
   async setFlowMode(mode: EpubFlowMode): Promise<void> {
-    if (this.flowModeChange !== null) {
-      await this.flowModeChange;
-      return;
+    if (this.readerChange !== null) {
+      await this.readerChange;
     }
 
     const file = this.file;
@@ -518,12 +524,143 @@ export class EpubView extends FileView {
     }
     const cfi = this.rendition.location?.start?.cfi ?? null;
     const change = this.applyFlowMode(file, mode, previousMode, cfi);
-    this.flowModeChange = change;
+    this.readerChange = change;
     try {
       await change;
     } finally {
-      if (this.flowModeChange === change) {
-        this.flowModeChange = null;
+      if (this.readerChange === change) {
+        this.readerChange = null;
+      }
+    }
+  }
+
+  /** Toggle this book between Obsidian-theme and book-CSS rendering. */
+  async toggleBookStylesheet(): Promise<void> {
+    if (this.readerChange !== null) {
+      await this.readerChange;
+    }
+
+    const file = this.file;
+    const previousMode = this.renderedStylesheetMode;
+    const flowMode = this.renderedFlowMode;
+    if (
+      file === null ||
+      this.rendition === null ||
+      previousMode === null ||
+      flowMode === null
+    ) {
+      return;
+    }
+    const mode: EpubStylesheetMode =
+      previousMode === "theme" ? "book" : "theme";
+    const cfi = this.rendition.location?.start?.cfi ?? null;
+    const change = this.applyStylesheetMode(
+      file,
+      mode,
+      previousMode,
+      flowMode,
+      cfi,
+    );
+    this.readerChange = change;
+    try {
+      await change;
+    } finally {
+      if (this.readerChange === change) {
+        this.readerChange = null;
+      }
+    }
+  }
+
+  private async applyStylesheetMode(
+    file: TFile,
+    mode: EpubStylesheetMode,
+    previousMode: EpubStylesheetMode,
+    flowMode: EpubFlowMode,
+    cfi: string | null,
+  ): Promise<void> {
+    this.restoringFile = file;
+    let generation = this.renderGeneration;
+    try {
+      await this.host.setEpubStylesheetMode(file.path, mode);
+      if (!this.ownsReaderChange(file, generation)) {
+        return;
+      }
+
+      generation += 1;
+      const rendered = await this.renderBook(file, flowMode, mode);
+      if (!rendered || !this.ownsReaderChange(file, generation)) {
+        return;
+      }
+      const rendition = this.rendition;
+      if (cfi !== null && rendition !== null) {
+        await this.redisplayAndPersistLocation(
+          file,
+          generation,
+          rendition,
+          cfi,
+        );
+      }
+    } catch (error: unknown) {
+      if (!this.ownsReaderChange(file, generation)) {
+        console.error("Observation Car: abandoned EPUB stylesheet-mode failure", error);
+        return;
+      }
+      const failures: unknown[] = [error];
+      try {
+        await this.host.setEpubStylesheetMode(file.path, previousMode);
+      } catch (rollbackError: unknown) {
+        failures.push(rollbackError);
+      }
+
+      if (!this.ownsReaderChange(file, generation)) {
+        console.error("Observation Car: abandoned EPUB stylesheet-mode failure", error);
+        return;
+      }
+      if (
+        this.rendition === null ||
+        this.renderedStylesheetMode !== previousMode
+      ) {
+        try {
+          generation += 1;
+          const rendered = await this.renderBook(
+            file,
+            flowMode,
+            previousMode,
+          );
+          if (!rendered || !this.ownsReaderChange(file, generation)) {
+            return;
+          }
+          const rendition = this.rendition;
+          if (cfi !== null && rendition !== null) {
+            await this.redisplayAndPersistLocation(
+              file,
+              generation,
+              rendition,
+              cfi,
+            );
+          }
+        } catch (recoveryError: unknown) {
+          if (!this.ownsReaderChange(file, generation)) {
+            console.error(
+              "Observation Car: abandoned EPUB stylesheet-mode recovery failure",
+              recoveryError,
+            );
+            return;
+          }
+          failures.push(recoveryError);
+        }
+      }
+
+      if (failures.length === 1) {
+        throw error;
+      }
+      throw new AggregateError(
+        failures,
+        "Could not switch or restore the EPUB stylesheet mode",
+      );
+    } finally {
+      if (this.restoringFile === file) {
+        this.restoringFile = null;
       }
     }
   }
@@ -538,18 +675,18 @@ export class EpubView extends FileView {
     let generation = this.renderGeneration;
     try {
       await this.host.updateSettings({ epubFlowMode: mode });
-      if (!this.ownsFlowChange(file, generation)) {
+      if (!this.ownsReaderChange(file, generation)) {
         return;
       }
 
       generation += 1;
       const rendered = await this.renderBook(file, mode);
-      if (!rendered || !this.ownsFlowChange(file, generation)) {
+      if (!rendered || !this.ownsReaderChange(file, generation)) {
         return;
       }
       const rendition = this.rendition;
       if (cfi !== null && rendition !== null) {
-        const restored = await this.redisplayAndPersistFlowLocation(
+        const restored = await this.redisplayAndPersistLocation(
           file,
           generation,
           rendition,
@@ -561,7 +698,7 @@ export class EpubView extends FileView {
       }
       return;
     } catch (error: unknown) {
-      if (!this.ownsFlowChange(file, generation)) {
+      if (!this.ownsReaderChange(file, generation)) {
         console.error("Observation Car: abandoned EPUB flow-mode failure", error);
         return;
       }
@@ -572,7 +709,7 @@ export class EpubView extends FileView {
         failures.push(rollbackError);
       }
 
-      if (!this.ownsFlowChange(file, generation)) {
+      if (!this.ownsReaderChange(file, generation)) {
         console.error("Observation Car: abandoned EPUB flow-mode failure", error);
         return;
       }
@@ -580,12 +717,12 @@ export class EpubView extends FileView {
         try {
           generation += 1;
           const rendered = await this.renderBook(file, previousMode);
-          if (!rendered || !this.ownsFlowChange(file, generation)) {
+          if (!rendered || !this.ownsReaderChange(file, generation)) {
             return;
           }
           const rendition = this.rendition;
           if (cfi !== null && rendition !== null) {
-            const restored = await this.redisplayAndPersistFlowLocation(
+            const restored = await this.redisplayAndPersistLocation(
               file,
               generation,
               rendition,
@@ -596,7 +733,7 @@ export class EpubView extends FileView {
             }
           }
         } catch (recoveryError: unknown) {
-          if (!this.ownsFlowChange(file, generation)) {
+          if (!this.ownsReaderChange(file, generation)) {
             console.error(
               "Observation Car: abandoned EPUB flow-mode recovery failure",
               recoveryError,
@@ -619,10 +756,10 @@ export class EpubView extends FileView {
   }
 
   /**
-   * Re-display and save a captured flow location while its render still owns
-   * the leaf.
+   * Re-display and save a captured location while its render still owns the
+   * leaf.
    */
-  private async redisplayAndPersistFlowLocation(
+  private async redisplayAndPersistLocation(
     file: TFile,
     generation: number,
     rendition: Rendition,
@@ -630,7 +767,7 @@ export class EpubView extends FileView {
   ): Promise<boolean> {
     await rendition.display(cfi);
     if (
-      !this.ownsFlowChange(file, generation) ||
+      !this.ownsReaderChange(file, generation) ||
       this.rendition !== rendition
     ) {
       return false;
@@ -644,7 +781,7 @@ export class EpubView extends FileView {
   }
 
   /** Whether a flow-mode transaction still owns this leaf and generation. */
-  private ownsFlowChange(file: TFile, generation: number): boolean {
+  private ownsReaderChange(file: TFile, generation: number): boolean {
     return this.file === file && this.renderGeneration === generation;
   }
 
@@ -666,6 +803,7 @@ export class EpubView extends FileView {
     this.rendition = null;
     this.renderedFile = null;
     this.renderedFlowMode = null;
+    this.renderedStylesheetMode = null;
     this.book?.destroy();
     this.book = null;
     this.contentEl.empty();

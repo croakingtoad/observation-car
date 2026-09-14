@@ -201,6 +201,7 @@ function createHost(options: {
   beforeSettingsWrite?: FlowHost["beforeSettingsWrite"];
   persistSettings?: FlowHost["persistSettings"];
 } = {}): FlowHost {
+  const stylesheetModes: Record<string, "theme" | "book"> = {};
   const host: FlowHost = {
     settings: { ...DEFAULT_SETTINGS },
     beforeSettingsWrite:
@@ -217,6 +218,11 @@ function createHost(options: {
     rememberEpubLocation: vi.fn(async (path, fragment) => {
       host.locations[path] = fragment;
     }),
+    getEpubStylesheetMode: (path) => stylesheetModes[path] ?? "theme",
+    setEpubStylesheetMode: async (path, mode) => {
+      if (mode === "theme") delete stylesheetModes[path];
+      else stylesheetModes[path] = mode;
+    },
   };
   return host;
 }

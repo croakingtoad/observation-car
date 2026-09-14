@@ -174,6 +174,7 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
     EpubView: class {
     file: TFile | null = null;
     openedFragments: string[] = [];
+    stylesheetToggleCount = 0;
     private readonly listeners = new Set<
       (location: LocationChanged) => void
     >();
@@ -239,6 +240,9 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
       void this.book;
       void this.rendition;
       await actual.EpubView.prototype.openAtFragment.call(this, fragment);
+    }
+    async toggleBookStylesheet(): Promise<void> {
+      this.stylesheetToggleCount += 1;
     }
     },
   };
@@ -415,7 +419,11 @@ function makeFakeVault(): FakeVault {
       getMostRecentLeaf: (root?: object): FakeLeaf | null =>
         root === rootSplit ? runtime.mostRecentMainLeaf : null,
       on: (name: string, callback: Handler): { name: string } => {
-        workspaceHandlers.set(name, callback);
+        const previous = workspaceHandlers.get(name);
+        workspaceHandlers.set(name, (...args: unknown[]) => {
+          previous?.(...args);
+          callback(...args);
+        });
         return { name };
       },
       getLeavesOfType: (viewType: string): unknown[] => {
@@ -633,6 +641,8 @@ describe("plugin wiring (substituted obsidian module)", () => {
       emitLocation(fragment: string): void;
       openAtFragment(fragment: string): Promise<void>;
       openedFragments: string[];
+      toggleBookStylesheet(): Promise<void>;
+      stylesheetToggleCount: number;
     };
   } {
     const factory = fake.registeredViews.get("observation-car-epub");
@@ -656,6 +666,8 @@ describe("plugin wiring (substituted obsidian module)", () => {
       emitLocation(fragment: string): void;
       openAtFragment(fragment: string): Promise<void>;
       openedFragments: string[];
+      toggleBookStylesheet(): Promise<void>;
+      stylesheetToggleCount: number;
     };
     leaf.view = view;
     view.file = book;
@@ -790,6 +802,70 @@ describe("plugin wiring (substituted obsidian module)", () => {
     );
   });
 
+  it("round-trips a per-book stylesheet mode through plugin data", async () => {
+    const firstLoad = makePersistencePlugin();
+    await firstLoad.persistencePlugin.onload();
+    expect(firstLoad.persistencePlugin.getEpubStylesheetMode("Books/One.epub")).toBe(
+      "theme",
+    );
+
+    await firstLoad.persistencePlugin.setEpubStylesheetMode(
+      "Books/One.epub",
+      "book",
+    );
+    expect(firstLoad.saves.at(-1)).toMatchObject({
+      epubStylesheetModes: { "Books/One.epub": "book" },
+    });
+
+    const reload = makePersistencePlugin(firstLoad.saves.at(-1));
+    await reload.persistencePlugin.onload();
+    expect(reload.persistencePlugin.getEpubStylesheetMode("Books/One.epub")).toBe(
+      "book",
+    );
+
+    await reload.persistencePlugin.setEpubStylesheetMode(
+      "Books/One.epub",
+      "theme",
+    );
+    expect(reload.saves.at(-1)).toMatchObject({ epubStylesheetModes: {} });
+  });
+
+  it("moves a book stylesheet mode on rename and drops it on delete", async () => {
+    await plugin.setEpubStylesheetMode(SOURCE, "book");
+    const renamedPath = "Books/Renamed.epub";
+    const renamed = new TFileDouble(renamedPath, "epub");
+    fake.files.delete(SOURCE);
+    fake.files.set(renamedPath, renamed);
+
+    fire("vault", "rename", [renamed, SOURCE]);
+
+    expect(plugin.getEpubStylesheetMode(SOURCE)).toBe("theme");
+    expect(plugin.getEpubStylesheetMode(renamedPath)).toBe("book");
+
+    fake.files.delete(renamedPath);
+    fire("metadata", "deleted", [renamed]);
+
+    expect(plugin.getEpubStylesheetMode(renamedPath)).toBe("theme");
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({ epubStylesheetModes: {} });
+  });
+
+  it("does not attach stale destination state to a renamed default-mode book", async () => {
+    const renamedPath = "Books/Reused.epub";
+    await plugin.setEpubStylesheetMode(renamedPath, "book");
+    const renamed = new TFileDouble(renamedPath, "epub");
+
+    fire("vault", "rename", [renamed, SOURCE]);
+
+    expect(plugin.getEpubStylesheetMode(renamedPath)).toBe("theme");
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({ epubStylesheetModes: {} });
+  });
+
   it("suppresses only an identical location rewrite", async () => {
     const { persistencePlugin, saves } = makePersistencePlugin();
     await persistencePlugin.onload();
@@ -830,6 +906,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
           "Library/Other.epub": FIRST_SAVED_CFI,
           "Library/New.epub": SECOND_SAVED_CFI,
         },
+        epubStylesheetModes: {},
       },
     ]);
     expect(JSON.stringify(saves[0])).not.toContain(
@@ -855,6 +932,42 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(command.checkCallback?.(true)).toBe(true);
     await settleCommand();
     expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("always lists the book-stylesheet toggle and notices when no book is open", async () => {
+    const command = fake.registeredCommands.get("toggle-book-stylesheet");
+
+    expect(command).toMatchObject({
+      name: "Toggle book stylesheet for this book",
+      callback: expect.any(Function),
+    });
+    expect(command?.checkCallback).toBeUndefined();
+
+    command?.callback?.();
+    await settleCommand();
+    expect(noticeMessages).toContain("Open a book in Observation Car first");
+  });
+
+  it("toggles the active reader first, then the most recently active open reader", async () => {
+    const command = fake.registeredCommands.get("toggle-book-stylesheet");
+    const firstBook = addBookFile("Books/One.epub");
+    const secondBook = addBookFile("Books/Two.epub");
+    const first = openEpubReader(firstBook);
+    const second = openEpubReader(secondBook);
+
+    fake.runtime.activeView = { file: null };
+    fire("workspace", "active-leaf-change", [first.leaf]);
+    fire("workspace", "active-leaf-change", [second.leaf]);
+    command?.callback?.();
+    await settleCommand();
+    expect(second.view.stylesheetToggleCount).toBe(1);
+    expect(first.view.stylesheetToggleCount).toBe(0);
+
+    fake.runtime.activeView = first.view;
+    command?.callback?.();
+    await settleCommand();
+    expect(first.view.stylesheetToggleCount).toBe(1);
+    expect(second.view.stylesheetToggleCount).toBe(1);
   });
 
   it("registers the current-section CM6 view plugin", () => {

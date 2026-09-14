@@ -28,6 +28,8 @@ const host = (): EpubViewHost => {
     },
     getLastEpubLocation: () => null,
     rememberEpubLocation: async () => undefined,
+    getEpubStylesheetMode: () => "theme",
+    setEpubStylesheetMode: async () => undefined,
   };
   return viewHost;
 };

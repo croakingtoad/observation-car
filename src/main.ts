@@ -18,6 +18,7 @@ import {
 } from "./commands/newNoteHere";
 import { registerToggleFocusModeCommand } from "./commands/toggleFocusMode";
 import { registerSplitRatioToggleCommand } from "./commands/toggleSplitRatio";
+import { registerToggleBookStylesheetCommand } from "./commands/toggleBookStylesheet";
 import {
   DEFAULT_SETTINGS,
   type ObservationCarSettings,
@@ -31,6 +32,7 @@ import {
 import { BookNoteStore } from "./model/bookNoteStore";
 import { sortSectionsByBookPosition } from "./model/sortBookNoteSections";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
+import type { EpubStylesheetMode } from "./readers/epubStyles";
 import { loadPluginData, serializePluginData } from "./pluginData";
 import { installEpubLinkHandler } from "./epubLinkHandler";
 import {
@@ -67,6 +69,8 @@ export default class ObservationCarPlugin extends Plugin {
 
   /** F2.4: last canonical EPUB CFI, keyed by the book's vault path. */
   private epubLastLocations: Record<string, string> = {};
+  /** Explicit per-book CSS choices; absent paths use the Obsidian theme. */
+  private epubStylesheetModes: Record<string, EpubStylesheetMode> = {};
   private dataRevision = 0;
   private dataSave: Promise<void> | null = null;
 
@@ -86,6 +90,7 @@ export default class ObservationCarPlugin extends Plugin {
     const pluginData = loadPluginData(await this.loadData());
     this.settings = pluginData.settings;
     this.epubLastLocations = pluginData.epubLastLocations;
+    this.epubStylesheetModes = pluginData.epubStylesheetModes;
     this.addSettingTab(new ObservationCarSettingTab(this.app, this));
     this.focusMode = new FocusModeController();
 
@@ -170,6 +175,7 @@ export default class ObservationCarPlugin extends Plugin {
     registerNewNoteHereCommand(this);
     registerToggleFocusModeCommand(this);
     registerSplitRatioToggleCommand(this);
+    registerToggleBookStylesheetCommand(this);
 
     // Obsidian has no leaf-close event. `layout-change` covers closes and
     // moves; the other events make a newly loaded reader visible quickly.
@@ -214,6 +220,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerEvent(
       this.app.metadataCache.on("deleted", (file) => {
         this.bookNoteStore.remove(file.path);
+        this.dropEpubStylesheetMode(file.path);
       }),
     );
     this.registerEvent(
@@ -237,7 +244,10 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         this.bookNoteStore.remove(oldPath);
-        if (file instanceof TFile) this.scheduleReparse(file);
+        if (file instanceof TFile) {
+          this.moveEpubStylesheetMode(file, oldPath);
+          this.scheduleReparse(file);
+        }
       }),
     );
 
@@ -297,6 +307,27 @@ export default class ObservationCarPlugin extends Plugin {
       return;
     }
     this.epubLastLocations[path] = fragment;
+    await this.persistData();
+  }
+
+  /** Per-book stylesheet mode; the default is deliberately not persisted. */
+  getEpubStylesheetMode(path: string): EpubStylesheetMode {
+    return this.epubStylesheetModes[path] ?? "theme";
+  }
+
+  /** Remember a book CSS opt-in, or remove it when returning to the default. */
+  async setEpubStylesheetMode(
+    path: string,
+    mode: EpubStylesheetMode,
+  ): Promise<void> {
+    if (this.getEpubStylesheetMode(path) === mode) {
+      return;
+    }
+    if (mode === "theme") {
+      delete this.epubStylesheetModes[path];
+    } else {
+      this.epubStylesheetModes[path] = mode;
+    }
     await this.persistData();
   }
 
@@ -430,6 +461,39 @@ export default class ObservationCarPlugin extends Plugin {
     await this.bookNoteStore.flush();
   }
 
+  /** Carry an explicit book-CSS choice with a vault rename. */
+  private moveEpubStylesheetMode(file: TFile, oldPath: string): void {
+    const previousMode = this.epubStylesheetModes[oldPath];
+    const destinationMode = this.epubStylesheetModes[file.path];
+    if (previousMode === undefined && destinationMode === undefined) {
+      return;
+    }
+    delete this.epubStylesheetModes[oldPath];
+    delete this.epubStylesheetModes[file.path];
+    if (file.extension.toLowerCase() === "epub" && previousMode !== undefined) {
+      this.epubStylesheetModes[file.path] = previousMode;
+    }
+    this.persistEpubStylesheetCleanup("rename");
+  }
+
+  /** Drop state for a deleted path before that path can be reused. */
+  private dropEpubStylesheetMode(path: string): void {
+    if (this.epubStylesheetModes[path] === undefined) {
+      return;
+    }
+    delete this.epubStylesheetModes[path];
+    this.persistEpubStylesheetCleanup("delete");
+  }
+
+  private persistEpubStylesheetCleanup(event: "rename" | "delete"): void {
+    void this.persistData().catch((error: unknown) => {
+      console.error(
+        `[observation-car] could not persist EPUB stylesheet mode after ${event}`,
+        error,
+      );
+    });
+  }
+
   /**
    * The single writer for plugin data: serialize settings and per-book state
    * while keeping OPDS credentials out of notes, logs, and events. If state
@@ -456,7 +520,11 @@ export default class ObservationCarPlugin extends Plugin {
     while (savedRevision !== this.dataRevision) {
       savedRevision = this.dataRevision;
       await this.saveData(
-        serializePluginData(this.settings, this.epubLastLocations),
+        serializePluginData(
+          this.settings,
+          this.epubLastLocations,
+          this.epubStylesheetModes,
+        ),
       );
     }
   }

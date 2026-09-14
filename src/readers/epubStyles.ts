@@ -9,6 +9,8 @@ const ARCHIVE_ORIGIN = "https://observation-car.invalid";
 
 type EpubStylesHookHandler = (...args: never[]) => unknown;
 
+export type EpubStylesheetMode = "theme" | "book";
+
 export interface EpubStylesHook {
   register(handler: EpubStylesHookHandler): void;
   deregister(handler: EpubStylesHookHandler): void;
@@ -85,13 +87,18 @@ export class EpubStyles {
     if (this.destroyed) {
       return;
     }
+    if (this.mode === "theme") {
+      for (const stylesheet of document.querySelectorAll(
+        "style, link[rel~='stylesheet']",
+      )) {
+        stylesheet.remove();
+      }
+      return;
+    }
     const existingHrefs = this.stylesheetHrefsBySection.get(section.index);
     const hrefs = new Map<number, string>();
     for (const [index, link] of stylesheetLinks(document).entries()) {
       const originalHref = link.getAttribute("href") ?? existingHrefs?.get(index);
-      if (originalHref === null) {
-        continue;
-      }
       if (originalHref === undefined) {
         continue;
       }
@@ -160,7 +167,10 @@ export class EpubStyles {
         injectedPaths.add(archivePath);
         link.remove();
       } catch (error) {
-        console.error(`Failed to inline EPUB stylesheet: ${archivePath}`, error);
+        console.error(
+          `Failed to inline EPUB stylesheet in section ${section.url}: ${href} (${archivePath})`,
+          error,
+        );
       }
     }
   };
@@ -168,9 +178,12 @@ export class EpubStyles {
   constructor(
     private readonly book: EpubStylesBook,
     private readonly rendition: EpubStylesRendition,
+    private readonly mode: EpubStylesheetMode,
   ) {
     this.book.spine.hooks.content.register(this.preserveStylesheetHrefs);
-    this.rendition.hooks.content.register(this.inlineStylesheets);
+    if (this.mode === "book") {
+      this.rendition.hooks.content.register(this.inlineStylesheets);
+    }
   }
 
   destroy(): void {
@@ -180,6 +193,8 @@ export class EpubStyles {
     this.destroyed = true;
     this.stylesheetHrefsBySection.clear();
     this.book.spine.hooks.content.deregister(this.preserveStylesheetHrefs);
-    this.rendition.hooks.content.deregister(this.inlineStylesheets);
+    if (this.mode === "book") {
+      this.rendition.hooks.content.deregister(this.inlineStylesheets);
+    }
   }
 }

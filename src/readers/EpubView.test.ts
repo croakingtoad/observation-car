@@ -207,6 +207,7 @@ function file(path: string): TFile {
 }
 
 function makeHost(): EpubViewHost {
+  const stylesheetModes: Record<string, "theme" | "book"> = {};
   const host: EpubViewHost = {
     settings: { ...DEFAULT_SETTINGS },
     updateSettings: async (patch) => {
@@ -214,6 +215,14 @@ function makeHost(): EpubViewHost {
     },
     getLastEpubLocation: () => null,
     rememberEpubLocation: async () => undefined,
+    getEpubStylesheetMode: (path) => stylesheetModes[path] ?? "theme",
+    setEpubStylesheetMode: async (path, mode) => {
+      if (mode === "theme") {
+        delete stylesheetModes[path];
+      } else {
+        stylesheetModes[path] = mode;
+      }
+    },
   };
   return host;
 }
@@ -252,6 +261,77 @@ afterEach(() => {
 });
 
 describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
+  it("re-renders a stylesheet toggle at the current CFI", async () => {
+    const host = makeHost();
+    const view = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+      host,
+    );
+    const openedFile = file("Books/Styled.epub");
+    const cfi = "epubcfi(/6/14!/4/2/12:0)";
+    await view.onLoadFile(openedFile);
+    FakeRendition.instances[0].location = { start: { cfi } };
+
+    await view.toggleBookStylesheet();
+
+    expect(host.getEpubStylesheetMode(openedFile.path)).toBe("book");
+    expect(FakeRendition.instances).toHaveLength(2);
+    expect(FakeRendition.instances[1].display).toHaveBeenNthCalledWith(1);
+    expect(FakeRendition.instances[1].display).toHaveBeenNthCalledWith(2, cfi);
+    expect(
+      (view as unknown as { renderedStylesheetMode: string }).renderedStylesheetMode,
+    ).toBe("book");
+    await view.onClose();
+  });
+
+  it("lets two open books render with independent stylesheet modes", async () => {
+    const modes: Record<string, "theme" | "book"> = {
+      "Books/Book-Css.epub": "book",
+    };
+    const host: EpubViewHost = {
+      ...makeHost(),
+      getEpubStylesheetMode: (path) => modes[path] ?? "theme",
+      setEpubStylesheetMode: async (path, mode) => {
+        if (mode === "theme") delete modes[path];
+        else modes[path] = mode;
+      },
+    };
+    const themedView = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])), host);
+    const bookView = makeView(vi.fn().mockResolvedValue(new Uint8Array([2])), host);
+
+    await themedView.onLoadFile(file("Books/Themed.epub"));
+    await bookView.onLoadFile(file("Books/Book-Css.epub"));
+
+    expect(
+      (themedView as unknown as { renderedStylesheetMode: string }).renderedStylesheetMode,
+    ).toBe("theme");
+    expect(
+      (bookView as unknown as { renderedStylesheetMode: string }).renderedStylesheetMode,
+    ).toBe("book");
+    expect(
+      FakeBook.instances[1].rendition.hooks.content.register.mock.calls.length,
+    ).toBe(
+      FakeBook.instances[0].rendition.hooks.content.register.mock.calls.length + 1,
+    );
+    await themedView.onClose();
+    await bookView.onClose();
+  });
+
+  it("deregisters stylesheet hooks before destroying their book", async () => {
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    await view.onLoadFile(file("Books/Teardown.epub"));
+    const book = FakeBook.instances[0];
+
+    await view.onClose();
+
+    const deregisterOrders = book.spine.hooks.content.deregister.mock
+      .invocationCallOrder;
+    expect(deregisterOrders.length).toBeGreaterThan(0);
+    expect(Math.max(...deregisterOrders)).toBeLessThan(
+      book.destroy.mock.invocationCallOrder[0],
+    );
+  });
+
   it("routes the reader toolbar action through the exact reader leaf", async () => {
     const leaf = {} as WorkspaceLeaf;
     const newNoteHereFromReader = vi.fn();
