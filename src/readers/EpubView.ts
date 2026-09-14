@@ -513,7 +513,7 @@ export class EpubView extends FileView {
    * afterwards so the reader does not lose its place on a toggle.
    */
   async setFlowMode(mode: EpubFlowMode): Promise<void> {
-    if (this.readerChange !== null) {
+    while (this.readerChange !== null) {
       await this.readerChange;
     }
 
@@ -536,7 +536,7 @@ export class EpubView extends FileView {
 
   /** Toggle this book between Obsidian-theme and book-CSS rendering. */
   async toggleBookStylesheet(): Promise<void> {
-    if (this.readerChange !== null) {
+    while (this.readerChange !== null) {
       await this.readerChange;
     }
 
@@ -581,6 +581,9 @@ export class EpubView extends FileView {
     this.restoringFile = file;
     let generation = this.renderGeneration;
     try {
+      if (!this.ownsReaderChange(file, generation)) {
+        return;
+      }
       await this.host.setEpubStylesheetMode(file.path, mode);
       if (!this.ownsReaderChange(file, generation)) {
         return;
@@ -674,6 +677,9 @@ export class EpubView extends FileView {
     this.restoringFile = file;
     let generation = this.renderGeneration;
     try {
+      if (!this.ownsReaderChange(file, generation)) {
+        return;
+      }
       await this.host.updateSettings({ epubFlowMode: mode });
       if (!this.ownsReaderChange(file, generation)) {
         return;

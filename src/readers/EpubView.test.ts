@@ -356,6 +356,36 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     expect(FakeRendition.instances).toHaveLength(3);
   });
 
+  it("serializes stylesheet and flow changes behind an in-flight change", async () => {
+    const host = makeHost();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])), host);
+    await view.onLoadFile(file("Books/Queued.epub"));
+
+    const firstDisplay = deferred();
+    state.currentDisplayGate = firstDisplay.promise;
+    const firstFlowChange = view.setFlowMode("scrolled");
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[1].display).toHaveBeenCalledOnce();
+    });
+
+    const stylesheetChange = view.toggleBookStylesheet();
+    const secondFlowChange = view.setFlowMode("paginated");
+    state.currentDisplayGate = null;
+    firstDisplay.resolve();
+    await Promise.all([
+      firstFlowChange,
+      stylesheetChange,
+      secondFlowChange,
+    ]);
+
+    const { renderedFlowMode } = view as unknown as {
+      renderedFlowMode: "paginated" | "scrolled";
+    };
+    expect(host.settings.epubFlowMode).toBe(renderedFlowMode);
+    expect(renderedFlowMode).toBe("paginated");
+    await view.onClose();
+  });
+
   it("routes the reader toolbar action through the exact reader leaf", async () => {
     const leaf = {} as WorkspaceLeaf;
     const newNoteHereFromReader = vi.fn();

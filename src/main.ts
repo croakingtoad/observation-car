@@ -220,7 +220,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerEvent(
       this.app.metadataCache.on("deleted", (file) => {
         this.bookNoteStore.remove(file.path);
-        this.dropEpubStylesheetMode(file.path);
+        this.dropEpubState(file.path);
       }),
     );
     this.registerEvent(
@@ -245,7 +245,7 @@ export default class ObservationCarPlugin extends Plugin {
       this.app.vault.on("rename", (file, oldPath) => {
         this.bookNoteStore.remove(oldPath);
         if (file instanceof TFile) {
-          this.moveEpubStylesheetMode(file, oldPath);
+          this.moveEpubState(file, oldPath);
           this.scheduleReparse(file);
         }
       }),
@@ -461,34 +461,52 @@ export default class ObservationCarPlugin extends Plugin {
     await this.bookNoteStore.flush();
   }
 
-  /** Carry an explicit book-CSS choice with a vault rename. */
-  private moveEpubStylesheetMode(file: TFile, oldPath: string): void {
+  /** Carry the saved EPUB state with a vault rename. */
+  private moveEpubState(file: TFile, oldPath: string): void {
+    const previousLocation = this.epubLastLocations[oldPath];
+    const destinationLocation = this.epubLastLocations[file.path];
     const previousMode = this.epubStylesheetModes[oldPath];
     const destinationMode = this.epubStylesheetModes[file.path];
-    if (previousMode === undefined && destinationMode === undefined) {
+    if (
+      previousLocation === undefined &&
+      destinationLocation === undefined &&
+      previousMode === undefined &&
+      destinationMode === undefined
+    ) {
       return;
     }
+    delete this.epubLastLocations[oldPath];
+    delete this.epubLastLocations[file.path];
     delete this.epubStylesheetModes[oldPath];
     delete this.epubStylesheetModes[file.path];
-    if (file.extension.toLowerCase() === "epub" && previousMode !== undefined) {
-      this.epubStylesheetModes[file.path] = previousMode;
+    if (file.extension.toLowerCase() === "epub") {
+      if (previousLocation !== undefined) {
+        this.epubLastLocations[file.path] = previousLocation;
+      }
+      if (previousMode !== undefined) {
+        this.epubStylesheetModes[file.path] = previousMode;
+      }
     }
-    this.persistEpubStylesheetCleanup("rename");
+    this.persistEpubStateCleanup("rename");
   }
 
   /** Drop state for a deleted path before that path can be reused. */
-  private dropEpubStylesheetMode(path: string): void {
-    if (this.epubStylesheetModes[path] === undefined) {
+  private dropEpubState(path: string): void {
+    if (
+      this.epubLastLocations[path] === undefined &&
+      this.epubStylesheetModes[path] === undefined
+    ) {
       return;
     }
+    delete this.epubLastLocations[path];
     delete this.epubStylesheetModes[path];
-    this.persistEpubStylesheetCleanup("delete");
+    this.persistEpubStateCleanup("delete");
   }
 
-  private persistEpubStylesheetCleanup(event: "rename" | "delete"): void {
+  private persistEpubStateCleanup(event: "rename" | "delete"): void {
     void this.persistData().catch((error: unknown) => {
       console.error(
-        `[observation-car] could not persist EPUB stylesheet mode after ${event}`,
+        `[observation-car] could not persist EPUB state after ${event}`,
         error,
       );
     });

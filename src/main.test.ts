@@ -852,6 +852,41 @@ describe("plugin wiring (substituted obsidian module)", () => {
     ).toMatchObject({ epubStylesheetModes: {} });
   });
 
+  it("moves a remembered EPUB location on rename", async () => {
+    await plugin.rememberEpubLocation(SOURCE, FIRST_SAVED_CFI);
+    const renamedPath = "Books/Renamed.epub";
+    const renamed = new TFileDouble(renamedPath, "epub");
+    fake.files.delete(SOURCE);
+    fake.files.set(renamedPath, renamed);
+
+    fire("vault", "rename", [renamed, SOURCE]);
+
+    expect(plugin.getLastEpubLocation(SOURCE)).toBeNull();
+    expect(plugin.getLastEpubLocation(renamedPath)).toBe(FIRST_SAVED_CFI);
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({
+      epubLastLocations: { [renamedPath]: FIRST_SAVED_CFI },
+    });
+  });
+
+  it("drops a remembered EPUB location on delete", async () => {
+    await plugin.rememberEpubLocation(SOURCE, FIRST_SAVED_CFI);
+    const deleted = fake.files.get(SOURCE);
+    expect(deleted).toBeDefined();
+    if (deleted === undefined) return;
+    fake.files.delete(SOURCE);
+
+    fire("metadata", "deleted", [deleted]);
+
+    expect(plugin.getLastEpubLocation(SOURCE)).toBeNull();
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({ epubLastLocations: {} });
+  });
+
   it("does not attach stale destination state to a renamed default-mode book", async () => {
     const renamedPath = "Books/Reused.epub";
     await plugin.setEpubStylesheetMode(renamedPath, "book");
