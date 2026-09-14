@@ -332,6 +332,30 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     );
   });
 
+  // LOCO-490 W3: readerChange guard keeps a second stylesheet toggle
+  // from driving a replacement book (mirrors epubFlowMode.test.ts:425).
+  it("keeps a second stylesheet toggle from driving a replacement book", async () => {
+    const host = makeHost();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])), host);
+    await view.onLoadFile(file("Books/Styled.epub"));
+
+    const first = view.toggleBookStylesheet();
+    const second = view.toggleBookStylesheet();
+
+    await first;
+    await second;
+
+    // With the guard the second toggle serialises behind the first,
+    // sees "book", and flips back to "theme" — the correct result of
+    // two back-to-back toggles.  Without the guard both see "theme"
+    // and both flip to "book", leaving the net mode wrongly "book".
+    expect(
+      (view as unknown as { renderedStylesheetMode: string }).renderedStylesheetMode,
+    ).toBe("theme");
+    // Three renditions: initial load, first toggle's render, second toggle's render.
+    expect(FakeRendition.instances).toHaveLength(3);
+  });
+
   it("routes the reader toolbar action through the exact reader leaf", async () => {
     const leaf = {} as WorkspaceLeaf;
     const newNoteHereFromReader = vi.fn();

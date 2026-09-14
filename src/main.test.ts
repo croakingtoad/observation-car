@@ -970,6 +970,42 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(second.view.stylesheetToggleCount).toBe(1);
   });
 
+  // LOCO-490 W1: MRU rung guard must survive leaf close.
+  it("favours the surviving MRU reader when the top MRU view's leaf is closed", async () => {
+    const command = fake.registeredCommands.get("toggle-book-stylesheet");
+    const firstBook = addBookFile("Books/One.epub");
+    const secondBook = addBookFile("Books/Two.epub");
+    const first = openEpubReader(firstBook);
+    const second = openEpubReader(secondBook);
+
+    fake.runtime.activeView = { file: null };
+    fire("workspace", "active-leaf-change", [first.leaf]);
+    fire("workspace", "active-leaf-change", [second.leaf]);
+
+    // Close the MRU reader's leaf.
+    fake.leaves.delete(second.leaf);
+
+    command?.callback?.();
+    await settleCommand();
+    expect(first.view.stylesheetToggleCount).toBe(1);
+    expect(second.view.stylesheetToggleCount).toBe(0);
+  });
+
+  // LOCO-490 W2: rung 3 (first valid leaf) must resolve with no active view
+  // and no MRU entry.
+  it("reaches an open EPUB that was never activated via the first-leaf fallback", async () => {
+    const command = fake.registeredCommands.get("toggle-book-stylesheet");
+    const book = addBookFile("Books/Fallback.epub");
+
+    fake.runtime.activeView = { file: null };
+    const { view } = openEpubReader(book);
+
+    command?.callback?.();
+    await settleCommand();
+    expect(view.stylesheetToggleCount).toBe(1);
+    expect(noticeMessages).not.toContain("Open a book in Observation Car first");
+  });
+
   it("registers the current-section CM6 view plugin", () => {
     const extensions = (
       plugin as unknown as { editorExtensions: unknown[] }
