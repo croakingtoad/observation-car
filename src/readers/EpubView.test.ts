@@ -362,6 +362,7 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
 
   it("serializes stylesheet and flow changes behind an in-flight change", async () => {
     const host = makeHost();
+    const setStylesheetMode = vi.spyOn(host, "setEpubStylesheetMode");
     const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])), host);
     await view.onLoadFile(file("Books/Queued.epub"));
 
@@ -372,16 +373,22 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
       expect(FakeRendition.instances[1].display).toHaveBeenCalledOnce();
     });
 
-    const stylesheetChange = view.toggleBookStylesheet();
+    const firstStylesheetChange = view.toggleBookStylesheet();
+    const secondStylesheetChange = view.toggleBookStylesheet();
     const secondFlowChange = view.setFlowMode("paginated");
     state.currentDisplayGate = null;
     firstDisplay.resolve();
     await Promise.all([
       firstFlowChange,
-      stylesheetChange,
+      firstStylesheetChange,
+      secondStylesheetChange,
       secondFlowChange,
     ]);
 
+    expect(setStylesheetMode.mock.calls.map(([, mode]) => mode)).toStrictEqual([
+      "book",
+      "theme",
+    ]);
     const { renderedFlowMode } = view as unknown as {
       renderedFlowMode: "paginated" | "scrolled";
     };
