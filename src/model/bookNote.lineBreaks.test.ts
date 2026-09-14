@@ -138,9 +138,28 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       const terminatorKinds = new Set([...row.breaks, ...(row.trailing ? [row.trailing] : [])]);
       return terminatorKinds.size >= 2;
     }).length;
-    expect(mixedRowCount).toBeGreaterThanOrEqual(4);
+    const EXPECTED_MIXED_ROWS = 8;
+    // Census exists so that flattening a mixed row to a uniform `breaks`
+    // array is a test failure.
+    expect(mixedRowCount).toBe(EXPECTED_MIXED_ROWS);
     expect(LINE_BREAK_ROWS.some((row) => row.trailing !== undefined)).toBe(true);
     expect(LINE_BREAK_ROWS.some((row) => row.trailing === undefined)).toBe(true);
+
+    const MIXED_ROW_NAMES: readonly string[] = [
+      "mixed LF and CRLF",
+      "mixed LF and lone CR before anchor one",
+      "mixed CRLF and lone CR",
+      "all three line breaks mixed",
+      "CRLF immediately before an anchor heading",
+      "lone CR immediately before an anchor heading",
+      "leading LF blank line and trailing CRLF",
+      "leading lone CR blank line, no trailing newline",
+    ];
+    for (const name of MIXED_ROW_NAMES) {
+      const row = LINE_BREAK_ROWS.find((r) => r.name === name)!;
+      const terminatorKinds = new Set([...row.breaks, ...(row.trailing ? [row.trailing] : [])]);
+      expect(terminatorKinds.size).toBeGreaterThanOrEqual(2);
+    }
 
     // Census: verify that for the rows whose names claim a specific break
     // before anchor one, the produced text actually has that break.
@@ -176,23 +195,24 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       const parsed = parseBookNote(text);
 
       expect(parsed.sourceText).toBe(document.toString());
-      expect(document.lines).toBe(parsed.sourceText.split("\n").length);
-      expect(parsed.sections.length).toBeGreaterThanOrEqual(2);
+      expect(parsed.sections.length).toBe(2);
 
-      const normalizedLines = document.toString().split("\n");
+      
       for (const section of parsed.sections) {
         const label = section.fragment.includes("/6/4") ? "one" : "two";
-        expect(normalizedLines[section.headingLine]).toBe(anchor(label));
+        
         expect(document.line(section.headingLine + 1).text).toBe(anchor(label));
         expect(section.bodyRange.start).toBe(section.headingLine);
         expect(section.bodyRange.end).toBeLessThan(document.lines);
         expect(section.bodyRange.end).toBeGreaterThanOrEqual(section.headingLine);
       }
 
-      if (row.name === "U+2028 and U+2029 are not line breaks") {
-        expect(document.lines).toBe(10);
-        expect(parsed.sections.map((section) => section.headingLine)).toEqual([6, 8]);
-      }
+      const docLineCount = documentLinesFor(row).length + (row.trailing ? 1 : 0);
+      expect(document.lines).toBe(docLineCount);
+      const headingLines = [anchor("one"), anchor("two")].map(
+        (h) => documentLinesFor(row).indexOf(h),
+      );
+      expect(parsed.sections.map((s) => s.headingLine)).toEqual(headingLines);
     });
   }
 });
