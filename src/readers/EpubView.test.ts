@@ -29,6 +29,16 @@ const epubMock = vi.hoisted(() => {
     navigationFailure: null as unknown,
   };
 
+  class FakeHook {
+    private readonly handlers = new Set<(...args: never[]) => unknown>();
+    register = vi.fn((handler: (...args: never[]) => unknown) => {
+      this.handlers.add(handler);
+    });
+    deregister = vi.fn((handler: (...args: never[]) => unknown) => {
+      this.handlers.delete(handler);
+    });
+  }
+
   class FakeRendition {
     static instances: FakeRendition[] = [];
     private readonly listeners = new Map<
@@ -61,6 +71,7 @@ const epubMock = vi.hoisted(() => {
     prev = vi.fn();
     next = vi.fn();
     themes = { register: vi.fn(), select: vi.fn(), override: vi.fn() };
+    hooks = { content: new FakeHook() };
     epubcfi = { compare: vi.fn(() => 0) };
 
     constructor() {
@@ -102,7 +113,10 @@ const epubMock = vi.hoisted(() => {
     };
     readonly spine = {
       get: (target: string) => ({ href: target }),
+      hooks: { content: new FakeHook() },
     };
+    readonly archive = { getText: vi.fn(async () => "") };
+    readonly resources = { substitute: vi.fn((css: string) => css) };
     renderTo = vi.fn((_el: HTMLElement, _options: unknown) => this.rendition);
     destroy = vi.fn(() => {
       this.destroyed = true;

@@ -45,6 +45,140 @@ interface EpubRenderedView {
   window: Window;
 }
 
+type RenderedContents = Pick<Contents, "document">;
+type RenderedHandler = (
+  section: unknown,
+  contents: RenderedContents,
+) => void;
+
+export interface EpubKeyBridgeRendition {
+  on(event: "rendered", handler: RenderedHandler): unknown;
+  off(event: "rendered", handler: RenderedHandler): unknown;
+  prev(): Promise<void>;
+  next(): Promise<void>;
+}
+
+const forwardedKeyEvents = new WeakSet<KeyboardEvent>();
+
+function hasClosest(
+  target: EventTarget | null,
+): target is EventTarget & { closest(selectors: string): Element | null } {
+  return target !== null && "closest" in target && typeof target.closest === "function";
+}
+
+/**
+ * Relays keys out of epub.js's iframe while retaining reader-owned paging.
+ * The original iframe event keeps its default unless the host handles and
+ * cancels the relay, so browser-native actions such as copy run only once.
+ */
+export class EpubKeyBridge {
+  private readonly documents = new Set<Document>();
+  private destroyed = false;
+
+  private readonly onRendered: RenderedHandler = (_section, contents) => {
+    if (this.destroyed) {
+      return;
+    }
+    contents.document.addEventListener("keydown", this.onKeyDown);
+    this.documents.add(contents.document);
+
+    // Keep focus on the iframe so page keys keep working.
+    contents.document.body?.setAttribute("tabindex", "0");
+    contents.document.body?.focus();
+  };
+
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (this.destroyed || forwardedKeyEvents.has(event)) {
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      void this.rendition.prev();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      void this.rendition.next();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "PageUp" || event.key === "PageDown") {
+      void this.pageKeyJump(event.key);
+      event.preventDefault();
+      return;
+    }
+
+    // Keep browser-native interactions in the iframe. In particular, copy
+    // must operate on the book selection rather than also invoking a host
+    // binding for the same gesture.
+    const isCopy =
+      (event.ctrlKey || event.metaKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "c";
+    const isInteractiveTarget =
+      hasClosest(event.target) &&
+      event.target.closest(
+        "a, button, input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+      ) !== null;
+
+    // Scripted EPUB content can deliberately consume a key before it reaches
+    // the document. Do not also fire an Obsidian hotkey in that case.
+    if (isCopy || isInteractiveTarget || event.defaultPrevented) {
+      return;
+    }
+    this.forwardToHost(event);
+  };
+
+  constructor(
+    private readonly rendition: EpubKeyBridgeRendition,
+    private readonly hostDocument: Document,
+    private readonly pageKeyJump: (
+      key: "PageUp" | "PageDown",
+    ) => void | Promise<void>,
+  ) {
+    this.rendition.on("rendered", this.onRendered);
+  }
+
+  destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
+    this.rendition.off("rendered", this.onRendered);
+    for (const document of this.documents) {
+      document.removeEventListener("keydown", this.onKeyDown);
+    }
+    this.documents.clear();
+  }
+
+  private forwardToHost(event: KeyboardEvent): void {
+    const KeyboardEventConstructor = this.hostDocument.defaultView?.KeyboardEvent;
+    if (KeyboardEventConstructor === undefined) {
+      return;
+    }
+    const forwarded = new KeyboardEventConstructor(event.type, {
+      key: event.key,
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      repeat: event.repeat,
+      bubbles: event.bubbles,
+      cancelable: event.cancelable,
+    });
+    // KeyboardEventInit omits this legacy field, but Obsidian and user
+    // hotkeys can still inspect it.
+    Object.defineProperty(forwarded, "keyCode", { value: event.keyCode });
+    forwardedKeyEvents.add(forwarded);
+
+    if (!this.hostDocument.dispatchEvent(forwarded)) {
+      event.preventDefault();
+    }
+  }
+}
+
+
 /**
  * The spine component (before "!") of a CFI, with or without the
  * `epubcfi(...)` wrapper — the section the CFI points into.
@@ -404,6 +538,7 @@ export class EpubNavigationTools {
   private locations: Promise<Locations> | null = null;
   private currentLocation: Location | null = null;
   private needsCorrection = false;
+  private readonly keyBridge: EpubKeyBridge;
 
   constructor(
     viewerEl: HTMLElement,
@@ -422,6 +557,11 @@ export class EpubNavigationTools {
     );
     this.createFlowButton(viewerEl);
     this.registerPagingListeners();
+    this.keyBridge = new EpubKeyBridge(
+      rendition,
+      viewerEl.ownerDocument,
+      (key) => this.pageKeyJump(key),
+    );
     this.addKeyListeners();
     void this.addSelectionListener(viewerEl).catch((error: unknown) =>
       this.reportSetupFailure(viewerEl, "Selection copying", error),
@@ -452,19 +592,6 @@ export class EpubNavigationTools {
       // to the same CFI, so relocation alone cannot detect this clear.
       this.selectionTracker.clear();
 
-      contents.document.addEventListener("keydown", (event: KeyboardEvent) => {
-        if (event.key === "ArrowLeft") {
-          void this.rendition.prev();
-          event.preventDefault();
-        } else if (event.key === "ArrowRight") {
-          void this.rendition.next();
-          event.preventDefault();
-        } else if (event.key === "PageUp" || event.key === "PageDown") {
-          void this.pageKeyJump(event.key);
-          event.preventDefault();
-        }
-      });
-
       // The rendition never emits `selected` for a collapsed range,
       // so a tap-away inside the book is caught on the iframe's own
       // selectionchange to clear the retained selection (F2.6).
@@ -476,6 +603,11 @@ export class EpubNavigationTools {
       (contents.document.body as HTMLElement).setAttribute("tabindex", "0");
       (contents.document.body as HTMLElement).focus();
     });
+  }
+
+  /** Release host/iframe keyboard relays before this rendition is replaced. */
+  destroy(): void {
+    this.keyBridge.destroy();
   }
 
   /**

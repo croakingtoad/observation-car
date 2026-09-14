@@ -4,6 +4,12 @@ import type { TFile, WorkspaceLeaf } from "obsidian";
 import { DEFAULT_SETTINGS } from "../settings";
 import { EpubView, type EpubViewHost } from "./EpubView";
 
+vi.mock("./epubStyles", () => ({
+  EpubStyles: class {
+    destroy(): void {}
+  },
+}));
+
 const showNotice = vi.hoisted(() => vi.fn());
 
 vi.mock("obsidian", async (importOriginal) => {
@@ -128,7 +134,9 @@ vi.mock("epubjs", async (importOriginal) => {
   return { ...actual, default: epubMock.epub };
 });
 vi.mock("./epubNavigationTools", () => ({
-  EpubNavigationTools: class {},
+  EpubNavigationTools: class {
+    destroy(): void {}
+  },
   EpubSelectionTracker: class {
     getSelection(): null {
       return null;

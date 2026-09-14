@@ -8,6 +8,12 @@ import {
   type EpubViewHost,
 } from "./EpubView";
 
+vi.mock("./epubStyles", () => ({
+  EpubStyles: class {
+    destroy(): void {}
+  },
+}));
+
 /**
  * F2.5 wiring contract: EpubView listens for `relocated` on the
  * rendition (never document/window), debounces it, and emits
@@ -93,7 +99,9 @@ vi.mock("epubjs", () => ({
 }));
 
 vi.mock("./epubNavigationTools", () => ({
-  EpubNavigationTools: class {},
+  EpubNavigationTools: class {
+    destroy(): void {}
+  },
   EpubSelectionTracker: class {},
 }));
 

@@ -222,6 +222,77 @@ describe("BookNoteStore", () => {
     );
   });
 
+  it("clear() stops the remaining reads in a snapshotted batch", async () => {
+    let releaseFirstRead: (text: string) => void = () => {};
+    let markFirstReadStarted: () => void = () => {};
+    const firstRead = new Promise<string>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    const firstReadStarted = new Promise<void>((resolve) => {
+      markFirstReadStarted = resolve;
+    });
+    const { store, reads } = makeStore({
+      readText: async (path) => {
+        if (path === "a.md") {
+          markFirstReadStarted();
+          return await firstRead;
+        }
+        return NOTE_TEXT;
+      },
+    });
+
+    store.scheduleReparse("a.md");
+    store.scheduleReparse("b.md");
+    store.scheduleReparse("c.md");
+    const abandonedFlush = store.flush();
+    await firstReadStarted;
+
+    store.clear();
+    store.scheduleReparse("x.md");
+    const successorFlush = store.flush();
+    releaseFirstRead(NOTE_TEXT);
+    await Promise.all([abandonedFlush, successorFlush]);
+
+    expect(reads).toEqual(["a.md", "x.md"]);
+    expect(store.has("x.md")).toBe(true);
+  });
+
+  it("an orphaned run cannot drain work queued after clear()", async () => {
+    let releaseRead: (text: string) => void = () => {};
+    let markReadStarted: () => void = () => {};
+    const read = new Promise<string>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const { store, reads } = makeStore({
+      readText: async () => {
+        markReadStarted();
+        return await read;
+      },
+    });
+
+    store.scheduleReparse("a.md");
+    const abandonedFlush = store.flush();
+    store.clear();
+    store.scheduleReparse("x.md");
+
+    let successorFlushFinished = false;
+    const successorFlush = store.flush().then(() => {
+      successorFlushFinished = true;
+    });
+    await readStarted;
+    expect(reads).toEqual(["x.md"]);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(successorFlushFinished).toBe(false);
+
+    releaseRead(NOTE_TEXT);
+    await Promise.all([abandonedFlush, successorFlush]);
+    expect(store.has("x.md")).toBe(true);
+  });
+
   it("an orphaned run cannot clear its successor after clear()", async () => {
     let releaseFirst: (text: string) => void = () => {};
     let releaseSecond: (text: string) => void = () => {};
@@ -263,6 +334,8 @@ describe("BookNoteStore", () => {
 
     releaseFirst(NOTE_TEXT);
     await orphanedRun;
+    expect(store.size).toBe(0);
+    expect(store.has("a.md")).toBe(false);
     expect(Reflect.get(store, "runPromise")).toBe(successorRun);
 
     let lateFlushFinished = false;

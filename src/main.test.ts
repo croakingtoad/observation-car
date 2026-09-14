@@ -921,6 +921,45 @@ describe("plugin wiring (substituted obsidian module)", () => {
     },
   );
 
+  it("quotes a single-quoted source containing an apostrophe", async () => {
+    plugin.settings = {
+      ...plugin.settings,
+      noteTemplate: [
+        "---",
+        "type: book-note",
+        "source: '{{source}}'",
+        "format: {{format}}",
+        "title: {{title}}",
+        "author: {{author}}",
+        "---",
+        "",
+      ].join("\n"),
+    };
+    const source = "Books/Foo {{author}} O'Brien.epub";
+    const book = addBookFile(source);
+    fake.runtime.activeView = { file: book };
+
+    const command = getCreateBookNoteCommand();
+    expect(command).toBeDefined();
+    if (command === undefined) return;
+    expect(command.checkCallback?.(false)).toBe(true);
+    await settleCommand();
+
+    const notePath = "Reading/Foo {{author}} O'Brien.md";
+    expect(fake.contents.get(notePath)).toBe(
+      [
+        "---",
+        "type: book-note",
+        "source: '[[Books/Foo {{author}} O''Brien.epub]]'",
+        "format: epub",
+        `title: "Foo {{author}} O'Brien"`,
+        'author: ""',
+        "---",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("preserves a literal author placeholder in the book filename", async () => {
     const source = "Books/Foo {{author}} Bar.epub";
     const book = addBookFile(source);

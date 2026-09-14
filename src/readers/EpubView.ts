@@ -18,6 +18,7 @@
 import { FileView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import ePub, { Book, Rendition } from "epubjs";
 import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
+import { EpubStyles } from "./epubStyles";
 import { type Location as EpubRenditionLocation } from "epubjs/types/rendition";
 import { buildEpubCfiFragment, parseFragment } from "../model/anchor";
 import { EpubThemes } from "./epubThemes";
@@ -60,7 +61,9 @@ export class EpubView extends FileView {
   private renderedFile: TFile | null = null;
   private book: Book | null = null;
   private rendition: Rendition | null = null;
+  private styles: EpubStyles | null = null;
   private themes: EpubThemes | null = null;
+  private navigationTools: EpubNavigationTools | null = null;
   /**
    * Bumped by every `disposeReader` (a re-open or `onClose`). A render
    * stays live only while it still holds the generation it took at
@@ -259,7 +262,9 @@ export class EpubView extends FileView {
     const viewerEl = this.contentEl.createDiv({ cls: "epub-viewer" });
     let book: Book | null = null;
     let rendition: Rendition | null = null;
+    let styles: EpubStyles | null = null;
     let themes: EpubThemes | null = null;
+    let navigationTools: EpubNavigationTools | null = null;
     let locationEvents: PreparedLocationEvents | null = null;
     const selectionTracker = new EpubSelectionTracker();
     try {
@@ -269,7 +274,8 @@ export class EpubView extends FileView {
         height: "100%",
         flow: flowMode,
       });
-      new EpubNavigationTools(
+      styles = new EpubStyles(book, rendition);
+      navigationTools = new EpubNavigationTools(
         viewerEl,
         file.path,
         book,
@@ -292,7 +298,15 @@ export class EpubView extends FileView {
       // A bad book can fail anywhere in the build; dispose what was
       // created before the failure propagates, so no partial reader
       // survives.
-      this.disposeCreated(viewerEl, book, rendition, themes, locationEvents);
+      this.disposeCreated(
+        viewerEl,
+        book,
+        rendition,
+        styles,
+        themes,
+        navigationTools,
+        locationEvents,
+      );
       throw error;
     }
 
@@ -300,14 +314,24 @@ export class EpubView extends FileView {
       // Superseded while display was in flight: the newer render's
       // disposeReader emptied the content element but could not reach
       // these locals — dispose them here, exactly once.
-      this.disposeCreated(viewerEl, book, rendition, themes, locationEvents);
+      this.disposeCreated(
+        viewerEl,
+        book,
+        rendition,
+        styles,
+        themes,
+        navigationTools,
+        locationEvents,
+      );
       return false;
     }
 
     this.book = book;
     this.rendition = rendition;
     this.renderedFile = file;
+    this.styles = styles;
     this.themes = themes;
+    this.navigationTools = navigationTools;
     this.selectionTracker = selectionTracker;
     this.locationTracker = locationEvents.tracker;
     this.locationRelocatedHandler = locationEvents.relocatedHandler;
@@ -321,7 +345,9 @@ export class EpubView extends FileView {
     viewerEl: HTMLDivElement,
     book: Book | null,
     rendition: Rendition | null,
+    styles: EpubStyles | null,
     themes: EpubThemes | null,
+    navigationTools: EpubNavigationTools | null,
     locationEvents: PreparedLocationEvents | null,
   ): void {
     locationEvents?.forward();
@@ -329,7 +355,9 @@ export class EpubView extends FileView {
       rendition.off("relocated", locationEvents.relocatedHandler);
     }
     locationEvents?.tracker.destroy();
+    navigationTools?.destroy();
     themes?.destroy();
+    styles?.destroy();
     rendition?.destroy();
     book?.destroy();
     viewerEl.remove();
@@ -614,8 +642,12 @@ export class EpubView extends FileView {
     // reader gone, the retained one is stale by definition.
     this.selectionTracker = null;
     this.detachLocationEvents();
+    this.navigationTools?.destroy();
+    this.navigationTools = null;
     this.themes?.destroy();
     this.themes = null;
+    this.styles?.destroy();
+    this.styles = null;
     this.rendition?.destroy();
     this.rendition = null;
     this.renderedFile = null;
