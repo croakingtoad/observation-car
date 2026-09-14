@@ -7,6 +7,7 @@ import {
   EpubNavigationTools,
   EpubSelectionTracker,
   type EpubKeyBridgeRendition,
+  type EpubFlowControls,
 } from "./epubNavigationTools";
 
 const SELECTION_CFI = "epubcfi(/6/4!/4/2/6:32,/2/1:1,/2/1:80)";
@@ -47,6 +48,13 @@ function makeRendition() {
 }
 
 type RenderedHandler = Parameters<EpubKeyBridgeRendition["on"]>[1];
+
+const PAGING_EVENT_TYPES = [
+  "pointerdown",
+  "pointermove",
+  "pointercancel",
+  "pointerup",
+] as const;
 
 function countListeners(
   document: Document,
@@ -319,6 +327,7 @@ function makeBook(overrides: {
 function makeTools(overrides: {
   navigation?: Promise<unknown>;
   metadata?: Promise<unknown>;
+  flow?: EpubFlowControls;
 } = {}) {
   const viewerEl = document.createElement("div");
   const book = makeBook(overrides);
@@ -335,6 +344,7 @@ function makeTools(overrides: {
     book as unknown as Book,
     rendition as unknown as Rendition,
     new EpubSelectionTracker(),
+    overrides.flow,
   );
   return { viewerEl, book, rendition, tools, beforeRendition };
 }
@@ -530,7 +540,6 @@ describe("EpubNavigationTools teardown", () => {
     const implForWrapper = await loadImplForWrapper();
     const { rendition, tools } = makeTools();
     await waitForSelectionListener(rendition);
-    tools.destroy();
     const first = document.implementation.createHTMLDocument("first");
     const second = document.implementation.createHTMLDocument("second");
     first.documentElement.append(first.createElement("body"));
@@ -540,10 +549,9 @@ describe("EpubNavigationTools teardown", () => {
       mousedown: countListeners(document, "mousedown", implForWrapper),
     }));
 
-    const renderedFirst = first as unknown as Contents & { document: Document };
-    const renderedSecond = second as unknown as Contents & { document: Document };
-    rendition.fire("rendered", {}, renderedFirst);
-    rendition.fire("rendered", {}, renderedSecond);
+    rendition.fire("rendered", {}, { document: first } as unknown as Contents);
+    rendition.fire("rendered", {}, { document: second } as unknown as Contents);
+    tools.destroy();
 
     [first, second].forEach((document, index) => {
       expect(countListeners(document, "selectionchange", implForWrapper)).toBe(
@@ -600,15 +608,59 @@ describe("EpubNavigationTools teardown", () => {
     }
   });
 
-  it("ignores rendered and selected events delivered after destroy", async () => {
+  it("removes paging listeners from every rendered document when destroyed", async () => {
     const implForWrapper = await loadImplForWrapper();
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    await waitForSelectionListener(rendition);
+    const first = document.implementation.createHTMLDocument("paging-first");
+    const second = document.implementation.createHTMLDocument("paging-second");
+    first.documentElement.append(first.createElement("body"));
+    second.documentElement.append(second.createElement("body"));
+    const before = [first, second].map((renderedDocument) =>
+      PAGING_EVENT_TYPES.map((type) => ({
+        type,
+        count: countListeners(renderedDocument, type, implForWrapper),
+      })),
+    );
+
+    rendition.fire("rendered", {}, { document: first } as unknown as Contents);
+    rendition.fire("rendered", {}, { document: second } as unknown as Contents);
+    tools.destroy();
+
+    [first, second].forEach((renderedDocument, documentIndex) => {
+      for (const { type, count } of before[documentIndex]) {
+        expect(countListeners(renderedDocument, type, implForWrapper)).toBe(count);
+      }
+    });
+  });
+
+  it("does not register async setup listeners after destroy", async () => {
+    let resolveMetadata: (metadata: { title: string }) => void = () => {};
+    let resolveNavigation: (navigation: { toc: unknown[] }) => void = () => {};
+    const { rendition, tools, viewerEl } = makeTools({
+      metadata: new Promise((resolve) => {
+        resolveMetadata = resolve;
+      }),
+      navigation: new Promise((resolve) => {
+        resolveNavigation = resolve;
+      }),
+    });
+    resolveMetadata({ title: "Late Book" });
+    resolveNavigation({ toc: [] });
+    tools.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(rendition.handlers.get("selected")?.length ?? 0).toBe(0);
+    expect(rendition.handlers.get("rendered")?.length ?? 0).toBe(0);
+    expect(viewerEl.querySelector(".epub-toc-button")).toBeNull();
+  });
+
+  it("ignores direct rendered and selected handlers after destroy", async () => {
     const { rendition, tools, viewerEl } = makeTools();
     tools.destroy();
-    const renderedDocument = document.implementation.createHTMLDocument("late");
-    renderedDocument.documentElement.append(renderedDocument.createElement("body"));
-
-    expect(() => rendition.fire("rendered", {}, renderedDocument)).not.toThrow();
-    expect(countListeners(renderedDocument, "selectionchange", implForWrapper)).toBe(0);
+    const detachedRendition = Object.fromEntries(rendition.handlers);
+    rendition.handlers.clear();
 
     fireSelection(rendition);
     const firstDocument = document.implementation.createHTMLDocument("late-1");
@@ -622,6 +674,10 @@ describe("EpubNavigationTools teardown", () => {
     await vi.waitFor(() => {
       expect(viewerEl.querySelector(".epub-cfi-popup")?.classList.contains("open")).toBe(false);
     });
+    rendition.handlers.clear();
+    for (const [event, handlers] of Object.entries(detachedRendition)) {
+      rendition.handlers.set(event, handlers);
+    }
   });
 });
 

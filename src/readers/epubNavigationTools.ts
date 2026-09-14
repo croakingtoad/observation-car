@@ -341,11 +341,11 @@ export function addPagingListeners(
   doc: Document,
   mode: EpubFlowMode,
   page: (direction: "prev" | "next") => void,
-): void {
+): () => void {
   // Scrolled mode is vertical: tap zones and horizontal swipe are inert,
   // so it needs neither pointer listeners nor a touch-action override.
   if (mode !== "paginated") {
-    return;
+    return () => {};
   }
 
   // Keep native vertical pan while handing horizontal gestures to the
@@ -354,7 +354,7 @@ export function addPagingListeners(
 
   let press: PointerPress | null = null;
 
-  doc.addEventListener("pointerdown", (event: PointerEvent) => {
+  const downHandler = (event: PointerEvent): void => {
     if (event.button !== 0) {
       return; // primary button only; touch and pen report 0 too
     }
@@ -364,9 +364,9 @@ export function addPagingListeners(
       startStamp: event.timeStamp,
       distance: 0,
     };
-  });
+  };
 
-  doc.addEventListener("pointermove", (event: PointerEvent) => {
+  const moveHandler = (event: PointerEvent): void => {
     if (press === null) {
       return;
     }
@@ -374,14 +374,14 @@ export function addPagingListeners(
     if (travelled > press.distance) {
       press.distance = travelled;
     }
-  });
+  };
 
   // A native pan or scroll cancels the press; it must not page.
-  doc.addEventListener("pointercancel", () => {
+  const cancelHandler = (): void => {
     press = null;
-  });
+  };
 
-  doc.addEventListener("pointerup", (event: PointerEvent) => {
+  const upHandler = (event: PointerEvent): void => {
     if (press === null) {
       return;
     }
@@ -429,8 +429,28 @@ export function addPagingListeners(
       }
       page(action.direction);
     }
-  });
+  };
+
+  doc.addEventListener("pointerdown", downHandler);
+  doc.addEventListener("pointermove", moveHandler);
+  doc.addEventListener("pointercancel", cancelHandler);
+  doc.addEventListener("pointerup", upHandler);
+
+  const remove = (): void => {
+    doc.removeEventListener("pointerdown", downHandler);
+    doc.removeEventListener("pointermove", moveHandler);
+    doc.removeEventListener("pointercancel", cancelHandler);
+    doc.removeEventListener("pointerup", upHandler);
+    doc.documentElement.style.removeProperty("touch-action");
+  };
+
+  return remove;
 }
+
+type PagingListeners = {
+  document: Document;
+  remove: () => void;
+};
 
 const FONT_SIZE_DEFAULT = 100;
 const FONT_SIZE_MIN = 80;
@@ -550,11 +570,11 @@ export class EpubNavigationTools {
     this.actions?.onNewNote();
   };
   private bookTitle: Promise<string> | null = null;
-  private readonly renderedDocuments = new Set<Document>();
   private readonly documentListeners = new Map<
     Document,
-    Map<string, EventListener>
+    Map<string, Set<EventListener>>
   >();
+  private readonly pagingListeners = new Set<PagingListeners>();
 
   private readonly onRelocated = (loc: Location): void => {
     // The selection's section may no longer be on screen (page
@@ -619,12 +639,19 @@ export class EpubNavigationTools {
       return;
     }
 
-    const mode = this.flow.mode;
-    addPagingListeners(view.document, mode, (direction) => {
-      if (this.destroyed) {
-        return;
-      }
-      void (direction === "next" ? this.rendition.next() : this.rendition.prev());
+    const removePagingListeners = addPagingListeners(
+      view.document,
+      this.flow.mode,
+      (direction) => {
+        if (this.destroyed) {
+          return;
+        }
+        void (direction === "next" ? this.rendition.next() : this.rendition.prev());
+      },
+    );
+    this.pagingListeners.add({
+      document: view.document,
+      remove: removePagingListeners,
     });
   };
 
@@ -689,12 +716,17 @@ export class EpubNavigationTools {
     this.rendition.off("selected", this.onSelected);
 
     for (const [document, listeners] of this.documentListeners) {
-      for (const [type, handler] of listeners) {
-        document.removeEventListener(type, handler);
+      for (const [type, handlers] of listeners) {
+        for (const handler of handlers) {
+          document.removeEventListener(type, handler);
+        }
       }
     }
     this.documentListeners.clear();
-    this.renderedDocuments.clear();
+    for (const pagingListener of this.pagingListeners) {
+      pagingListener.remove();
+    }
+    this.pagingListeners.clear();
   }
 
   private addDocumentListener(
@@ -703,9 +735,8 @@ export class EpubNavigationTools {
     handler: EventListener,
   ): void {
     const listeners = this.documentListeners.get(document) ?? new Map();
-    listeners.set(type, handler);
+    listeners.set(type, (listeners.get(type) ?? new Set()).add(handler));
     this.documentListeners.set(document, listeners);
-    this.renderedDocuments.add(document);
   }
 
   /**
@@ -780,6 +811,9 @@ export class EpubNavigationTools {
 
   private async addSelectionListener(): Promise<void> {
     await this.book.loaded.metadata;
+    if (this.destroyed) {
+      return;
+    }
     this.rendition.on("selected", this.onSelected);
   }
 
@@ -856,6 +890,9 @@ export class EpubNavigationTools {
       this.book.loaded.navigation,
       this.book.loaded.metadata,
     ]);
+    if (this.destroyed) {
+      return;
+    }
     const bookTitle = metadata.title;
 
     const tocButton = document.createElement("button");
