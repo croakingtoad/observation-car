@@ -77,48 +77,49 @@ async function createOrOpenBookNote(
   book: TFile,
 ): Promise<void> {
   try {
-    const folderPath = normalizePath(plugin.settings.notesFolder);
-    const notePath = normalizePath(
-      folderPath === ""
-        ? `${book.basename}.md`
-        : `${folderPath}/${book.basename}.md`,
-    );
-    const existing = plugin.app.vault.getAbstractFileByPath(notePath);
-    if (existing instanceof TFile) {
-      await openBookNote(plugin, existing);
-      return;
-    }
-    if (existing !== null) {
-      throw new Error(`A folder already exists at ${notePath}`);
-    }
-
-    await ensureFolder(plugin, folderPath);
-    // F1.2 emits a wikilink directly instead of adapting to the user's link style.
-    const source = `[[${book.path}]]`;
-    const content = renderTemplate(plugin.settings.noteTemplate, {
-      source,
-      format: book.extension.toLowerCase(),
-      title: book.basename,
-      author: "",
-    });
-
-    let note: TFile;
-    try {
-      note = await plugin.app.vault.create(notePath, content);
-    } catch (error) {
-      // Two quick invocations may race between lookup and create. The
-      // loser must open the winner, never overwrite it.
-      const racedNote = plugin.app.vault.getAbstractFileByPath(notePath);
-      if (racedNote instanceof TFile) {
-        await openBookNote(plugin, racedNote);
-        return;
-      }
-      throw error;
-    }
+    const note = await getOrCreateBookNote(plugin, book);
     await openBookNote(plugin, note);
   } catch (error) {
     console.error("[observation-car] could not create book note", error);
     new Notice("Could not create book note. Check the developer console for details.");
+  }
+}
+
+/** F1.5's sole note-creation path, shared by later reader commands. */
+export async function getOrCreateBookNote(
+  plugin: ObservationCarPlugin,
+  book: TFile,
+): Promise<TFile> {
+  const folderPath = normalizePath(plugin.settings.notesFolder);
+  const notePath = normalizePath(
+    folderPath === ""
+      ? `${book.basename}.md`
+      : `${folderPath}/${book.basename}.md`,
+  );
+  const existing = plugin.app.vault.getAbstractFileByPath(notePath);
+  if (existing instanceof TFile) return existing;
+  if (existing !== null) {
+    throw new Error(`A folder already exists at ${notePath}`);
+  }
+
+  await ensureFolder(plugin, folderPath);
+  // F1.2 resolves vault-path wikilinks regardless of the user's link style.
+  const source = `[[${book.path}]]`;
+  const content = renderTemplate(plugin.settings.noteTemplate, {
+    source,
+    format: book.extension.toLowerCase(),
+    title: book.basename,
+    author: "",
+  });
+
+  try {
+    return await plugin.app.vault.create(notePath, content);
+  } catch (error) {
+    // Two quick invocations may race between lookup and create. The loser
+    // returns the winner, never overwriting it.
+    const racedNote = plugin.app.vault.getAbstractFileByPath(notePath);
+    if (racedNote instanceof TFile) return racedNote;
+    throw error;
   }
 }
 

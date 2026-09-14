@@ -121,6 +121,17 @@ export class ObservationCarSettingTab extends PluginSettingTab {
           });
       });
 
+    new Setting(containerEl)
+      .setName("Open book note automatically")
+      .setDesc("Open or create the book note beside a reader when the reader opens.")
+      .addToggle((toggle) => {
+        toggle
+          .setValue(settings.autoOpenBookNote)
+          .onChange(async (value) => {
+            await this.plugin.updateSettings({ autoOpenBookNote: value });
+          });
+      });
+
     containerEl.createEl("h4", { text: "PDF" });
 
     new Setting(containerEl)

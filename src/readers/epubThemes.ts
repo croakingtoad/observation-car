@@ -33,20 +33,28 @@ export class EpubThemes {
     this.observer.disconnect();
   }
 
+  private applyTheme(): void {
+    const bgColor = this.getCssVar("--background-primary", "#fff");
+    const fgColor = this.getCssVar("--text-normal", "#222");
+    const linkColor = this.getCssVar("--link-color", "#0077cc");
+    const fontFamily = this.getCssVar("--font-text", "sans-serif");
+
+    this.registerTheme("obsidian", bgColor, fgColor, linkColor, fontFamily);
+    this.rendition.themes.select("obsidian");
+  }
+
   private registerTheme(
     name: string,
     bg: string,
     fg: string,
     link: string,
     font: string,
-    fontSize: string,
   ): void {
     this.rendition.themes.register(name, {
       body: {
         background: bg,
         color: fg,
         "font-family": font,
-        "font-size": fontSize,
       },
       a: {
         color: link,
@@ -57,16 +65,5 @@ export class EpubThemes {
   private getCssVar(name: string, fallback: string): string {
     const value = getComputedStyle(document.body).getPropertyValue(name).trim();
     return `${value || fallback} !important`;
-  }
-
-  private applyTheme(): void {
-    const bgColor = this.getCssVar("--background-primary", "#fff");
-    const fgColor = this.getCssVar("--text-normal", "#222");
-    const linkColor = this.getCssVar("--link-color", "#0077cc");
-    const fontFamily = this.getCssVar("--font-text", "sans-serif");
-    const fontSize = this.getCssVar("--font-text-size", "1em");
-
-    this.registerTheme("obsidian", bgColor, fgColor, linkColor, fontFamily, fontSize);
-    this.rendition.themes.select("obsidian");
   }
 }
