@@ -47,7 +47,7 @@ const LINE_BREAK_ROWS: readonly LineBreakRow[] = [
   {
     name: "mixed LF and lone CR before anchor one",
     body: ["first", anchor("one"), "body one", anchor("two"), "body two"],
-    breaks: [...LF, ...CR, ...LF, ...LF, ...LF, ...LF, ...LF, ...LF, ...LF],
+    breaks: [...LF, ...LF, ...LF, ...LF, ...LF, ...CR, ...LF, ...LF, ...LF],
   },
   {
     name: "mixed CRLF and lone CR",
@@ -64,13 +64,13 @@ const LINE_BREAK_ROWS: readonly LineBreakRow[] = [
   {
     name: "CRLF immediately before an anchor heading",
     body: ["preamble", anchor("one"), "body one", anchor("two"), "body two"],
-    breaks: [...LF, ...CRLF, ...LF, ...LF, ...LF, ...LF, ...LF, ...LF, ...LF],
+    breaks: [...LF, ...LF, ...LF, ...LF, ...LF, ...CRLF, ...LF, ...LF, ...LF],
     trailing: "\n",
   },
   {
     name: "lone CR immediately before an anchor heading",
     body: ["preamble", anchor("one"), "body one", anchor("two"), "body two"],
-    breaks: [...LF, ...CR, ...LF, ...LF, ...LF, ...LF, ...LF, ...LF, ...LF],
+    breaks: [...LF, ...LF, ...LF, ...LF, ...LF, ...CR, ...LF, ...LF, ...LF],
     trailing: "\n",
   },
   {
@@ -141,6 +141,32 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
     expect(mixedRowCount).toBeGreaterThanOrEqual(4);
     expect(LINE_BREAK_ROWS.some((row) => row.trailing !== undefined)).toBe(true);
     expect(LINE_BREAK_ROWS.some((row) => row.trailing === undefined)).toBe(true);
+
+    // Census: verify that for the rows whose names claim a specific break
+    // before anchor one, the produced text actually has that break.
+    // Checks the produced string, not the breaks array, so a mislabelled
+    // row (break at wrong index) can never pass.
+    {
+      const texts = LINE_BREAK_ROWS.map(textFor);
+      const atNew = anchor("one");
+
+      for (let i = 0; i < LINE_BREAK_ROWS.length; i++) {
+        const row = LINE_BREAK_ROWS[i];
+        const at = texts[i].indexOf(atNew);
+        if (at < 0) continue;
+        if (row.name === "mixed LF and lone CR before anchor one") {
+          expect(texts[i].at(at - 1)).toBe("\r");
+          expect(texts[i].at(at - 2)).not.toBe("\r");
+        }
+        if (row.name === "CRLF immediately before an anchor heading") {
+          expect(texts[i].slice(at - 2, at)).toBe("\r\n");
+        }
+        if (row.name === "lone CR immediately before an anchor heading") {
+          expect(texts[i].at(at - 1)).toBe("\r");
+          expect(texts[i].at(at - 2)).not.toBe("\r");
+        }
+      }
+    }
   });
 
   for (const row of LINE_BREAK_ROWS) {
