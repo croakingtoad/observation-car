@@ -584,6 +584,10 @@ describe("parseBookNote — purity", () => {
     "body",
   ]);
 
+  it("retains the exact source text used to produce the parse", () => {
+    expect(parseBookNote(SAMPLE).sourceText).toBe(SAMPLE);
+  });
+
   it("returns equal results for the same input", () => {
     expect(parseBookNote(SAMPLE)).toEqual(parseBookNote(SAMPLE));
   });

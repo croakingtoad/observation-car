@@ -355,7 +355,7 @@ export default class ObservationCarPlugin extends Plugin {
     }
     this.focusMode.toggle(
       editor,
-      pairing.bookNote.sections,
+      pairing.bookNote,
       this.scrollSync.getCurrentSection(editor),
     );
   }

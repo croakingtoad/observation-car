@@ -2020,10 +2020,12 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([]);
     expect(toggle).toHaveBeenCalledWith(
       expect.objectContaining({ hasFocus: expect.any(Function) }),
-      expect.arrayContaining([
-        expect.objectContaining({ headingLine: 6 }),
-        expect.objectContaining({ headingLine: 9 }),
-      ]),
+      expect.objectContaining({
+        sections: expect.arrayContaining([
+          expect.objectContaining({ headingLine: 6 }),
+          expect.objectContaining({ headingLine: 9 }),
+        ]),
+      }),
       expect.objectContaining({ headingLine: 9 }),
     );
   });
@@ -2049,9 +2051,9 @@ describe("plugin wiring (substituted obsidian module)", () => {
     view.emitLocation(`#${CFI_1}`);
     await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
 
-    const setSections = vi.spyOn(
+    const setBookNote = vi.spyOn(
       (plugin as unknown as { focusMode: FocusModeController }).focusMode,
-      "setSections",
+      "setBookNote",
     );
     const setCurrentSection = vi.spyOn(
       (plugin as unknown as { focusMode: FocusModeController }).focusMode,
@@ -2061,12 +2063,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     view.emitLocation(`#${CFI_2}`);
     await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
 
-    expect(setSections).toHaveBeenCalledWith(
+    expect(setBookNote).toHaveBeenCalledWith(
       expect.objectContaining({ hasFocus: expect.any(Function) }),
-      expect.arrayContaining([
-        expect.objectContaining({ headingLine: 6 }),
-        expect.objectContaining({ headingLine: 9 }),
-      ]),
+      expect.objectContaining({
+        sections: expect.arrayContaining([
+          expect.objectContaining({ headingLine: 6 }),
+          expect.objectContaining({ headingLine: 9 }),
+        ]),
+      }),
     );
     expect(setCurrentSection).toHaveBeenCalledWith(
       expect.objectContaining({ hasFocus: expect.any(Function) }),

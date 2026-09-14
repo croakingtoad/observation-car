@@ -3,7 +3,8 @@ import {
   setFocusModeDecoration,
   setFocusSectionsDecoration,
 } from "./focusModeDecoration";
-import type { BookNoteSection } from "../model/bookNote";
+import type { BookNote, BookNoteSection } from "../model/bookNote";
+import { codeMirrorView } from "./codeMirrorView";
 import type { ScrollEditor } from "./scrollSync";
 
 /**
@@ -21,16 +22,19 @@ export class FocusModeController {
    */
   toggle(
     editor: ScrollEditor,
-    sections: readonly BookNoteSection[] = [],
+    bookNote: BookNote | null = null,
     currentSection: BookNoteSection | null = null,
   ): void {
     const state = this.editors.get(editor) ?? {
-      sections: [],
+      bookNote: null,
       currentSection: null,
     };
     const enabled = !isFocusModeDecorationEnabled(editor);
     const next = {
-      sections: sections.length > 0 ? sections : state.sections,
+      bookNote:
+        bookNote !== null && bookNote.sections.length > 0
+          ? bookNote
+          : state.bookNote,
       currentSection: currentSection ?? state.currentSection,
     };
     this.editors.set(editor, next);
@@ -38,11 +42,11 @@ export class FocusModeController {
     apply(editor, next);
   }
 
-  /** Set the cached sections; enables folding only for enabled notes. */
-  setSections(editor: ScrollEditor, sections: readonly BookNoteSection[]): void {
+  /** Set the current parse; enables folding only for enabled notes. */
+  setBookNote(editor: ScrollEditor, bookNote: BookNote): void {
     const state = this.editors.get(editor);
     if (state === undefined) return;
-    const next = { ...state, sections };
+    const next = { ...state, bookNote };
     this.editors.set(editor, next);
     apply(editor, next);
   }
@@ -68,13 +72,46 @@ export class FocusModeController {
 }
 
 interface FocusModeEditor {
-  readonly sections: readonly BookNoteSection[];
+  readonly bookNote: BookNote | null;
   readonly currentSection: BookNoteSection | null;
+  comparedBookNote?: BookNote;
+  comparedDocument?: object;
+  documentMatchesSource?: boolean;
 }
 
 function apply(
   editorReference: ScrollEditor,
   next: FocusModeEditor,
 ): void {
-  setFocusSectionsDecoration(editorReference, next.sections, next.currentSection);
+  if (next.bookNote === null || !bookNoteMatchesDocument(editorReference, next)) {
+    return;
+  }
+  setFocusSectionsDecoration(
+    editorReference,
+    next.bookNote.sections,
+    next.currentSection,
+  );
+}
+
+function bookNoteMatchesDocument(
+  editor: ScrollEditor,
+  state: FocusModeEditor,
+): boolean {
+  const bookNote = state.bookNote;
+  if (bookNote === null) return false;
+  const cm = codeMirrorView(editor);
+  if (cm === null) return true;
+  if (
+    state.comparedBookNote === bookNote &&
+    state.comparedDocument === cm.state.doc
+  ) {
+    return state.documentMatchesSource === true;
+  }
+  const matches =
+    cm.state.doc.length === bookNote.sourceText.length &&
+    cm.state.doc.toString() === bookNote.sourceText;
+  state.comparedBookNote = bookNote;
+  state.comparedDocument = cm.state.doc;
+  state.documentMatchesSource = matches;
+  return matches;
 }

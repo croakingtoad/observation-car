@@ -119,6 +119,8 @@ export interface BookNoteDiagnostic {
 }
 
 export interface BookNote {
+  /** Exact markdown source from which this immutable parse was produced. */
+  readonly sourceText: string;
   readonly frontmatter: BookNoteFrontmatter;
   /** Anchor sections in file order (see module docs on ordering). */
   readonly sections: readonly BookNoteSection[];
@@ -192,7 +194,12 @@ export function parseBookNote(
     });
   }
 
-  return { frontmatter: { data, source, format }, sections, diagnostics };
+  return {
+    sourceText: text,
+    frontmatter: { data, source, format },
+    sections,
+    diagnostics,
+  };
 }
 
 /**
