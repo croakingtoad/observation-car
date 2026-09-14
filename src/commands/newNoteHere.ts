@@ -63,6 +63,17 @@ export async function newNoteHereFromReader(
   await addNoteAtPairing(plugin, pairing);
 }
 
+/**
+ * Resolve the pairing behind the most recent main-area leaf, whether the
+ * user is on the reader or its note. Shared by cross-pane commands that
+ * operate on the active reader/note pair.
+ */
+export function activePairing(
+  plugin: ObservationCarPlugin,
+): ReaderPairing | undefined {
+  return mostRecentPairing(plugin);
+}
+
 function mostRecentPairing(
   plugin: ObservationCarPlugin,
 ): ReaderPairing | undefined {

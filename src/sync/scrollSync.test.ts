@@ -3,6 +3,7 @@ import type { TFile, WorkspaceLeaf } from "obsidian";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BookNote, BookNoteSection } from "../model/bookNote";
 import { parseFragment } from "../model/anchor";
+import { FocusModeController } from "./focusMode";
 import { DEFAULT_LOCATION_DEBOUNCE_MS } from "../readers/epubLocation";
 import type { Reader, ReaderPairing } from "./ReaderRegistry";
 import {
@@ -72,7 +73,9 @@ interface Rig {
   leafOpen: boolean;
 }
 
-function makeRig(): Rig {
+function makeRig(
+  overrides: Partial<ConstructorParameters<typeof ScrollSync>[0]> = {},
+): Rig {
   const bookFile = file(BOOK_PATH);
   const note = bookNote([
     section(9, CFI_2),
@@ -107,6 +110,7 @@ function makeRig(): Rig {
     findEditor: () => (rig.editorOpen ? rig.currentEditor : null),
     isLeafOpen: () => rig.leafOpen,
     setCurrentSection,
+    ...overrides,
   });
   rig.sync.register(leaf, reader);
   return rig;
@@ -215,6 +219,22 @@ describe("ScrollSync", () => {
     vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
 
     expect(rig.setCurrentSection).toHaveBeenCalledWith(firstEditor, null);
+  });
+
+  it("turns focus mode off when the reader leaf closes", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const reset = vi.spyOn(focusMode, "reset");
+    const rig = makeRig({ focusMode });
+
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    rig.leafOpen = false;
+    rig.sync.refresh();
+
+    expect(reset).toHaveBeenCalledWith(rig.editor);
+    expect(rig.setCurrentSection).toHaveBeenLastCalledWith(rig.editor, null);
   });
 
   it("does not move before the first anchor, then scrolls when the first anchor is reached", () => {

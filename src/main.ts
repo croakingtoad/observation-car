@@ -6,9 +6,11 @@ import {
 } from "./commands/openBookNote";
 import { registerJumpToSectionCommand } from "./commands/jumpToSection";
 import {
+  activePairing,
   newNoteHereFromReader,
   registerNewNoteHereCommand,
 } from "./commands/newNoteHere";
+import { registerToggleFocusModeCommand } from "./commands/toggleFocusMode";
 import { registerSplitRatioToggleCommand } from "./commands/toggleSplitRatio";
 import {
   DEFAULT_SETTINGS,
@@ -35,6 +37,8 @@ import {
   type ScrollEditor,
 } from "./sync/scrollSync";
 import { currentSectionViewPlugin } from "./sync/currentSectionDecoration";
+import { focusModeViewPlugin } from "./sync/focusModeDecoration";
+import { FocusModeController } from "./sync/focusMode";
 
 /**
  * Observation Car — plugin entry point.
@@ -69,11 +73,15 @@ export default class ObservationCarPlugin extends Plugin {
   /** Reader-location → note-heading synchronization (PRD F4.3). */
   private scrollSync!: ScrollSync;
 
+  /** Read-only CM6 focus decoration state (PRD F4.5). */
+  private focusMode!: FocusModeController;
+
   async onload(): Promise<void> {
     const pluginData = loadPluginData(await this.loadData());
     this.settings = pluginData.settings;
     this.epubLastLocations = pluginData.epubLastLocations;
     this.addSettingTab(new ObservationCarSettingTab(this.app, this));
+    this.focusMode = new FocusModeController();
 
     this.addCommand({
       id: "sort-sections-by-book-position",
@@ -134,6 +142,7 @@ export default class ObservationCarPlugin extends Plugin {
       // second time for every subscription.
       isLeafOpen: (leaf, reader) =>
         this.readerRegistry.hasReader(leaf, reader),
+      focusMode: this.focusMode,
     });
 
     // F2.1: `.epub` opens in the in-plugin reader view; the concrete view
@@ -148,10 +157,12 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
     this.register(installEpubLinkHandler(this.app));
     this.registerEditorExtension(currentSectionViewPlugin);
+    this.registerEditorExtension(focusModeViewPlugin);
     registerCreateBookNoteCommand(this);
     registerOpenBookNoteCommand(this);
     registerJumpToSectionCommand(this);
     registerNewNoteHereCommand(this);
+    registerToggleFocusModeCommand(this);
     registerSplitRatioToggleCommand(this);
 
     // Obsidian has no leaf-close event. `layout-change` covers closes and
@@ -311,6 +322,14 @@ export default class ObservationCarPlugin extends Plugin {
   /** Reader-toolbar bridge for F4.6's leaf-pinned action. */
   newNoteHereFromReader(leaf: WorkspaceLeaf): void {
     void newNoteHereFromReader(this, leaf);
+  }
+
+  /** Toggle read-only focus decoration for the active paired note. */
+  toggleFocusMode(): void {
+    const pairing = activePairing(this);
+    if (pairing === undefined) return;
+    const editor = this.findOpenEditor(pairing.notePath);
+    if (editor !== null) this.focusMode.toggle(editor);
   }
 
   onunload(): void {

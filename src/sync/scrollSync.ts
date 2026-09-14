@@ -9,6 +9,7 @@ import type { BookNoteSection } from "../model/bookNote";
 import type { Reader, ReaderPairing } from "./ReaderRegistry";
 import { codeMirrorView } from "./codeMirrorView";
 import { setCurrentSectionDecoration } from "./currentSectionDecoration";
+import type { FocusModeController } from "./focusMode";
 
 /** The reader-side debounce leaves 50 ms of the 200 ms PRD budget. */
 export const DEFAULT_SCROLL_DEBOUNCE_MS = 25;
@@ -51,6 +52,7 @@ export interface ScrollSyncDeps {
     editor: ScrollEditor,
     section: BookNoteSection | null,
   ) => void;
+  focusMode?: FocusModeController;
 }
 
 interface Subscription {
@@ -188,6 +190,7 @@ export class ScrollSync {
       const editor = this.deps.findEditor(pairing.notePath);
       if (editor !== null) {
         this.applyCurrentSection(
+          pairing,
           pending.leaf,
           editor,
           section,
@@ -214,7 +217,13 @@ export class ScrollSync {
     }
 
     scrollHeadingIntoView(editor, section.headingLine);
-    this.applyCurrentSection(pending.leaf, editor, section, sectionKey);
+    this.applyCurrentSection(
+      pairing,
+      pending.leaf,
+      editor,
+      section,
+      sectionKey,
+    );
     this.pending.delete(pending.leaf);
   }
 
@@ -234,11 +243,15 @@ export class ScrollSync {
     const current = this.currentSection.get(leaf);
     if (current === undefined) return;
     const editor = current.editor.deref();
-    if (editor !== undefined) this.setCurrentSection(editor, null);
+    if (editor !== undefined) {
+      this.setCurrentSection(editor, null);
+      this.deps.focusMode?.reset(editor);
+    }
     this.currentSection.delete(leaf);
   }
 
   private applyCurrentSection(
+    pairing: ReaderPairing,
     leaf: WorkspaceLeaf,
     editor: ScrollEditor,
     section: BookNoteSection,
@@ -249,6 +262,10 @@ export class ScrollSync {
       this.setCurrentSection(previousEditor, null);
     }
     this.setCurrentSection(editor, section);
+    if (this.deps.focusMode !== undefined) {
+      this.deps.focusMode.setSections(editor, pairing.bookNote.sections);
+      this.deps.focusMode.setCurrentSection(editor, section);
+    }
     this.currentSection.set(leaf, { key, editor: new WeakRef(editor) });
   }
 
