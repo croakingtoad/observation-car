@@ -1383,8 +1383,10 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const firstBook = addBookFile("Books/A.epub");
     const secondBook = addBookFile("Books/B.epub");
     const first = openEpubReader(firstBook);
-    fake.leaves.delete(first.leaf);
-    first.leaf.view = { file: null, getViewType: (): string => "observation-car-epub" };
+    first.leaf.view = {
+      file: null,
+      getViewType: (): string => "observation-car-epub",
+    };
     fake.runtime.mostRecentMainLeaf = null;
     const deferred = openEpubReader(secondBook, "main", {
       deferredView: true,
