@@ -637,6 +637,49 @@ describe("EpubNavigationTools teardown", () => {
     });
   });
 
+  it("removes the viewerEl keydown listener when destroyed", async () => {
+    const implForWrapper = await loadImplForWrapper();
+    const { rendition, viewerEl, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    await waitForSelectionListener(rendition);
+
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-toc-button")).not.toBeNull();
+    });
+
+    const countBefore = countListeners(
+      viewerEl as unknown as Document,
+      "keydown",
+      implForWrapper,
+    );
+    expect(countBefore).toBe(1);
+
+    tools.destroy();
+
+    const countAfter = countListeners(
+      viewerEl as unknown as Document,
+      "keydown",
+      implForWrapper,
+    );
+    expect(countAfter).toBe(0);
+  });
+
+  it("resets touch-action on every rendered document when destroyed", async () => {
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    await waitForSelectionListener(rendition);
+    const doc = document.implementation.createHTMLDocument("touch-test");
+    doc.documentElement.append(doc.createElement("body"));
+
+    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    expect(doc.documentElement.style.touchAction).toBe("pan-y");
+
+    tools.destroy();
+    expect(doc.documentElement.style.touchAction).toBe("");
+  });
+
   it("does not register async setup listeners after destroy", async () => {
     let resolveMetadata: (metadata: { title: string }) => void = () => {};
     let resolveNavigation: (navigation: { toc: unknown[] }) => void = () => {};
