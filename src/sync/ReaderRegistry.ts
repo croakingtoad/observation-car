@@ -1,6 +1,13 @@
 import type { TFile, WorkspaceLeaf } from "obsidian";
 import type { BookNote } from "../model/bookNote";
 
+/** Format-neutral book location exposed by readers that support it. */
+export interface ReaderLocation {
+  readonly fragment: string;
+  readonly chapter: number | null;
+  readonly label: string;
+}
+
 /**
  * Format-neutral surface implemented structurally by reader views.
  * `EpubView` and Obsidian's core PDF view can both satisfy this contract
@@ -11,6 +18,8 @@ export interface Reader {
   readonly file: TFile | null;
   /** Obsidian workspace view type used to determine whether the leaf is open. */
   getViewType(): string;
+  /** Read the current format-native location when the reader supports it. */
+  getLocation?: () => ReaderLocation | null;
   /** Open a format-native anchored location when the reader supports it. */
   openAtFragment?: (fragment: string) => void | Promise<void>;
 }

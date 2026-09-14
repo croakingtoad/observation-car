@@ -127,7 +127,7 @@ export function locationForRelocation(
 export class EpubLocationTracker {
   private readonly listeners = new Set<(loc: EpubLocation) => void>();
   private toc: readonly TocItem[] = [];
-  private last: EpubLocation | null = null;
+  private latest: RelocatedPosition | null = null;
   private pending: RelocatedPosition | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
@@ -149,6 +149,7 @@ export class EpubLocationTracker {
     if (this.destroyed || position === null) {
       return;
     }
+    this.latest = position;
     this.pending = position;
     if (this.timer !== null) {
       clearTimeout(this.timer);
@@ -164,9 +165,11 @@ export class EpubLocationTracker {
     };
   }
 
-  /** The last emitted location, or null before the first relocation. */
+  /** Derive the latest relocation immediately, without waiting for emit. */
   current(): EpubLocation | null {
-    return this.last;
+    return this.latest === null
+      ? null
+      : locationForRelocation(this.latest, this.toc);
   }
 
   /** Cancel a pending event and drop every subscription. */
@@ -175,6 +178,7 @@ export class EpubLocationTracker {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    this.latest = null;
     this.pending = null;
     this.listeners.clear();
     this.destroyed = true;
@@ -191,7 +195,6 @@ export class EpubLocationTracker {
     if (location === null) {
       return;
     }
-    this.last = location;
     for (const listener of [...this.listeners]) {
       listener(location);
     }

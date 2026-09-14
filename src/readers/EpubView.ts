@@ -6,10 +6,9 @@
  * provenance in `VENDOR_NOTICE.md`.
  *
  * F2.1 registers this view for `.epub` so a book opens in-plugin; the
- * selection half (`getSelection`) of the API surface the sync layer
- * (E004) consumes (PRD §8) is in since F2.6; the location half
- * (`on("location")` / `getLocation`) arrives with F2.5 and link
- * navigation with F2.7–F2.9.
+ * The selection (`getSelection`) and location (`on("location")` /
+ * `getLocation`) API surfaces consumed by the sync layer (E004) are
+ * implemented here; link navigation follows in F2.7–F2.9.
  *
  * `FileView` (an `ItemView` subclass, like the core PDF view) is the base:
  * Obsidian routes `leaf.openFile(file)` for a registered extension to
@@ -96,6 +95,14 @@ export class EpubView extends FileView {
 
   getDisplayText(): string {
     return this.file?.basename ?? "EPUB Reader";
+  }
+
+  /**
+   * PRD §8 Reader contract: synchronously derive the current location
+   * through the same tracker and helpers that produce location events.
+   */
+  getLocation(): EpubLocation | null {
+    return this.locationTracker?.current() ?? null;
   }
 
   /**

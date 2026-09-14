@@ -234,19 +234,26 @@ describe("EpubLocationTracker", () => {
     tracker.destroy();
   });
 
-  it("records the last emitted location in current()", () => {
+  it("derives the latest accepted relocation synchronously in current()", () => {
     vi.useFakeTimers();
     const tracker = new EpubLocationTracker();
     expect(tracker.current()).toBeNull();
 
     tracker.onRelocated(rel("/6/8!/4/2/1:0", "ch1.xhtml"));
-    vi.advanceTimersByTime(150);
     expect(tracker.current()).toEqual({
       fragment: "#epubcfi(/6/8!/4/2/1:0)",
       chapter: 3,
       label: "Ch. 3",
     });
+
+    tracker.onRelocated(rel("/6/14!/4/2/12:0", "ch3.xhtml"));
+    expect(tracker.current()).toEqual({
+      fragment: "#epubcfi(/6/14!/4/2/12:0)",
+      chapter: 6,
+      label: "Ch. 6",
+    });
     tracker.destroy();
+    expect(tracker.current()).toBeNull();
   });
 
   it("cancels a pending event on destroy", () => {

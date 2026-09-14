@@ -719,6 +719,80 @@ function relocatedAt(cfi: string, href: string) {
 }
 
 describe("EpubView location events (F2.5)", () => {
+  it("returns null before the first relocation and after close", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+
+    expect(view.getLocation()).toBeNull();
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.getLocation()).toBeNull();
+
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    expect(view.getLocation()).not.toBeNull();
+
+    await view.onClose();
+    expect(view.getLocation()).toBeNull();
+  });
+
+  it.each([
+    ["page turn", "epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"],
+    ["TOC jump", "epubcfi(/6/10!/4/2/3:0)", "chapters/ch2.xhtml"],
+    ["scroll", "epubcfi(/6/12!/4/2/7:0)", "chapters/ch2.xhtml"],
+    ["restored location", "epubcfi(/6/14!/4/2/12:0)", "chapters/ch3.xhtml"],
+  ])(
+    "agrees with the emitted event after a %s relocation",
+    async (_kind, cfi, href) => {
+      vi.useFakeTimers();
+      const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+      const events: EpubLocationEvent[] = [];
+      view.on("location", (location) => events.push(location));
+      await view.onLoadFile(file("Books/Test.epub"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      const rendition = FakeRendition.instances[0];
+      rendition.emit("relocated", relocatedAt(cfi, href));
+
+      // Mutation evidence: the pull read sees this relocation before the
+      // debounced event exists, so returning only the last event is stale.
+      const pulledBeforeEvent = view.getLocation();
+      expect(events).toHaveLength(0);
+      expect(pulledBeforeEvent?.fragment).toBe(`#${cfi}`);
+
+      await vi.advanceTimersByTimeAsync(150);
+      const [{ file: _file, ...emitted }] = events;
+      expect(pulledBeforeEvent).toEqual(emitted);
+      expect(view.getLocation()).toEqual(emitted);
+      await view.onClose();
+    },
+  );
+
+  it("does not emit or mutate the current location when read", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const listener = vi.fn();
+    view.on("location", listener);
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    listener.mockClear();
+
+    const first = view.getLocation();
+    const second = view.getLocation();
+
+    expect(second).toEqual(first);
+    expect(listener).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    await view.onClose();
+  });
+
   it("logs navigation failures and keeps chapter-label fallback", async () => {
     vi.useFakeTimers();
     const failure = new Error("malformed navigation document");
