@@ -1863,7 +1863,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([]);
   });
 
-  it("focuses a mixed note with both CFI and spine-href sections", async () => {
+  it("focuses a mixed note with both CFI and spine-href sections — wiring", async () => {
     fake.linkDests.set("mixed.epub", "Books/Mixed.epub");
     const book = addBookFile("Books/Mixed.epub");
     const noteFile = addMdFile("Reading/Mixed.md", '---\ntype: book-note\nsource: "[[Books/Mixed.epub]]"\nformat: epub\n---\n\n## [[Books/Mixed.epub#epubcfi(/6/8!/4/2/1:0)|Cfi Ch. 1]]\ncfi body\n\n## [[Books/Mixed.epub#text/chapter2.xhtml|Href Ch. 2]]\nhref body', {
@@ -1891,7 +1891,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([]);
   });
 
-  it("focuses a mixed note with both CFI and spine-href sections — Item 5 fence", () => {
+  it("folds sections across a null-chapter boundary while preserving document bytes", () => {
     const docText = [
       "## Cfi Ch. 0",
       "cfi body 0",
