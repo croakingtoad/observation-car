@@ -106,6 +106,7 @@ function fakeEditor(initial: string): FakeEditor {
   const focus = vi.fn();
   const editor = {
     getValue: () => value,
+    hasFocus: () => false,
     setValue,
     setCursor,
     scrollIntoView,

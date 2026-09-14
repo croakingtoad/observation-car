@@ -6,9 +6,15 @@ import {
   type App,
   type Command,
   type PluginManifest,
+  type WorkspaceLeaf,
 } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  EpubNavigationTools,
+  EpubSelectionTracker,
+} from "./readers/epubNavigationTools";
 import manifest from "../manifest.json";
+import type { Book, Rendition } from "epubjs";
 import { parseBookNote } from "./model/bookNote";
 import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
@@ -172,7 +178,9 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
   return {
     EPUB_VIEW_TYPE: "observation-car-epub",
     EpubView: class {
+    contentEl = document.createElement("div");
     file: TFile | null = null;
+    leaf: WorkspaceLeaf;
     openedFragments: string[] = [];
     private readonly listeners = new Set<
       (location: LocationChanged) => void
@@ -214,6 +222,9 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
         for (const listener of [...this.relocationListeners]) listener(location);
       },
     };
+    constructor(leaf: WorkspaceLeaf) {
+      this.leaf = leaf;
+    }
     getViewType(): string {
       return "observation-car-epub";
     }
@@ -731,6 +742,49 @@ describe("plugin wiring (substituted obsidian module)", () => {
       icon: "square-pen",
       hotkeys: [{ modifiers: ["Alt"], key: "N" }],
     });
+  });
+
+  it("bridges the reader toolbar through the plugin's own new-note action", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { leaf: readerLeaf } = openEpubReader(book);
+    const viewerEl = document.createElement("div");
+    new EpubNavigationTools(
+      viewerEl as HTMLElement,
+      SOURCE,
+      {
+        loaded: {
+          metadata: Promise.resolve({ title: "Surprised by Grace" }),
+        },
+        on: () => () => undefined,
+      } as unknown as Book,
+      {
+        on: () => () => undefined,
+        off: () => undefined,
+        themes: { override: () => undefined },
+      } as unknown as Rendition,
+      new EpubSelectionTracker(),
+      undefined,
+      {
+        onNewNote: () =>
+          plugin.newNoteHereFromReader(readerLeaf as unknown as WorkspaceLeaf),
+      },
+    );
+    const bridge = vi.spyOn(plugin, "newNoteHereFromReader");
+
+    const button = viewerEl.querySelector<HTMLButtonElement>(
+      ".epub-new-note-button",
+    );
+    if (button === null) throw new Error("button not found");
+    expect(button.onclick).toBeTypeOf("function");
+    button.click();
+
+    expect(bridge).toHaveBeenCalledWith(readerLeaf);
   });
 
   it("writes a fresh snapshot when state changes during an in-flight save", async () => {
