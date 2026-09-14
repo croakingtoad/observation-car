@@ -351,6 +351,13 @@ function makeFakeVault(): FakeVault {
       openFile: async (file: TFile): Promise<void> => {
         openedFiles.push(file.path);
         workspaceHandlers.get("file-open")?.(file);
+        if (
+          typeof leaf.view === "object" &&
+          leaf.view !== null &&
+          "file" in leaf.view
+        ) {
+          (leaf.view as { file: TFile | null }).file = file;
+        }
       },
       getViewState: (): { type: string } => ({ type: "markdown" }),
       loadIfDeferred: async (): Promise<void> => {},
@@ -451,7 +458,12 @@ function makeFakeVault(): FakeVault {
       },
       getLeaf: (newLeaf?: "split"): FakeLeaf => {
         const leaf = makeLeaf("main", rootSplit);
+        leaf.view = {
+          file: null,
+          getViewType: (): string => "markdown",
+        };
         if (newLeaf === "split") createdSplitLeaves.push(leaf);
+        leaves.add(leaf);
         return leaf;
       },
       revealLeaf: async (leaf: FakeLeaf): Promise<void> => {
@@ -1275,7 +1287,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     await invokeCreateBookNoteForTesting();
 
     expect(fake.createdFiles).toEqual(["Reading/A.md"]);
-    expect(fake.openedFiles).toEqual(["Reading/A.md", "Reading/A.md"]);
+    expect(fake.openedFiles).toEqual(["Reading/A.md"]);
   });
 
   it("resolves the most recently active reader when a markdown note is active", async () => {
@@ -1313,7 +1325,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     if (book === undefined) throw new Error("book fixture is missing");
     fake.runtime.activeView = { file: book };
 
-    for (let index = 0; index < 1; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       await invokeCreateBookNoteForTesting();
     }
 
@@ -1321,6 +1333,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(fake.createdFiles).toEqual([notePath]);
     expect(fake.createdSplitLeaves).toHaveLength(1);
     expect(fake.openedFiles).toEqual([notePath]);
+    expect(fake.runtime.mostRecentMainLeaf).toBe(fake.createdSplitLeaves[0]);
   });
 
   it("notices when no reader is available instead of splitting a note", async () => {
