@@ -26,6 +26,8 @@ const noticeMessages = vi.hoisted((): string[] => []);
 interface RecordedCommand {
   id: string;
   name: string;
+  icon?: string;
+  hotkeys?: Array<{ modifiers: string[]; key: string }>;
   editorCallback?: (editor: unknown, context: unknown) => unknown;
   checkCallback?: (checking: boolean) => boolean | void;
 }
@@ -715,6 +717,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(persistencePlugin.registeredCleanups).toHaveLength(1);
     persistencePlugin.registeredCleanups[0]();
     expect(workspace.openLinkText).toBe(originalOpenLinkText);
+  });
+
+  it("registers New note here for the command palette and mobile toolbar", () => {
+    expect(fake.registeredCommands.get("new-note-here")).toMatchObject({
+      name: "New note here",
+      icon: "square-pen",
+      hotkeys: [{ modifiers: ["Alt"], key: "N" }],
+    });
   });
 
   it("writes a fresh snapshot when state changes during an in-flight save", async () => {

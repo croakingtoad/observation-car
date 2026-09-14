@@ -321,6 +321,11 @@ export interface EpubFlowControls {
   readonly onToggle: () => void;
 }
 
+/** Host actions exposed in the reader's own toolbar. */
+export interface EpubReaderActions {
+  readonly onNewNote: () => void;
+}
+
 /** A press in progress inside the rendered document (F2.2). */
 interface PointerPress {
   startX: number;
@@ -539,6 +544,10 @@ export class EpubNavigationTools {
   private currentLocation: Location | null = null;
   private needsCorrection = false;
   private readonly keyBridge: EpubKeyBridge;
+  private readonly onNewNoteClick = (event: MouseEvent): void => {
+    event.stopPropagation();
+    this.actions?.onNewNote();
+  };
 
   constructor(
     viewerEl: HTMLElement,
@@ -547,6 +556,7 @@ export class EpubNavigationTools {
     private readonly rendition: Rendition,
     private readonly selectionTracker: EpubSelectionTracker,
     private readonly flow?: EpubFlowControls,
+    private readonly actions?: EpubReaderActions,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
     new EpubFontSizeStepper(viewerEl, bookPath, rendition);
@@ -556,6 +566,7 @@ export class EpubNavigationTools {
       this.reportSetupFailure(viewerEl, "Table of contents", error),
     );
     this.createFlowButton(viewerEl);
+    this.createNewNoteButton(viewerEl);
     this.registerPagingListeners();
     this.keyBridge = new EpubKeyBridge(
       rendition,
@@ -677,6 +688,18 @@ export class EpubNavigationTools {
       this.flow?.onToggle();
     };
     viewerEl.appendChild(btn);
+  }
+
+  /** F4.6 — add an anchored section without leaving reader chrome. */
+  private createNewNoteButton(viewerEl: HTMLElement): void {
+    if (this.actions === undefined) return;
+    const button = document.createElement("button");
+    button.className = "epub-button epub-new-note-button";
+    button.textContent = "+";
+    button.title = "New note here";
+    button.setAttribute("aria-label", "New note here");
+    button.onclick = this.onNewNoteClick;
+    viewerEl.appendChild(button);
   }
 
   /** Chapter-level jump: PageUp = next chapter, PageDown = previous. */

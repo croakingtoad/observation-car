@@ -301,7 +301,7 @@ function makeBook(overrides: {
 function makeTools(overrides: {
   navigation?: Promise<unknown>;
   metadata?: Promise<unknown>;
-} = {}) {
+} = {}, onNewNote?: () => void) {
   const viewerEl = document.createElement("div");
   const book = makeBook(overrides);
   const rendition = makeRendition();
@@ -311,9 +311,26 @@ function makeTools(overrides: {
     book as unknown as Book,
     rendition as unknown as Rendition,
     new EpubSelectionTracker(),
+    undefined,
+    onNewNote === undefined ? undefined : { onNewNote },
   );
   return { viewerEl, book, rendition, tools };
 }
+
+describe("reader action toolbar", () => {
+  it("offers New note here and invokes the supplied action", () => {
+    const onNewNote = vi.fn();
+    const { viewerEl } = makeTools({}, onNewNote);
+    const button = viewerEl.querySelector<HTMLButtonElement>(
+      ".epub-new-note-button",
+    );
+
+    expect(button?.title).toBe("New note here");
+    expect(button?.getAttribute("aria-label")).toBe("New note here");
+    button?.click();
+    expect(onNewNote).toHaveBeenCalledOnce();
+  });
+});
 
 /**
  * Fire the rendition's "selected" event the way epubjs does for a

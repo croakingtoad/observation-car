@@ -5,6 +5,10 @@ import {
   registerOpenBookNoteCommand,
 } from "./commands/openBookNote";
 import { registerJumpToSectionCommand } from "./commands/jumpToSection";
+import {
+  newNoteHereFromReader,
+  registerNewNoteHereCommand,
+} from "./commands/newNoteHere";
 import { registerSplitRatioToggleCommand } from "./commands/toggleSplitRatio";
 import {
   DEFAULT_SETTINGS,
@@ -147,6 +151,7 @@ export default class ObservationCarPlugin extends Plugin {
     registerCreateBookNoteCommand(this);
     registerOpenBookNoteCommand(this);
     registerJumpToSectionCommand(this);
+    registerNewNoteHereCommand(this);
     registerSplitRatioToggleCommand(this);
 
     // Obsidian has no leaf-close event. `layout-change` covers closes and
@@ -301,6 +306,11 @@ export default class ObservationCarPlugin extends Plugin {
   /** Active pairing for a reader leaf, if its note already exists. */
   getReaderPairingForLeaf(leaf: WorkspaceLeaf): ReaderPairing | undefined {
     return this.readerRegistry.getByLeaf(leaf);
+  }
+
+  /** Reader-toolbar bridge for F4.6's leaf-pinned action. */
+  newNoteHereFromReader(leaf: WorkspaceLeaf): void {
+    void newNoteHereFromReader(this, leaf);
   }
 
   onunload(): void {

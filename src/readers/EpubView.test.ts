@@ -252,6 +252,27 @@ afterEach(() => {
 });
 
 describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
+  it("routes the reader toolbar action through the exact reader leaf", async () => {
+    const leaf = {} as WorkspaceLeaf;
+    const newNoteHereFromReader = vi.fn();
+    const host: EpubViewHost = {
+      ...makeHost(),
+      newNoteHereFromReader,
+    };
+    const view = new EpubView(leaf, host);
+    Object.assign(view, {
+      app: { vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([1])) } },
+    });
+    await view.onLoadFile(file("library/a.epub"));
+
+    view.contentEl
+      .querySelector<HTMLButtonElement>(".epub-new-note-button")
+      ?.click();
+
+    expect(newNoteHereFromReader).toHaveBeenCalledWith(leaf);
+    await view.onClose();
+  });
+
   it("reopens a book at its recorded CFI through openAtFragment", async () => {
     vi.useFakeTimers();
     const locations: Record<string, string> = {};

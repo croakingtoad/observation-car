@@ -50,6 +50,8 @@ export interface EpubViewHost {
   updateSettings(patch: Partial<ObservationCarSettings>): Promise<void>;
   getLastEpubLocation(path: string): string | null;
   rememberEpubLocation(path: string, fragment: string): Promise<void>;
+  /** Add an anchored section from this exact reader leaf (F4.6). */
+  newNoteHereFromReader?: (leaf: WorkspaceLeaf) => void;
 }
 
 export class EpubView extends FileView {
@@ -292,6 +294,11 @@ export class EpubView extends FileView {
           mode: flowMode,
           onToggle: () => this.toggleFlowMode(),
         },
+        this.host.newNoteHereFromReader === undefined
+          ? undefined
+          : {
+              onNewNote: () => this.host.newNoteHereFromReader?.(this.leaf),
+            },
       );
       themes = new EpubThemes(rendition);
       locationEvents = this.prepareLocationEvents(

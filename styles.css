@@ -131,6 +131,14 @@
   top: 0.1em;
 }
 
+.epub-new-note-button {
+  z-index: 30;
+  position: absolute;
+  display: flex;
+  left: 2em;
+  top: 0.1em;
+}
+
 .epub-font-size-stepper {
   z-index: 30;
   position: absolute;
