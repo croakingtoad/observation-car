@@ -381,6 +381,81 @@ describe("ScrollSync", () => {
     }
   });
 
+  it("waits for fresh sections before re-folding after a new-note-here insertion", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const staleSections = [
+      sectionRange(0, 2, CFI_1, 0),
+      sectionRange(3, 5, CFI_2, 1),
+    ];
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(staleSections),
+    );
+    const initialNote = [
+      "## [[Books/Book.epub#epubcfi(/6/8!/4/2/1:0)|Current]]",
+      "current note",
+      "",
+      "## [[Books/Book.epub#epubcfi(/6/14!/4/2/1:0)|Late]]",
+      "late note one",
+      "late note two",
+    ].join("\n");
+    const insertedNote = [
+      "## [[Books/Book.epub#epubcfi(/6/8!/4/2/1:0)|Current]]",
+      "current note",
+      "",
+      "## [[Books/Book.epub#epubcfi(/6/10!/4/2/1:0)|New note here]]",
+      "new note",
+      "## [[Books/Book.epub#epubcfi(/6/14!/4/2/1:0)|Late]]",
+      "late note one",
+      "late note two",
+    ].join("\n");
+    const { editor, view } = focusEditor(initialNote);
+    rig.currentEditor = editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(editor, staleSections, rig.sync.getCurrentSection(editor));
+      expect(focusWidgetCount(view)).toBe(1);
+
+      editor.setValue(insertedNote);
+      expect(focusWidgetCount(view)).toBe(0);
+
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      expect(view.dom.querySelectorAll(".oc-focus-fold")).toHaveLength(0);
+      expect(view.state.doc.toString()).toBe(insertedNote);
+
+      const freshSections = [
+        sectionRange(0, 2, CFI_1, 0),
+        sectionRange(3, 4, CFI_BETWEEN, 0),
+        sectionRange(5, 7, CFI_2, 1),
+      ];
+      rig.pairing = pairing(
+        rig.leaf,
+        rig.reader,
+        rig.bookFile,
+        bookNote(freshSections),
+      );
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      expect(
+        [...view.dom.querySelectorAll<HTMLElement>(".oc-focus-fold")].map(
+          (widget) => widget.textContent,
+        ),
+      ).toEqual(["1 section in other chapters folded"]);
+      expect(view.state.doc.toString()).toBe(insertedNote);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("clears focus state from a displaced editor before seeding its replacement", () => {
     vi.useFakeTimers();
     const focusMode = new FocusModeController();
@@ -729,6 +804,16 @@ describe("ScrollSync", () => {
       view.dispatch({ changes: { from: view.state.doc.length, insert: "!" } });
       const editedNote = `${FOCUS_NOTE}!`;
       expect(view.state.doc.toString()).toBe(editedNote);
+      const reparsedSections = sections.map((section) => ({
+        ...section,
+        bodyRange: { ...section.bodyRange },
+      }));
+      rig.pairing = pairing(
+        rig.leaf,
+        rig.reader,
+        rig.bookFile,
+        bookNote(reparsedSections),
+      );
       rig.reader.emit(CFI_1);
       vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
       expect(focusWidgetCount(view)).toBe(1);
@@ -985,8 +1070,11 @@ describe("scrollHeadingIntoView", () => {
   });
 });
 
-function focusEditor(): {
-  readonly editor: ScrollEditor & { readonly cm: EditorView };
+function focusEditor(doc = FOCUS_NOTE): {
+  readonly editor: ScrollEditor & {
+    readonly cm: EditorView;
+    setValue(value: string): void;
+  };
   readonly view: EditorView;
 } {
   if (Range.prototype.getClientRects === undefined) {
@@ -1004,7 +1092,7 @@ function focusEditor(): {
   const view = new EditorView({
     parent: document.createElement("div"),
     state: EditorState.create({
-      doc: FOCUS_NOTE,
+      doc,
       extensions: [focusModeViewPlugin],
     }),
   });
@@ -1013,6 +1101,11 @@ function focusEditor(): {
       cm: view,
       lineCount: () => view.state.doc.lines,
       scrollIntoView: vi.fn(),
+      setValue: (value: string) => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: value },
+        });
+      },
     },
     view,
   };
@@ -1037,6 +1130,18 @@ function section(
     fragment: `epubcfi(${cfi})`,
     position: parseFragment(`#epubcfi(${cfi})`),
     chapter,
+  };
+}
+
+function sectionRange(
+  headingLine: number,
+  endLine: number,
+  cfi: string,
+  chapter: number,
+): BookNoteSection {
+  return {
+    ...section(headingLine, cfi, chapter),
+    bodyRange: { start: headingLine, end: endLine },
   };
 }
 
