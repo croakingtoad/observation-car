@@ -656,9 +656,11 @@ describe("EpubNavigationTools teardown", () => {
       expect(rendition.handlers.get("rendered")).toHaveLength(4);
     });
     const destroyedDocument = childDocument(document);
+    const addListener = vi.spyOn(destroyedDocument, "addEventListener");
     expect(() =>
       rendition.fire("rendered", {}, destroyedView(destroyedDocument)),
     ).not.toThrow();
+    expect(addListener).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -811,9 +813,7 @@ describe("EpubNavigationTools teardown", () => {
       discardedFrame.remove();
       rendition.fire("rendered", {}, renderedContents(replacementDocument));
 
-      expect(removedTypes).toEqual(
-        expect.arrayContaining(["selectionchange", "mousedown"]),
-      );
+      expect(new Set(removedTypes)).toEqual(new Set(["keydown", "selectionchange", "mousedown"]));
       tools.destroy();
     },
   );
@@ -1509,11 +1509,9 @@ describe("EpubNavigationTools lifecycle coverage fences", () => {
     expect(state.pagingListeners.size).toBe(1);
     expect(state.documentListeners.has(discardedDocument)).toBe(false);
     expect(state.keyBridge.documents.has(discardedDocument)).toBe(false);
-    expect([...state.pagingListeners]).not.toContainEqual(
-      expect.objectContaining({ document: discardedDocument }),
-    );
-    expect(removeEventListener.mock.calls.map(([type]) => type)).toEqual(
-      expect.arrayContaining(["selectionchange", "mousedown"]),
+    expect([...state.pagingListeners][0].document).not.toBe(discardedDocument);
+    expect(new Set(removeEventListener.mock.calls.map(([type]) => type))).toEqual(
+      new Set(["keydown", "selectionchange", "mousedown", ...PAGING_EVENT_TYPES]),
     );
     tools.destroy();
   });
