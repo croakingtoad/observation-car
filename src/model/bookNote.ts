@@ -148,7 +148,7 @@ export function parseBookNote(
 ): BookNote {
   const anchorHeadingLevel = options?.anchorHeadingLevel ?? DEFAULT_ANCHOR_HEADING_LEVEL;
   const resolveLink = options?.resolveLink;
-  const lines = text.split(/\r?\n/);
+  const lines = text.split(/\r\n?|\n/);
   const data = parseFrontmatter(lines);
   const source = extractSource(data);
   const format = extractFormat(data);

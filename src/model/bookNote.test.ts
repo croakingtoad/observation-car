@@ -634,6 +634,37 @@ describe("parseBookNote — CRLF normalisation (LOCO-924)", () => {
   });
 });
 
+describe("parseBookNote — lone CR line indices (LOCO-936)", () => {
+  const SOURCE = "Books/x.epub";
+  const body = [
+    "intro\rmore",
+    `## [[${SOURCE}#epubcfi(/6/4!/4/2/1:0)|Later]]`,
+    "body a",
+    `## [[${SOURCE}#epubcfi(/6/2!/4/2/1:0)|Earlier]]`,
+    "body b",
+  ];
+  const text = [
+    "---",
+    `source: "[[${SOURCE}]]"`,
+    "format: epub",
+    "---",
+    ...body,
+  ].join("\n");
+  const parsed = parseBookNote(text);
+
+  it("indexes lone CR as a line break for every section", () => {
+    expect(parsed.sections).toHaveLength(2);
+    expect(
+      parsed.sections.map(
+        (section) => parsed.sourceText.split("\n")[section.headingLine],
+      ),
+    ).toEqual([
+      `## [[${SOURCE}#epubcfi(/6/4!/4/2/1:0)|Later]]`,
+      `## [[${SOURCE}#epubcfi(/6/2!/4/2/1:0)|Earlier]]`,
+    ]);
+  });
+});
+
 describe("parseBookNote — performance (PRD §7: ~5,000 lines must not block the UI)", () => {
   function buildLargeNote(totalLines: number): { text: string; sections: number } {
     const lines: string[] = [

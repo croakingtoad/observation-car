@@ -1272,6 +1272,38 @@ describe("scrollHeadingIntoView", () => {
     }
   });
 
+  it("folds from a current lone-CR parse (LOCO-936)", () => {
+    const focusMode = new FocusModeController();
+    const fm = ["---", 'source: "[[Books/Book.epub]]"', "format: epub", "---"];
+    const body = [
+      "## [[Books/Book.epub#epubcfi(/6/8!/4/2/1:0)|Current]]",
+      "current\nnote",
+      "",
+      "## [[Books/Book.epub#epubcfi(/6/10!/4/2/1:0)|New note here]]",
+      "new note",
+      "## [[Books/Book.epub#epubcfi(/6/14!/4/2/1:0)|Late]]",
+      "late note one",
+      "late note two",
+    ];
+    const currentNote = [...fm, ...body].join("\n");
+    const loneCrNote = [...fm, ...body].join("\n");
+    const { editor, view } = focusEditor(currentNote);
+    const loneCrParse = parseBookNote(loneCrNote);
+
+    try {
+      focusMode.toggle(editor, loneCrParse, loneCrParse.sections[0] ?? null);
+
+      expect(
+        [...view.dom.querySelectorAll<HTMLElement>(".oc-focus-fold")].map(
+          (widget) => widget.textContent,
+        ),
+      ).toEqual(["2 sections in other chapters folded"]);
+      expect(view.state.doc.toString()).toBe(currentNote);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("rejects a stale CRLF parse after an insertion (LOCO-924)", () => {
     const focusMode = new FocusModeController();
     const fm = ["---", 'source: "[[Books/Book.epub]]"', "format: epub", "---"];

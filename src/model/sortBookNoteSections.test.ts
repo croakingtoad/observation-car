@@ -101,6 +101,31 @@ describe("sortSectionsByBookPosition", () => {
     expect(sortParsed(input)).toBe(expected);
   });
 
+  it("sorts lone CR notes without normalizing the prose (LOCO-936)", () => {
+    const input = note(
+      [
+        `## [[${SOURCE}#${LATE}|Later]]`,
+        "later\rbody",
+        `## [[${SOURCE}#${EARLY}|Earlier]]`,
+        "earlier body",
+      ],
+      "\n",
+    );
+
+    expect(() => sortParsed(input)).not.toThrow();
+    expect(sortParsed(input)).toBe(
+      note(
+        [
+          `## [[${SOURCE}#${EARLY}|Earlier]]`,
+          "earlier body",
+          `## [[${SOURCE}#${LATE}|Later]]`,
+          "later\rbody",
+        ],
+        "\n",
+      ),
+    );
+  });
+
   it("preserves file order when sections share the same book position", () => {
     const input = note([
       `## [[${SOURCE}#${EARLY}|First at position]]`,
