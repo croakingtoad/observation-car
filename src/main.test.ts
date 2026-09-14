@@ -427,7 +427,10 @@ function makeFakeVault(): FakeVault {
       rootSplit,
       openLinkText: vi.fn(),
       getActiveViewOfType: (): unknown => runtime.activeView,
-      getMostRecentLeaf: (): FakeLeaf | null => runtime.mostRecentMainLeaf,
+      getMostRecentLeaf: (root?: object): FakeLeaf | null =>
+        root === undefined || root === rootSplit
+          ? runtime.mostRecentMainLeaf
+          : null,
       on: (name: string, callback: Handler): { name: string } => {
         const previous = workspaceHandlers.get(name);
         workspaceHandlers.set(name, (...args: unknown[]) => {
@@ -584,6 +587,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     noticeMessages.length = 0;
     fake = makeFakeVault();
     addBookFile(SOURCE);
+    fake.linkDests.set(SOURCE.toLowerCase(), SOURCE);
     plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
     await plugin.onload();
   });
@@ -651,6 +655,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
   function openEpubReader(
     book: TFile,
     area: "main" | "sidebar" = "main",
+    options: { deferredView?: boolean } = {},
   ): {
     leaf: FakeLeaf;
     view: {
@@ -692,7 +697,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
       stylesheetToggleCount: number;
     };
     leaf.view = view;
-    view.file = book;
+    if (options.deferredView === true) {
+      view.file = null;
+      leaf.loadIfDeferred = async (): Promise<void> => {
+        view.file = book;
+      };
+    } else {
+      view.file = book;
+    }
     fake.leaves.add(leaf);
     fake.runtime.mostRecentMainLeaf = leaf;
     fire("workspace", "file-open", [book]);
@@ -1288,13 +1300,15 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     expect(fake.createdFiles).toEqual(["Reading/A.md"]);
     expect(fake.openedFiles).toEqual(["Reading/A.md"]);
+    expect(fake.runtime.mostRecentMainLeaf).toBe(fake.createdSplitLeaves[0]);
+    expect(noticeMessages).toEqual([]);
   });
 
-  it("resolves the most recently active reader when a markdown note is active", async () => {
+  it("resolves the most recently active reader when the active view is not a file-backed reader", async () => {
     const firstBook = addBookFile("Books/One.epub");
     const secondBook = addBookFile("Books/Two.epub");
     openEpubReader(firstBook);
-    const second = openEpubReader(secondBook);
+    const second = openEpubReader(secondBook, "main", { deferredView: true });
     fake.runtime.activeView = { file: null };
     fake.runtime.mostRecentMainLeaf = second.leaf;
 
@@ -1504,7 +1518,19 @@ describe("plugin wiring (substituted obsidian module)", () => {
         scrollIntoView: vi.fn(),
       },
     );
-    fake.leaves.add({ view: markdownView });
+    const markdownLeaf: FakeLeaf = {
+      view: markdownView,
+      area: "main",
+      detached: false,
+      detach: () => {
+        markdownLeaf.detached = true;
+      },
+      getRoot: () => fake.rootSplit,
+      openFile: async (): Promise<void> => {},
+      getViewState: (): { type: string } => ({ type: "markdown" }),
+      loadIfDeferred: async (): Promise<void> => {},
+    };
+    fake.leaves.add(markdownLeaf);
     const { view } = openEpubReader(book);
     const retargetedSource = "Books/Retargeted.epub";
     addBookFile(retargetedSource);
@@ -2010,7 +2036,19 @@ describe("plugin wiring (substituted obsidian module)", () => {
       hasFocus: () => true,
     };
     const markdownView = new MarkdownViewDouble(noteFile, editor);
-    fake.leaves.add({ view: markdownView });
+    const markdownLeaf: FakeLeaf = {
+      view: markdownView,
+      area: "main",
+      detached: false,
+      detach: () => {
+        markdownLeaf.detached = true;
+      },
+      getRoot: () => fake.rootSplit,
+      openFile: async (): Promise<void> => {},
+      getViewState: (): { type: string } => ({ type: "markdown" }),
+      loadIfDeferred: async (): Promise<void> => {},
+    };
+    fake.leaves.add(markdownLeaf);
 
     const book = fake.files.get(SOURCE);
     if (book === undefined) throw new Error("book fixture is missing");
