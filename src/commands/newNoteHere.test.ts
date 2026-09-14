@@ -92,6 +92,10 @@ function noteText(level = 2): string {
   ].join("\n");
 }
 
+function emptyNoteText(): string {
+  return '---\ntype: book-note\nsource: "[[Books/Test.epub]]"\nformat: epub\n---';
+}
+
 function fakeEditor(initial: string): FakeEditor {
   let value = initial;
   const setValue = vi.fn((next: string) => {
@@ -112,14 +116,21 @@ function fakeEditor(initial: string): FakeEditor {
 
 function makeHarness(options: {
   level?: number;
+  eol?: "\n" | "\r\n";
   location?: ReturnType<NonNullable<Harness["reader"]["getLocation"]>>;
   selection?: ReturnType<NonNullable<Harness["reader"]["getSelection"]>>;
   hasLocationCapability?: boolean;
   hasSelectionCapability?: boolean;
   noteOpen?: boolean;
+  noteMostRecent?: boolean;
+  initialText?: string;
 } = {}): Harness {
   const level = options.level ?? 2;
-  const editor = fakeEditor(noteText(level));
+  const editor = fakeEditor(
+    options.initialText !== undefined
+      ? options.initialText
+      : noteText(level).replaceAll("\n", options.eol ?? "\n"),
+  );
   const bookFile = new TFileDouble(SOURCE);
   const noteFile = new TFileDouble(NOTE_PATH);
   const reader: Harness["reader"] = {
@@ -172,7 +183,8 @@ function makeHarness(options: {
       },
       workspace: {
         rootSplit,
-        getMostRecentLeaf: () => readerLeaf,
+        getMostRecentLeaf: () =>
+          options.noteMostRecent === true ? noteLeaf : readerLeaf,
         getLeavesOfType: (type: string) =>
           type === "markdown" && options.noteOpen !== false ? [noteLeaf] : [],
         createLeafBySplit: vi.fn(() => splitLeaf),
@@ -212,6 +224,20 @@ describe("new note here", () => {
     expect(harness.commands[0].checkCallback?.(true)).toBe(true);
   });
 
+  it("executes from the focused paired Markdown note", async () => {
+    const harness = makeHarness({ noteMostRecent: true });
+    registerNewNoteHereCommand(harness.plugin);
+
+    expect(harness.commands[0].checkCallback?.(false)).toBe(true);
+    await vi.waitFor(() =>
+      expect(harness.editor.setValue).toHaveBeenCalledOnce(),
+    );
+
+    expect(harness.editor.value()).toContain(
+      `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`,
+    );
+  });
+
   it("inserts a selected range at sorted position using the configured heading level", async () => {
     const selectionText =
       "A deliberately long selection with   repeated whitespace and enough " +
@@ -237,6 +263,9 @@ describe("new note here", () => {
     );
     const alias = lines[inserted.headingLine].split("|", 2)[1].slice(0, -2);
     expect(Array.from(alias.slice("Ch. 2 — ".length))).toHaveLength(60);
+    expect(alias).toBe(
+      "Ch. 2 — A deliberately long selection with repeated whitespace and …",
+    );
     expect(lines.slice(inserted.headingLine + 1, inserted.headingLine + 3)).toEqual([
       `> ${selectionText.split("\n")[0]}`,
       "> Second line.",
@@ -247,6 +276,40 @@ describe("new note here", () => {
       ch: 0,
     });
     expect(harness.editor.focus).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes blank-line separators for an empty note", async () => {
+    const harness = makeHarness({ initialText: emptyNoteText() });
+    const initialText = emptyNoteText();
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    const heading = `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`;
+    expect(harness.editor.value().startsWith(`${initialText}\n\n${heading}`)).toBe(true);
+  });
+
+  it("does not write anything when the focused leaf has no reader pairing", async () => {
+    const harness = makeHarness();
+
+    await newNoteHereFromReader(harness.plugin, {} as WorkspaceLeaf);
+
+    expect(harness.editor.setValue).not.toHaveBeenCalled();
+    expect(notices).toEqual([
+      "Open or create this book's note before adding a section.",
+    ]);
+  });
+
+  it.each([
+    ["one EOL", `${emptyNoteText()}\nlatebody\n`],
+    ["two EOLs", `${emptyNoteText()}\nlatebody\n\n`],
+  ])("normalizes blank-line separators for a note ending with %s", async (_ending, initialText) => {
+    const harness = makeHarness({ initialText });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    const heading = `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`;
+    expect(harness.editor.value()).toContain(`latebody\n\n${heading}`);
+    expect(harness.editor.value()).not.toContain("\n\n\n");
   });
 
   it("uses the current location and a note label when there is no selection", async () => {
@@ -260,6 +323,97 @@ describe("new note here", () => {
     );
     expect(output).not.toContain("> ");
     const inserted = parseBookNote(output).sections.find(
+      (section) => section.fragment === MIDDLE.slice(1),
+    );
+    expect(inserted).toBeDefined();
+    expect(harness.editor.setCursor).toHaveBeenCalledWith({
+      line: (inserted?.headingLine ?? -2) + 1,
+      ch: 0,
+    });
+  });
+
+  it("treats a whitespace-only selection as no selection", async () => {
+    const harness = makeHarness({
+      selection: { text: " \r\n\t ", fragment: MIDDLE },
+    });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    expect(harness.editor.value()).toContain(
+      `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`,
+    );
+    expect(harness.editor.value()).not.toContain("> ");
+  });
+
+  it.each([
+    ["pipe", "quoted | selection", "quoted ｜ selection"],
+    ["left bracket", "quoted [ selection", "quoted ［ selection"],
+    ["right bracket", "quoted ] selection", "quoted ］ selection"],
+    ["double left bracket", "quoted [[ selection", "quoted ［［ selection"],
+    ["balanced brackets", "quoted [sic] selection", "quoted ［sic］ selection"],
+  ])("escapes %s in the anchor alias", async (_case, text, safeText) => {
+    const harness = makeHarness({
+      selection: { text, fragment: MIDDLE },
+    });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    expect(harness.editor.value()).toContain(`|Ch. 2 — ${safeText}]]`);
+    expect(
+      parseBookNote(harness.editor.value()).sections.some(
+        (section) => section.fragment === MIDDLE.slice(1),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves CRLF line endings when inserting a section", async () => {
+    const harness = makeHarness({ eol: "\r\n" });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    const outputWithoutCrLf = harness.editor.value().replaceAll("\r\n", "");
+    expect(harness.editor.value()).toContain("\r\n");
+    expect(outputWithoutCrLf).not.toContain("\n");
+  });
+
+  it("preserves CRLF line endings when inserting a selected range", async () => {
+    const harness = makeHarness({
+      eol: "\r\n",
+      selection: {
+        text: "A quoted line.\r\nSecond quoted line.",
+        fragment: MIDDLE,
+      },
+    });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    expect(harness.editor.value()).toContain(
+      "> A quoted line.\r\n> Second quoted line.",
+    );
+    const outputWithoutCrLf = harness.editor.value().replaceAll("\r\n", "");
+    expect(outputWithoutCrLf).not.toContain("\n");
+    expect(
+      parseBookNote(harness.editor.value()).sections.find(
+        (section) => section.fragment === MIDDLE.slice(1),
+      ),
+    ).toBeDefined();
+  });
+
+  it("round-trips a newline-bearing chapter label into one heading", async () => {
+    const harness = makeHarness({
+      location: {
+        fragment: MIDDLE,
+        chapter: 2,
+        label: "\n    The Opening Image\r\n  ",
+      },
+    });
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    expect(harness.editor.value()).toContain(
+      `## [[${SOURCE}${MIDDLE}|The Opening Image — note]]`,
+    );
+    const inserted = parseBookNote(harness.editor.value()).sections.find(
       (section) => section.fragment === MIDDLE.slice(1),
     );
     expect(inserted).toBeDefined();
@@ -320,6 +474,25 @@ describe("new note here", () => {
     expect(harness.editor.setValue).not.toHaveBeenCalled();
     expect(notices).toEqual([
       "No anchorable reader location is available yet.",
+    ]);
+  });
+
+  it("reports an actionable error without requiring a developer console", async () => {
+    const harness = makeHarness();
+    const failure = new Error("location failure");
+    harness.reader.getLocation = () => {
+      throw failure;
+    };
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
+
+    expect(console.error).toHaveBeenCalledWith(
+      "[observation-car] could not add note at reader location",
+      failure,
+    );
+    expect(notices).toEqual([
+      "Could not add an anchored section to the paired book note.",
     ]);
   });
 });
