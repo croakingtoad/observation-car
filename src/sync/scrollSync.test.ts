@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BookNote, BookNoteSection } from "../model/bookNote";
 import { parseFragment } from "../model/anchor";
 import { FocusModeController } from "./focusMode";
-import { focusModeViewPlugin, isFocusModeDecorationEnabled } from "./focusModeDecoration";
+import {
+  focusModeViewPlugin,
+  isFocusModeDecorationEnabled,
+} from "./focusModeDecoration";
 import { DEFAULT_LOCATION_DEBOUNCE_MS } from "../readers/epubLocation";
 import type { Reader, ReaderPairing } from "./ReaderRegistry";
 import {
@@ -88,10 +91,7 @@ function makeRig(
   overrides: Partial<ConstructorParameters<typeof ScrollSync>[0]> = {},
 ): Rig {
   const bookFile = file(BOOK_PATH);
-  const note = bookNote([
-    section(9, CFI_2),
-    section(6, CFI_1),
-  ]);
+  const note = bookNote([section(9, CFI_2), section(6, CFI_1)]);
   const leaf = {} as WorkspaceLeaf;
   const reader = new TestReader(bookFile);
   const scrollIntoView = vi.fn();
@@ -559,6 +559,26 @@ describe("ScrollSync", () => {
     rig.reader.emit(CFI_1);
     vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
     expect(rig.scrollIntoView).toHaveBeenCalledOnce();
+  });
+  it("re-scrolls after a no-match location clears the cached section", () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+    expect(rig.scrollIntoView).toHaveBeenCalledOnce();
+    expect(rig.sync.getCurrentSection(rig.editor)).not.toBeNull();
+
+    rig.reader.emit("/6/4!/4/2/1:0");
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+    expect(rig.scrollIntoView).toHaveBeenCalledOnce();
+    expect(rig.sync.getCurrentSection(rig.editor)).toBeNull();
+    expect(rig.setCurrentSection).toHaveBeenCalledWith(rig.editor, null);
+
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+    expect(rig.scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(rig.sync.getCurrentSection(rig.editor)).not.toBeNull();
   });
 
   it("waits for 1.5 seconds of typing idle and resets the threshold on another edit", () => {
