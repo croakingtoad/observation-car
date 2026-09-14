@@ -22,7 +22,7 @@ export function registerCreateBookNoteCommand(
 type BookResolution =
   | { kind: "book"; book: TFile }
   | { kind: "none" }
-  | { kind: "ambiguous" };
+  | { kind: "ambiguous"; books: TFile[] };
 
 async function resolveAndCreateBookNote(
   plugin: ObservationCarPlugin,
@@ -34,7 +34,12 @@ async function resolveAndCreateBookNote(
       return;
     }
     if (resolution.kind === "ambiguous") {
-      new Notice("Choose which open book to create a note for");
+      const titles = resolution.books
+        .map((book) => book.basename)
+        .join(", ");
+      new Notice(
+        `Multiple books are open: ${titles}. Click the book you want, then run Create book note again.`,
+      );
       return;
     }
     await createOrOpenBookNote(plugin, resolution.book);
@@ -52,6 +57,18 @@ async function currentBook(
     return { kind: "book", book: activeBook };
   }
 
+  const mostRecentLeaf = plugin.app.workspace.getMostRecentLeaf();
+  if (mostRecentLeaf !== null) {
+    await mostRecentLeaf.loadIfDeferred();
+    const mostRecentBook =
+      mostRecentLeaf.view instanceof EpubView
+        ? mostRecentLeaf.view.file
+        : null;
+    if (mostRecentBook !== null) {
+      return { kind: "book", book: mostRecentBook };
+    }
+  }
+
   const openLeaves = plugin.app.workspace
     .getLeavesOfType(EPUB_VIEW_TYPE)
     .filter((leaf) => leaf.getViewState().type === EPUB_VIEW_TYPE);
@@ -59,7 +76,15 @@ async function currentBook(
     return { kind: "none" };
   }
   if (openLeaves.length > 1) {
-    return { kind: "ambiguous" };
+    const books: TFile[] = [];
+    for (const leaf of openLeaves) {
+      await leaf.loadIfDeferred();
+      const book = leaf.view instanceof EpubView ? leaf.view.file : null;
+      if (book !== null) books.push(book);
+    }
+    if (books.length > 1) return { kind: "ambiguous", books };
+    if (books.length === 1) return { kind: "book", book: books[0] };
+    return { kind: "none" };
   }
 
   const leaf = openLeaves[0];
@@ -67,6 +92,7 @@ async function currentBook(
   const book = leaf.view instanceof EpubView ? leaf.view.file : null;
   return book === null ? { kind: "none" } : { kind: "book", book };
 }
+
 
 /**
  * The command callback's error boundary. Keeping every write below this
@@ -145,9 +171,29 @@ async function openBookNote(
   plugin: ObservationCarPlugin,
   note: TFile,
 ): Promise<void> {
-  const leaf = plugin.app.workspace.getLeaf("split", "vertical");
-  await leaf.openFile(note);
+  const workspace = plugin.app.workspace;
+  const markdownLeaves = workspace.getLeavesOfType("markdown");
+  const matchingLeaf = markdownLeaves.find((leaf) =>
+    leafMatchesNote(leaf, note),
+  );
+  if (matchingLeaf !== undefined) {
+    await workspace.revealLeaf(matchingLeaf);
+    return;
+  }
+
+  const splitLeaf = workspace.getLeaf("split", "vertical");
+  await splitLeaf.openFile(note);
 }
+
+function leafMatchesNote(
+  leaf: { getViewState(): { type?: string }; view?: unknown },
+  note: TFile,
+): boolean {
+  if (leaf.getViewState().type !== "markdown") return false;
+  const view = leaf.view as { file?: { path?: string } | null } | null;
+  return view?.file?.path === note.path;
+}
+
 
 interface TemplateValues {
   source: string;
