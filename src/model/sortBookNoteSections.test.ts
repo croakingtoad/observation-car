@@ -126,6 +126,38 @@ describe("sortSectionsByBookPosition", () => {
     );
   });
 
+  it("keeps section anchors intact when a lone CR terminates a section (LOCO-936 round 2)", () => {
+    const input =
+      [
+        "---",
+        `source: "[[${SOURCE}]]"`,
+        "format: epub",
+        "---",
+        "Preamble",
+        `## [[${SOURCE}#${LATE}|Later]]`,
+        "later body",
+      ].join("\n") +
+      "\r" +
+      [`## [[${SOURCE}#${EARLY}|Earlier]]`, "earlier body"].join("\n");
+
+    const sorted = sortParsed(input);
+
+    expect(sorted).toBe(
+      [
+        "---",
+        `source: "[[${SOURCE}]]"`,
+        "format: epub",
+        "---",
+        "Preamble",
+        `## [[${SOURCE}#${EARLY}|Earlier]]`,
+        "earlier body",
+      ].join("\n") +
+        "\r" +
+        [`## [[${SOURCE}#${LATE}|Later]]`, "later body"].join("\n"),
+    );
+    expect(parseBookNote(sorted).sections).toHaveLength(2);
+  });
+
   it("preserves file order when sections share the same book position", () => {
     const input = note([
       `## [[${SOURCE}#${EARLY}|First at position]]`,

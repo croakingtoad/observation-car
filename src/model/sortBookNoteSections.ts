@@ -96,7 +96,7 @@ function lineStartOffsets(text: string): readonly number[] {
   const offsets = [0];
   for (let index = 0; index < text.length; index += 1) {
     if (text.charAt(index) === "\r") {
-      offsets.push(index + (text.charAt(index + 1) === "\n" ? 2 : 0));
+      offsets.push(index + (text.charAt(index + 1) === "\n" ? 2 : 1));
       if (text.charAt(index + 1) === "\n") index += 1;
     } else if (text.charAt(index) === "\n") {
       offsets.push(index + 1);
