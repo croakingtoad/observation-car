@@ -328,8 +328,9 @@ function makeTools(overrides: {
   navigation?: Promise<unknown>;
   metadata?: Promise<unknown>;
   flow?: EpubFlowControls;
+  hostDocument?: Document;
 } = {}) {
-  const viewerEl = document.createElement("div");
+  const viewerEl = (overrides.hostDocument ?? document).createElement("div");
   const book = makeBook(overrides);
   const rendition = makeRendition();
   const beforeRendition = Object.fromEntries(
@@ -714,6 +715,34 @@ describe("EpubNavigationTools teardown", () => {
     expect(tocPanel.classList.contains("open")).toBe(false);
 
     viewerEl.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(tocPanel.classList.contains("open")).toBe(false);
+  });
+
+  it("closes the TOC through a pop-out window's keydown listener", async () => {
+    const hostDocument = childDocument(document);
+    const { viewerEl } = makeTools({ hostDocument });
+
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-toc-button")).not.toBeNull();
+    });
+
+    const tocButton = viewerEl.querySelector<HTMLButtonElement>(".epub-toc-button");
+    const tocPanel = viewerEl.querySelector<HTMLDivElement>(".epub-toc-panel");
+    if (!tocButton || !tocPanel) {
+      throw new Error("Expected TOC chrome to be rendered");
+    }
+
+    tocButton.click();
+    expect(tocPanel.classList.contains("open")).toBe(true);
+
+    const event = keyboardEvent(hostDocument, "Escape", {
+      keyCode: 27,
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(event).not.toBeInstanceOf(KeyboardEvent);
+    viewerEl.dispatchEvent(event);
+
     expect(tocPanel.classList.contains("open")).toBe(false);
   });
 });

@@ -926,8 +926,10 @@ export class EpubNavigationTools {
 
     // Escape closes the drawer while it is open and returns focus to the
     // toggle so keyboard users are not left on an off-screen element.
+    const KeyboardEventConstructor =
+      viewerEl.ownerDocument.defaultView?.KeyboardEvent ?? KeyboardEvent;
     const tocKeydownListener = (event: Event): void => {
-      if (!(event instanceof KeyboardEvent)) {
+      if (!(event instanceof KeyboardEventConstructor)) {
         return;
       }
       if (event.key === "Escape" && this.isTocOpen) {
