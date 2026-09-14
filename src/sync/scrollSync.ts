@@ -191,6 +191,7 @@ export class ScrollSync {
       const current = this.currentSection.get(pending.leaf);
       const editor = current?.editor.deref();
       if (editor !== undefined) {
+        // Do not call reset(): an unmatched location clears folding but preserves the user's focus-mode toggle.
         this.setCurrentSection(editor, null);
         this.deps.focusMode?.setCurrentSection(editor, null);
       }
