@@ -8,6 +8,7 @@ import type { ScrollEditor } from "./scrollSync";
 import { FocusModeController } from "./focusMode";
 import {
   focusModeViewPlugin,
+  isFocusModeDecorationEnabled,
   setFocusModeDecoration,
   setFocusSectionsDecoration,
 } from "./focusModeDecoration";
@@ -93,6 +94,23 @@ describe("focus-mode CM6 decoration", () => {
     expect(view.state.doc.toString()).toBe(NOTE);
   });
 
+  it("ignores stale sections beyond the live document", () => {
+    view = createView("## Current\nbody");
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const current = section(0, 1, 0);
+
+    setFocusModeDecoration(editor, true);
+    expect(() =>
+      setFocusSectionsDecoration(
+        editor,
+        [current, section(4, 5, 1)],
+        current,
+      ),
+    ).not.toThrow();
+
+    expect(foldedWidgets(view)).toEqual([]);
+  });
+
   it("seeds a first controller toggle from live pairing state", async () => {
     view = createView();
     const controller = new FocusModeController();
@@ -107,6 +125,23 @@ describe("focus-mode CM6 decoration", () => {
     expect(foldedWidgets(view).map((widget) => widget.textContent)).toEqual([
       "2 sections in other chapters folded",
     ]);
+  });
+
+  it("turns folding off on the second controller toggle", () => {
+    view = createView();
+    const controller = new FocusModeController();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const sections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
+      section(4, 5, 2),
+    ];
+
+    controller.toggle(editor, sections, sections[2] ?? null);
+    expect(foldedWidgets(view)).toHaveLength(1);
+
+    controller.toggle(editor, sections, sections[2] ?? null);
+    expect(foldedWidgets(view)).toEqual([]);
   });
 
   it("removes folding when the widget is clicked", async () => {
@@ -166,19 +201,43 @@ describe("focus-mode CM6 decoration", () => {
     expect(view.state.doc.toString()).toBe(`typed first\n${NOTE}`);
   });
 
-  it("re-folds automatically on the next location after an in-document edit", () => {
+  it("restores enabled toggle state after an in-document edit", () => {
     view = createView();
+    const editor = { cm: view } as unknown as ScrollEditor;
     enableFocus(section(4, 5, 0));
 
     view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
-    setFocusSectionsDecoration(
-      { cm: view },
-      [section(0, 1, 0), section(2, 3, 1), section(5, 6, 2)],
+    expect(isFocusModeDecorationEnabled(editor)).toBe(false);
+
+    setFocusModeDecoration(editor, true);
+    expect(isFocusModeDecorationEnabled(editor)).toBe(true);
+  });
+
+  it("re-folds automatically on the next location after an in-document edit", () => {
+    view = createView();
+    const controller = new FocusModeController();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const initialSections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
+      section(4, 5, 2),
+    ];
+    controller.toggle(editor, initialSections, initialSections[2] ?? null);
+
+    view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
+    const shiftedSections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
       section(5, 6, 2),
-    );
+    ];
+    controller.setSections(editor, shiftedSections);
+    controller.setCurrentSection(editor, shiftedSections[2] ?? null);
 
     expect(foldedWidgets(view)).toHaveLength(1);
     expect(view.state.doc.toString()).toBe(`typed first\n${NOTE}`);
+
+    controller.toggle(editor);
+    expect(foldedWidgets(view)).toEqual([]);
   });
 
   it("restores folding with one controller toggle after an in-document edit", () => {
@@ -231,13 +290,13 @@ describe("focus-mode CM6 decoration", () => {
   });
 });
 
-function createView(): EditorView {
+function createView(doc = NOTE): EditorView {
   const parent = document.createElement("div");
   document.body.append(parent);
   return new EditorView({
     parent,
     state: EditorState.create({
-      doc: NOTE,
+      doc,
       extensions: [focusModeViewPlugin],
     }),
   });

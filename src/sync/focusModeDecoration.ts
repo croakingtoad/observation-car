@@ -158,7 +158,6 @@ function buildDecorations(
     decorations.push(
       Decoration.replace({
         widget: new FoldedSectionWidget(runCount),
-        side: 1,
       }).range(runStart, runEnd),
     );
   };

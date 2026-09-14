@@ -26,6 +26,13 @@ const NOTE_PATH = "Reading/Book.md";
 const CFI_1 = "/6/8!/4/2/1:0";
 const CFI_BETWEEN = "/6/10!/4/2/1:0";
 const CFI_2 = "/6/14!/4/2/1:0";
+const FOCUS_NOTE = [
+  "preamble",
+  "## Chapter one",
+  "first paragraph",
+  "## Chapter two",
+  "second paragraph",
+].join("\n");
 
 class TestReader implements LocationReader {
   readonly file: TFile;
@@ -311,6 +318,137 @@ describe("ScrollSync", () => {
     );
   });
 
+  it("re-folds without another press after paging before the first anchor", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const sections = [section(1, CFI_1, 0), section(3, CFI_2, 1)];
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(sections),
+    );
+    const { editor, view } = focusEditor();
+    rig.currentEditor = editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(editor, sections, rig.sync.getCurrentSection(editor));
+      const widgetSequence = [focusWidgetCount(view)];
+
+      rig.reader.emit("/6/4!/4/2/1:0");
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      widgetSequence.push(focusWidgetCount(view));
+
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      widgetSequence.push(focusWidgetCount(view));
+
+      expect(widgetSequence).toEqual([1, 0, 1]);
+      expect(view.state.doc.toString()).toBe(FOCUS_NOTE);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("clears focus state from a displaced editor before seeding its replacement", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const sections = [section(1, CFI_1, 0), section(3, CFI_2, 1)];
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(sections),
+    );
+    const first = focusEditor();
+    const second = focusEditor();
+    rig.currentEditor = first.editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(
+        first.editor,
+        sections,
+        rig.sync.getCurrentSection(first.editor),
+      );
+      expect(focusWidgetCounts(first.view, second.view)).toEqual([1, 0]);
+
+      rig.currentEditor = second.editor;
+      rig.reader.emit(CFI_2);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      expect(focusWidgetCounts(first.view, second.view)).toEqual([0, 0]);
+
+      focusMode.toggle(
+        second.editor,
+        sections,
+        rig.sync.getCurrentSection(second.editor),
+      );
+      expect(focusWidgetCounts(first.view, second.view)).toEqual([0, 1]);
+      expect(first.view.state.doc.toString()).toBe(FOCUS_NOTE);
+      expect(second.view.state.doc.toString()).toBe(FOCUS_NOTE);
+    } finally {
+      first.view.destroy();
+      second.view.destroy();
+    }
+  });
+
+  it("never edits the note across toggles, an edit, leaf close, and unload", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const sections = [section(1, CFI_1, 0), section(3, CFI_2, 1)];
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(sections),
+    );
+    const { editor, view } = focusEditor();
+    rig.currentEditor = editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(editor, sections, rig.sync.getCurrentSection(editor));
+      expect(view.state.doc.toString()).toBe(FOCUS_NOTE);
+
+      focusMode.toggle(editor, sections, rig.sync.getCurrentSection(editor));
+      focusMode.toggle(editor, sections, rig.sync.getCurrentSection(editor));
+      expect(view.state.doc.toString()).toBe(FOCUS_NOTE);
+
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "!" } });
+      const editedNote = `${FOCUS_NOTE}!`;
+      expect(view.state.doc.toString()).toBe(editedNote);
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      expect(focusWidgetCount(view)).toBe(1);
+      expect(view.state.doc.toString()).toBe(editedNote);
+
+      rig.leafOpen = false;
+      rig.sync.refresh();
+      expect(focusWidgetCount(view)).toBe(0);
+      expect(view.state.doc.toString()).toBe(editedNote);
+
+      rig.leafOpen = true;
+      rig.sync.register(rig.leaf, rig.reader);
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(editor, sections, rig.sync.getCurrentSection(editor));
+      expect(focusWidgetCount(view)).toBe(1);
+
+      rig.sync.clear();
+      expect(focusWidgetCount(view)).toBe(0);
+      expect(view.state.doc.toString()).toBe(editedNote);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("does not move before the first anchor, then scrolls when the first anchor is reached", () => {
     vi.useFakeTimers();
     const rig = makeRig();
@@ -522,13 +660,58 @@ describe("scrollHeadingIntoView", () => {
   });
 });
 
-function section(headingLine: number, cfi: string): BookNoteSection {
+function focusEditor(): {
+  readonly editor: ScrollEditor & { readonly cm: EditorView };
+  readonly view: EditorView;
+} {
+  if (Range.prototype.getClientRects === undefined) {
+    Object.defineProperty(Range.prototype, "getClientRects", {
+      configurable: true,
+      value: () => [],
+    });
+  }
+  if (Range.prototype.getBoundingClientRect === undefined) {
+    Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value: () => new DOMRect(),
+    });
+  }
+  const view = new EditorView({
+    parent: document.createElement("div"),
+    state: EditorState.create({
+      doc: FOCUS_NOTE,
+      extensions: [focusModeViewPlugin],
+    }),
+  });
+  return {
+    editor: {
+      cm: view,
+      lineCount: () => view.state.doc.lines,
+      scrollIntoView: vi.fn(),
+    },
+    view,
+  };
+}
+
+function focusWidgetCount(view: EditorView): number {
+  return view.dom.querySelectorAll(".oc-focus-fold").length;
+}
+
+function focusWidgetCounts(...views: readonly EditorView[]): number[] {
+  return views.map(focusWidgetCount);
+}
+
+function section(
+  headingLine: number,
+  cfi: string,
+  chapter = 0,
+): BookNoteSection {
   return {
     headingLine,
     bodyRange: { start: headingLine, end: headingLine + 2 },
     fragment: `epubcfi(${cfi})`,
     position: parseFragment(`#epubcfi(${cfi})`),
-    chapter: 0,
+    chapter,
   };
 }
 

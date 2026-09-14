@@ -42,8 +42,9 @@ export class FocusModeController {
   setSections(editor: ScrollEditor, sections: readonly BookNoteSection[]): void {
     const state = this.editors.get(editor);
     if (state === undefined) return;
-    this.editors.set(editor, { ...state, sections });
-    apply(editor, this.editors.get(editor) ?? null);
+    const next = { ...state, sections };
+    this.editors.set(editor, next);
+    apply(editor, next);
   }
 
   /** Set the location's matching section for this enabled note. */
@@ -53,8 +54,9 @@ export class FocusModeController {
   ): void {
     const state = this.editors.get(editor);
     if (state === undefined) return;
-    this.editors.set(editor, { ...state, currentSection });
-    apply(editor, this.editors.get(editor) ?? null);
+    const next = { ...state, currentSection };
+    this.editors.set(editor, next);
+    apply(editor, next);
   }
 
   /** Turn focus mode off and remove its decoration for this editor. */
@@ -72,8 +74,7 @@ interface FocusModeEditor {
 
 function apply(
   editorReference: ScrollEditor,
-  next: FocusModeEditor | null,
+  next: FocusModeEditor,
 ): void {
-  if (next === null) return;
   setFocusSectionsDecoration(editorReference, next.sections, next.currentSection);
 }

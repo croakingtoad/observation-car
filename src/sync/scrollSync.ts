@@ -188,7 +188,13 @@ export class ScrollSync {
       position,
     );
     if (section === undefined) {
-      this.clearCurrentSection(pending.leaf);
+      const current = this.currentSection.get(pending.leaf);
+      const editor = current?.editor.deref();
+      if (editor !== undefined) {
+        this.setCurrentSection(editor, null);
+        this.deps.focusMode?.setCurrentSection(editor, null);
+      }
+      this.currentSection.delete(pending.leaf);
       this.pending.delete(pending.leaf);
       return;
     }
@@ -269,6 +275,7 @@ export class ScrollSync {
     const previousEditor = this.currentSection.get(leaf)?.editor.deref();
     if (previousEditor !== undefined && previousEditor !== editor) {
       this.setCurrentSection(previousEditor, null);
+      this.deps.focusMode?.reset(previousEditor);
     }
     this.setCurrentSection(editor, section);
     if (this.deps.focusMode !== undefined) {
