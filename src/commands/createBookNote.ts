@@ -1,9 +1,17 @@
 import { Notice, normalizePath, TFile, TFolder } from "obsidian";
 import type ObservationCarPlugin from "../main";
 import { EpubView, EPUB_VIEW_TYPE } from "../readers/EpubView";
+import { MarkdownView } from "obsidian";
 
 export const CREATE_BOOK_NOTE_COMMAND_ID =
   "create-book-note-for-current-book";
+
+/** Testing seam: the public command owns its own error boundary. */
+export async function invokeCreateBookNoteForTesting(
+  plugin: ObservationCarPlugin,
+): Promise<void> {
+  return resolveAndCreateBookNote(plugin);
+}
 
 /** Register F1.5's explicit-only note creation command. */
 export function registerCreateBookNoteCommand(
@@ -22,7 +30,11 @@ export function registerCreateBookNoteCommand(
 type BookResolution =
   | { kind: "book"; book: TFile }
   | { kind: "none" }
-  | { kind: "ambiguous" };
+  | { kind: "ambiguous"; bookNames: string[] };
+
+const AMBIGUOUS_BOOK_NOTICE_PREFIX = "Multiple books are open: ";
+const AMBIGUOUS_BOOK_NOTICE_SUFFIX =
+  ". Click the book you want, then run Create book note again.";
 
 async function resolveAndCreateBookNote(
   plugin: ObservationCarPlugin,
@@ -34,7 +46,9 @@ async function resolveAndCreateBookNote(
       return;
     }
     if (resolution.kind === "ambiguous") {
-      new Notice("Choose which open book to create a note for");
+      new Notice(
+        `${AMBIGUOUS_BOOK_NOTICE_PREFIX}${resolution.bookNames.join(", ")}${AMBIGUOUS_BOOK_NOTICE_SUFFIX}`,
+      );
       return;
     }
     await createOrOpenBookNote(plugin, resolution.book);
@@ -52,6 +66,16 @@ async function currentBook(
     return { kind: "book", book: activeBook };
   }
 
+  const mostRecentLeaf = plugin.app.workspace.getMostRecentLeaf();
+  if (mostRecentLeaf !== null) {
+    await mostRecentLeaf.loadIfDeferred();
+    const mostRecentBook =
+      mostRecentLeaf.view instanceof EpubView ? mostRecentLeaf.view.file : null;
+    if (mostRecentBook !== null) {
+      return { kind: "book", book: mostRecentBook };
+    }
+  }
+
   const openLeaves = plugin.app.workspace
     .getLeavesOfType(EPUB_VIEW_TYPE)
     .filter((leaf) => leaf.getViewState().type === EPUB_VIEW_TYPE);
@@ -59,7 +83,13 @@ async function currentBook(
     return { kind: "none" };
   }
   if (openLeaves.length > 1) {
-    return { kind: "ambiguous" };
+    const openBooks: string[] = [];
+    for (const leaf of openLeaves) {
+      await leaf.loadIfDeferred();
+      const book = leaf.view instanceof EpubView ? leaf.view.file : null;
+      if (book !== null) openBooks.push(book.basename);
+    }
+    return { kind: "ambiguous", bookNames: openBooks };
   }
 
   const leaf = openLeaves[0];
@@ -144,8 +174,18 @@ async function openBookNote(
   plugin: ObservationCarPlugin,
   note: TFile,
 ): Promise<void> {
-  const leaf = plugin.app.workspace.getLeaf("split", "vertical");
+  const workspace = plugin.app.workspace;
+  for (const leaf of workspace.getLeavesOfType("markdown")) {
+    await leaf.loadIfDeferred();
+    if (leaf.view instanceof MarkdownView && leaf.view.file === note) {
+      await workspace.revealLeaf(leaf);
+      return;
+    }
+  }
+
+  const leaf = workspace.getLeaf("split", "vertical");
   await leaf.openFile(note);
+  await workspace.revealLeaf(leaf);
 }
 
 interface TemplateValues {

@@ -83,6 +83,7 @@ vi.mock("obsidian", () => {
       obsidianMock.noticeMessages.push(message);
     }
   }
+  class MarkdownView {}
   const normalizePath = (path: string): string =>
     path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\//, "");
   return {
@@ -90,6 +91,7 @@ vi.mock("obsidian", () => {
     Plugin,
     PluginSettingTab,
     Setting,
+    MarkdownView,
     TFile,
     TFolder,
     normalizePath,
@@ -158,6 +160,7 @@ function makeFakeVault(): FakeVault {
   const runtime = {
     activeView: null as unknown,
     epubLeaves: [] as FakeEpubLeaf[],
+    mostRecentLeaf: null as FakeEpubLeaf | null,
     useMarkdownLinks: false,
   };
 
@@ -221,6 +224,7 @@ function makeFakeVault(): FakeVault {
     },
     workspace: {
       getActiveViewOfType: (): unknown => runtime.activeView,
+      getMostRecentLeaf: (): FakeEpubLeaf | null => runtime.mostRecentLeaf,
       getLeavesOfType: (): FakeEpubLeaf[] => runtime.epubLeaves,
       on: (name: string, callback: Handler): { name: string } => {
         workspaceHandlers.set(name, callback);
@@ -231,6 +235,7 @@ function makeFakeVault(): FakeVault {
           openedFiles.push(file.path);
         },
       }),
+      revealLeaf: async (): Promise<void> => undefined,
     },
   };
 
@@ -437,7 +442,8 @@ describe("plugin wiring (substituted obsidian module)", () => {
     await settleCommand();
 
     expect(obsidianMock.noticeMessages).toEqual([
-      "Choose which open book to create a note for",
+      "Multiple books are open: Surprised by Grace, Second Book. " +
+        "Click the book you want, then run Create book note again.",
     ]);
     expect(fake.createdFiles).toEqual([]);
   });
@@ -460,7 +466,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     getCreateBookNoteCommand()?.callback?.();
     await settleCommand();
 
-    expect(leaf.loadIfDeferred).toHaveBeenCalledOnce();
+    expect(leaf.loadIfDeferred).toHaveBeenCalledTimes(2);
     expect(fake.createdFiles).toEqual(["Reading/Surprised by Grace.md"]);
   });
 
