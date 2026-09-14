@@ -1760,6 +1760,90 @@ describe("plugin wiring (substituted obsidian module)", () => {
     ]);
   });
 
+
+  it("notices spine-href-only note cannot be focused", async () => {
+    fake.linkDests.set("surprised by grace.epub", "Books/Surprised by Grace.epub");
+    const noteFile = addMdFile("Reading/SpineNote.md", '---\ntype: book-note\nsource: "[[Books/Surprised by Grace.epub]]"\nformat: epub\n---\n\n## [[Books/Surprised by Grace.epub#text/chapter1.xhtml|Ch. 1]]\nbody one\n\n## [[Books/Surprised by Grace.epub#text/chapter2.xhtml|Ch. 2]]\nbody two', { type: "book-note", source: `[[Books/Surprised by Grace.epub]]`, format: "epub" });
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get("Books/Surprised by Grace.epub");
+    if (book === undefined) throw new Error("book fixture is missing");
+    const markdownView = new MarkdownViewDouble(
+      noteFile,
+      {
+        hasFocus: () => true,
+        getViewType: () => "markdown",
+        lineCount: () => 20,
+        scrollIntoView: vi.fn(),
+      },
+    );
+    fake.leaves.add({ view: markdownView });
+    openEpubReader(book);
+    noticeMessages.length = 0;
+    plugin.toggleFocusMode();
+
+    expect(noticeMessages).toEqual([
+      "Focus mode needs CFI anchors; this note\'s anchors are chapter hrefs.",
+    ]);
+  });
+
+  it("focuses a CFI-anchor note with no spine-href Notice", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const markdownView = new MarkdownViewDouble(
+      noteFile,
+      {
+        hasFocus: () => true,
+        getViewType: () => "markdown",
+        lineCount: () => 20,
+        scrollIntoView: vi.fn(),
+      },
+    );
+    fake.leaves.add({ view: markdownView });
+    const { view } = openEpubReader(book);
+    view.emitLocation("#" + CFI_2);
+    await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    noticeMessages.length = 0;
+    plugin.toggleFocusMode();
+
+    expect(noticeMessages).toEqual([]);
+  });
+
+  it("focuses a mixed note with both CFI and spine-href sections", async () => {
+    fake.linkDests.set("mixed.epub", "Books/Mixed.epub");
+    const book = addBookFile("Books/Mixed.epub");
+    const noteFile = addMdFile("Reading/Mixed.md", '---\ntype: book-note\nsource: "[[Books/Mixed.epub]]"\nformat: epub\n---\n\n## [[Books/Mixed.epub#epubcfi(/6/8!/4/2/1:0)|Cfi Ch. 1]]\ncfi body\n\n## [[Books/Mixed.epub#text/chapter2.xhtml|Href Ch. 2]]\nhref body', {
+      type: "book-note",
+      source: "[[Books/Mixed.epub]]",
+      format: "epub",
+    });
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const markdownView = new MarkdownViewDouble(
+      noteFile,
+      {
+        hasFocus: () => true,
+        getViewType: () => "markdown",
+        lineCount: () => 20,
+        scrollIntoView: vi.fn(),
+      },
+    );
+    fake.leaves.add({ view: markdownView });
+    openEpubReader(book);
+    noticeMessages.length = 0;
+    plugin.toggleFocusMode();
+
+    expect(noticeMessages).toEqual([]);
+  });
+
   it("seeds focus mode on first toggle from the live reader location", async () => {
     fake.linkDests.set("surprised by grace.epub", SOURCE);
     const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);

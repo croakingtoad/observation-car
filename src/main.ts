@@ -342,6 +342,14 @@ export default class ObservationCarPlugin extends Plugin {
       new Notice("Open this book's note before toggling focus mode.");
       return;
     }
+    const { sections } = pairing.bookNote;
+    if (
+      sections.length > 0 &&
+      sections.every((s) => s.chapter === null)
+    ) {
+      new Notice("Focus mode needs CFI anchors; this note's anchors are chapter hrefs.");
+      return;
+    }
     this.focusMode.toggle(
       editor,
       pairing.bookNote.sections,

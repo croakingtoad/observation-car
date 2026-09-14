@@ -144,14 +144,31 @@ describe("focus-mode CM6 decoration", () => {
     expect(foldedWidgets(view)).toEqual([]);
   });
 
-  it("removes folding when the widget is clicked", async () => {
+  it("removes folding when the widget is clicked and recovers with one toggle", async () => {
     view = createView();
-    enableFocus(section(0, 1, 0));
+    const controller = new FocusModeController();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const sections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
+      section(4, 5, 2),
+    ];
+    controller.toggle(editor, sections, sections[0] ?? null);
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)).toHaveLength(1);
 
     foldedWidgets(view)[0]?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(foldedWidgets(view)).toEqual([]);
+    expect(view.state.doc.toString()).toBe(NOTE);
+
+    controller.toggle(editor, sections, sections[0] ?? null);
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(foldedWidgets(view)).toHaveLength(1);
     expect(view.state.doc.toString()).toBe(NOTE);
   });
 
