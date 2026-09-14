@@ -138,15 +138,23 @@ export class EpubLocationTracker {
 
   /**
    * The book's TOC, for label resolution. Relocations before this
-   * resolves (or for a book with no TOC) fall back to "Ch. N".
+   * resolves (or for a book with no TOC) fall back to "Ch. N". Once a
+   * position is held, a late TOC replays it so push consumers see the
+   * same label that `current()` derives.
    */
   setToc(toc: readonly TocItem[]): void {
     this.toc = toc;
+    if (this.latest !== null) {
+      this.onRelocated(this.latest);
+    }
   }
 
   /** Feed one relocated position; the emitted event is debounced. */
   onRelocated(position: RelocatedPosition | null): void {
     if (this.destroyed || position === null) {
+      return;
+    }
+    if (locationForRelocation(position, this.toc) === null) {
       return;
     }
     this.latest = position;

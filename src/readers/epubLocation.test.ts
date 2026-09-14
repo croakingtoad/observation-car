@@ -203,6 +203,44 @@ describe("EpubLocationTracker", () => {
     tracker.destroy();
   });
 
+  it("re-emits a held location when the TOC arrives after a flush", () => {
+    vi.useFakeTimers();
+    const tracker = new EpubLocationTracker();
+    const seen = collect(tracker);
+
+    tracker.onRelocated(rel("/6/8!/4/2/1:0", "chapters/ch1.xhtml"));
+    vi.advanceTimersByTime(150);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].label).toBe("Ch. 3");
+
+    tracker.setToc(TOC);
+    vi.advanceTimersByTime(150);
+    expect(seen).toHaveLength(2);
+    expect(seen[1].label).toBe("The Opening Image");
+    expect(tracker.current()).toEqual(seen[1]);
+    tracker.destroy();
+  });
+
+  it("keeps the last derivable location after an undecodable relocation", () => {
+    vi.useFakeTimers();
+    const tracker = new EpubLocationTracker();
+    const seen = collect(tracker);
+
+    tracker.onRelocated(rel("/6/8!/4/2/1:0", "chapters/ch1.xhtml"));
+    vi.advanceTimersByTime(150);
+    tracker.onRelocated(rel("not a cfi at all", "chapters/ch1.xhtml"));
+    vi.advanceTimersByTime(150);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({
+      fragment: "#epubcfi(/6/8!/4/2/1:0)",
+      chapter: 3,
+      label: "Ch. 3",
+    });
+    expect(tracker.current()).toEqual(seen[0]);
+    tracker.destroy();
+  });
+
   it("falls back to 'Ch. N' when the book has no TOC", () => {
     vi.useFakeTimers();
     const tracker = new EpubLocationTracker();
