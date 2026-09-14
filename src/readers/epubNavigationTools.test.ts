@@ -350,6 +350,18 @@ function makeTools(overrides: {
   return { viewerEl, book, rendition, tools, beforeRendition };
 }
 
+function pointerEvent(
+  _document: Document,
+  type: "pointerdown" | "pointermove" | "pointercancel" | "pointerup",
+  init: { clientX?: number; timeStamp?: number },
+): PointerEvent {
+  const event = new PointerEvent(type, { clientX: init.clientX });
+  if (init.timeStamp !== undefined) {
+    Object.defineProperty(event, "timeStamp", { value: init.timeStamp });
+  }
+  return event;
+}
+
 async function waitForSelectionListener(
   rendition: ReturnType<typeof makeRendition>,
 ): Promise<void> {
@@ -525,6 +537,190 @@ describe("EpubNavigationTools setup failures (Tier 2 finding 3)", () => {
 
 
 describe("EpubNavigationTools teardown", () => {
+  it("prunes discarded iframe listeners while the book stays open", async () => {
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    await waitForSelectionListener(rendition);
+
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const frameDocument = frame.contentDocument;
+    if (frameDocument === null) {
+      throw new Error("test iframe has no document");
+    }
+    frameDocument.documentElement.append(frameDocument.createElement("body"));
+
+    const readCounts = () => {
+      const state = tools as unknown as {
+        documentListeners: Map<Document, unknown>;
+        pagingListeners: Set<{ document: Document; remove: () => void }>;
+      };
+      return {
+        documentListeners: state.documentListeners.size,
+        pagingListeners: state.pagingListeners.size,
+      };
+    };
+
+    for (let viewIndex = 0; viewIndex < 8; viewIndex += 1) {
+      rendition.fire("rendered", {}, { document: frameDocument } as unknown as Contents);
+      if (viewIndex < 7) {
+        frame.remove();
+      }
+      const counts = readCounts();
+      expect(counts.documentListeners).toBeLessThanOrEqual(1);
+      expect(counts.pagingListeners).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("removes discarded paging listeners on the next rendered view", () => {
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    const state = tools as unknown as {
+      pagingListeners: Set<{ document: Document; remove: () => void }>;
+    };
+
+    const { oldDocument, newDocument, discardOldView } = (() => {
+      const oldFrame = document.createElement("iframe");
+      const newFrame = document.createElement("iframe");
+      document.body.append(oldFrame, newFrame);
+      const oldFrameDocument = oldFrame.contentDocument;
+      const newFrameDocument = newFrame.contentDocument;
+      if (oldFrameDocument === null || newFrameDocument === null) {
+        throw new Error("test iframe has no document");
+      }
+      oldFrameDocument.documentElement.append(oldFrameDocument.createElement("body"));
+      newFrameDocument.documentElement.append(newFrameDocument.createElement("body"));
+      Object.defineProperty(newFrameDocument.body, "clientWidth", {
+        configurable: true,
+        value: 300,
+      });
+      Object.defineProperty(newFrameDocument.documentElement, "clientWidth", {
+        configurable: true,
+        value: 300,
+      });
+      Object.defineProperty(oldFrameDocument.body, "clientWidth", {
+        configurable: true,
+        value: 300,
+      });
+      Object.defineProperty(oldFrameDocument.documentElement, "clientWidth", {
+        configurable: true,
+        value: 300,
+      });
+      return {
+        oldDocument: oldFrameDocument,
+        newDocument: newFrameDocument,
+        discardOldView: () => oldFrame.remove(),
+      };
+    })();
+
+    oldDocument.documentElement.append(oldDocument.createElement("body"));
+
+    rendition.fire("rendered", {}, { document: oldDocument } as unknown as Contents);
+    expect(state.pagingListeners.size).toBe(1);
+
+    oldDocument.dispatchEvent(new PointerEvent("pointerdown", { button: 0 }));
+    oldDocument.dispatchEvent(new PointerEvent("pointerup", { clientX: 0 }));
+
+    discardOldView();
+    rendition.fire("rendered", {}, { document: newDocument } as unknown as Contents);
+    expect(state.pagingListeners.size).toBe(1);
+    oldDocument.dispatchEvent(new PointerEvent("pointerdown", { button: 0 }));
+    oldDocument.dispatchEvent(new PointerEvent("pointerup", { clientX: 0 }));
+    expect(rendition.next).not.toHaveBeenCalled();
+    newDocument.dispatchEvent(new PointerEvent("pointerdown", { clientX: 250 }));
+    newDocument.dispatchEvent(new PointerEvent("pointerup", { clientX: 250 }));
+    expect(rendition.next).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a repeated pointerup after a completed paging press", () => {
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    const doc = document.implementation.createHTMLDocument("paging-repeat");
+    doc.documentElement.append(doc.createElement("body"));
+    Object.defineProperty(doc.body, "clientWidth", { configurable: true, value: 300 });
+    Object.defineProperty(doc.documentElement, "clientWidth", {
+      configurable: true,
+      value: 300,
+    });
+
+    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    doc.dispatchEvent(pointerEvent(doc, "pointerdown", { clientX: 10, timeStamp: 100 }));
+    doc.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 150 }));
+    doc.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 200 }));
+
+    expect(rendition.prev).toHaveBeenCalledTimes(1);
+    tools.destroy();
+  });
+
+  it("cancels paging when pointercancel ends a press", () => {
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    const doc = document.implementation.createHTMLDocument("paging-cancel");
+    doc.documentElement.append(doc.createElement("body"));
+    Object.defineProperty(doc.body, "clientWidth", { configurable: true, value: 300 });
+    Object.defineProperty(doc.documentElement, "clientWidth", {
+      configurable: true,
+      value: 300,
+    });
+
+    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    doc.dispatchEvent(pointerEvent(doc, "pointerdown", { clientX: 10, timeStamp: 100 }));
+    doc.dispatchEvent(pointerEvent(doc, "pointercancel", { timeStamp: 120 }));
+    doc.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 150 }));
+
+    expect(rendition.prev).not.toHaveBeenCalled();
+    tools.destroy();
+  });
+
+  it("uses maximum pointer travel, not release position, for tap slop", () => {
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    const doc = document.implementation.createHTMLDocument("paging-travel");
+    doc.documentElement.append(doc.createElement("body"));
+    Object.defineProperty(doc.body, "clientWidth", { configurable: true, value: 300 });
+    Object.defineProperty(doc.documentElement, "clientWidth", {
+      configurable: true,
+      value: 300,
+    });
+
+    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    doc.dispatchEvent(pointerEvent(doc, "pointerdown", { clientX: 10, timeStamp: 100 }));
+    doc.dispatchEvent(pointerEvent(doc, "pointermove", { clientX: 50, timeStamp: 120 }));
+    doc.dispatchEvent(pointerEvent(doc, "pointermove", { clientX: 10, timeStamp: 140 }));
+    doc.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 150 }));
+
+    expect(rendition.prev).not.toHaveBeenCalled();
+    tools.destroy();
+  });
+
+  it("treats a link tap at exactly the slop as a link, not a page turn", () => {
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    const doc = document.implementation.createHTMLDocument("paging-link");
+    doc.documentElement.append(doc.createElement("body"));
+    const link = doc.createElement("a");
+    link.href = "https://example.test/chapter";
+    doc.body.append(link);
+    Object.defineProperty(doc.body, "clientWidth", { configurable: true, value: 300 });
+    Object.defineProperty(doc.documentElement, "clientWidth", {
+      configurable: true,
+      value: 300,
+    });
+
+    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    link.dispatchEvent(pointerEvent(doc, "pointerdown", { clientX: 20, timeStamp: 100 }));
+    link.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 150 }));
+
+    expect(rendition.prev).not.toHaveBeenCalled();
+    tools.destroy();
+  });
+
   it("removes every rendition listener the class registered", async () => {
     const { rendition, tools, beforeRendition } = makeTools();
 

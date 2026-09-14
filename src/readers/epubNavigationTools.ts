@@ -605,6 +605,8 @@ export class EpubNavigationTools {
       return;
     }
 
+    this.pruneDiscardedViewListeners();
+
     // A rendered view has no selection yet. In particular, epub.js
     // destroys and replaces the iframe on resize before relocating
     // to the same CFI, so relocation alone cannot detect this clear.
@@ -643,6 +645,8 @@ export class EpubNavigationTools {
     if (this.destroyed || this.flow?.mode !== "paginated") {
       return;
     }
+
+    this.pruneDiscardedViewListeners();
 
     const removePagingListeners = addPagingListeners(
       view.document,
@@ -748,6 +752,29 @@ export class EpubNavigationTools {
     this.documentListeners.set(document, listeners);
   }
 
+  private pruneDiscardedViewListeners(): void {
+    const isDiscarded = (document: Document): boolean =>
+      document.defaultView?.frameElement?.isConnected === false;
+
+    for (const [document, listeners] of this.documentListeners) {
+      if (isDiscarded(document)) {
+        for (const [type, handlers] of listeners) {
+          for (const handler of handlers) {
+            document.removeEventListener(type, handler);
+          }
+        }
+        this.documentListeners.delete(document);
+      }
+    }
+
+    for (const pagingListener of this.pagingListeners) {
+      if (isDiscarded(pagingListener.document)) {
+        pagingListener.remove();
+        this.pagingListeners.delete(pagingListener);
+      }
+    }
+  }
+
   /**
    * Clear the retained selection once the user collapses it inside
    * the book (tap-away, Escape, re-tap): epub.js only emits `selected`
@@ -831,6 +858,9 @@ export class EpubNavigationTools {
       return;
     }
     const title = (await this.bookTitle) ?? "Untitled";
+    if (this.destroyed) {
+      return;
+    }
     const viewerEl = this.copyPanel.parentElement;
     if (viewerEl === null) {
       return;
