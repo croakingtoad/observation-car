@@ -119,7 +119,10 @@ export interface BookNoteDiagnostic {
 }
 
 export interface BookNote {
-  /** Exact markdown source from which this immutable parse was produced. */
+  /**
+   * Markdown source normalized to LF line endings, matching CM6's
+   * document representation.
+   */
   readonly sourceText: string;
   readonly frontmatter: BookNoteFrontmatter;
   /** Anchor sections in file order (see module docs on ordering). */
@@ -195,7 +198,7 @@ export function parseBookNote(
   }
 
   return {
-    sourceText: text,
+    sourceText: text.split(/\r\n?|\n/).join("\n"),
     frontmatter: { data, source, format },
     sections,
     diagnostics,

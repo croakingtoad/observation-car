@@ -599,6 +599,41 @@ describe("parseBookNote — purity", () => {
   });
 });
 
+describe("parseBookNote — CRLF normalisation (LOCO-924)", () => {
+  const SOURCE = "Books/Surprised by Grace.epub";
+  const FRONTMATTER = [
+    "---",
+    "type: book-note",
+    `source: "[[${SOURCE}]]"`,
+    "format: epub",
+    "---",
+  ];
+
+  it("normalises CRLF to LF in sourceText and preserves section line indices", () => {
+    const body = [
+      "preamble",
+      `## [[${SOURCE}#epubcfi(/6/8!/4/2/1:0)|Ch 1]]`,
+      "first paragraph",
+      "second paragraph",
+      `## [[${SOURCE}#epubcfi(/6/14!/4/2/12:0)|Ch 3]]`,
+      "more text",
+    ];
+    const crlfText = [...FRONTMATTER, ...body].join("\r\n");
+    const lfText = [...FRONTMATTER, ...body].join("\n");
+
+    const crlfNote = parseBookNote(crlfText);
+    const lfNote = parseBookNote(lfText);
+
+    expect(crlfNote.sourceText).toBe(lfText);
+    expect(crlfNote.sourceText).not.toBe(crlfText);
+    expect(crlfNote.sections).toEqual(lfNote.sections);
+    expect(crlfNote.sections.map((s) => s.headingLine)).toEqual(
+      lfNote.sections.map((s) => s.headingLine),
+    );
+    expect(crlfNote.sections.length).toBeGreaterThan(0);
+  });
+});
+
 describe("parseBookNote — performance (PRD §7: ~5,000 lines must not block the UI)", () => {
   function buildLargeNote(totalLines: number): { text: string; sections: number } {
     const lines: string[] = [

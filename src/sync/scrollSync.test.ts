@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BookNote, BookNoteSection } from "../model/bookNote";
 import { parseFragment } from "../model/anchor";
 import { FocusModeController } from "./focusMode";
+import { parseBookNote } from "../model/bookNote";
 import {
   focusModeViewPlugin,
   isFocusModeDecorationEnabled,
@@ -1237,6 +1238,75 @@ describe("scrollHeadingIntoView", () => {
     expect(dispatch).toHaveBeenCalledWith({ effects: effect });
     expect(fallback).not.toHaveBeenCalled();
     expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("folds from a current CRLF parse (LOCO-924)", () => {
+    const focusMode = new FocusModeController();
+    const fm = ["---", 'source: "[[Books/Book.epub]]"', "format: epub", "---"];
+    const body = [
+      "## [[Books/Book.epub#epubcfi(/6/8!/4/2/1:0)|Current]]",
+      "current note",
+      "",
+      "## [[Books/Book.epub#epubcfi(/6/10!/4/2/1:0)|New note here]]",
+      "new note",
+      "## [[Books/Book.epub#epubcfi(/6/14!/4/2/1:0)|Late]]",
+      "late note one",
+      "late note two",
+    ];
+    const currentNote = [...fm, ...body].join("\n");
+    const crlfNote = [...fm, ...body].join("\r\n");
+    const { editor, view } = focusEditor(currentNote);
+    const crlfParse = parseBookNote(crlfNote);
+
+    try {
+      focusMode.toggle(editor, crlfParse, crlfParse.sections[0] ?? null);
+
+      expect(
+        [...view.dom.querySelectorAll<HTMLElement>(".oc-focus-fold")].map(
+          (widget) => widget.textContent,
+        ),
+      ).toEqual(["2 sections in other chapters folded"]);
+      expect(view.state.doc.toString()).toBe(currentNote);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("rejects a stale CRLF parse after an insertion (LOCO-924)", () => {
+    const focusMode = new FocusModeController();
+    const fm = ["---", 'source: "[[Books/Book.epub]]"', "format: epub", "---"];
+    const preBody = [
+      "## [[Books/Book.epub#epubcfi(/6/8!/4/2/1:0)|Current]]",
+      "current note",
+      "",
+      "## [[Books/Book.epub#epubcfi(/6/14!/4/2/1:0)|Late]]",
+      "late note one",
+      "late note two",
+    ];
+    const postBody = [
+      "## [[Books/Book.epub#epubcfi(/6/8!/4/2/1:0)|Current]]",
+      "current note",
+      "",
+      "## [[Books/Book.epub#epubcfi(/6/10!/4/2/1:0)|New note here]]",
+      "new note",
+      "## [[Books/Book.epub#epubcfi(/6/14!/4/2/1:0)|Late]]",
+      "late note one",
+      "late note two",
+    ];
+    const preEditNote = [...fm, ...preBody].join("\r\n");
+    const postEditNote = [...fm, ...postBody].join("\n");
+    const { editor, view } = focusEditor(postEditNote);
+    const staleParse = parseBookNote(preEditNote);
+
+    try {
+      expect(view.state.doc.length).not.toBe(staleParse.sourceText.length);
+      focusMode.toggle(editor, staleParse, staleParse.sections[0] ?? null);
+
+      expect(focusWidgetCount(view)).toBe(0);
+      expect(view.state.doc.toString()).toBe(postEditNote);
+    } finally {
+      view.destroy();
+    }
   });
 });
 
