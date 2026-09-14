@@ -574,6 +574,11 @@ export class EpubNavigationTools {
     Document,
     Map<string, Set<EventListener>>
   >();
+  private readonly hostKeyListeners = new Set<{
+    target: HTMLElement;
+    type: string;
+    listener: EventListener;
+  }>();
   private readonly pagingListeners = new Set<PagingListeners>();
 
   private readonly onRelocated = (loc: Location): void => {
@@ -708,6 +713,10 @@ export class EpubNavigationTools {
     }
     this.destroyed = true;
     this.keyBridge.destroy();
+    for (const { target, type, listener } of this.hostKeyListeners) {
+      target.removeEventListener(type, listener);
+    }
+    this.hostKeyListeners.clear();
     this.rendition.off("relocated", this.onRelocated);
     this.rendition.off("resized", this.onResized);
     this.rendition.off("rendered", this.onRendered);
@@ -917,14 +926,19 @@ export class EpubNavigationTools {
 
     // Escape closes the drawer while it is open and returns focus to the
     // toggle so keyboard users are not left on an off-screen element.
-    viewerEl.addEventListener("keydown", (event: KeyboardEvent) => {
+    const tocKeydownListener = (event: Event): void => {
+      if (!(event instanceof KeyboardEvent)) {
+        return;
+      }
       if (event.key === "Escape" && this.isTocOpen) {
         event.preventDefault();
         event.stopPropagation();
         this.toggleTocVisibility(false);
         this.tocButton?.focus();
       }
-    });
+    };
+    viewerEl.addEventListener("keydown", tocKeydownListener);
+    this.hostKeyListeners.add({ target: viewerEl, type: "keydown", listener: tocKeydownListener });
 
     // Hide the TOC panel when the reader is clicked.
     this.rendition.on("rendered", this.onTocRendered);

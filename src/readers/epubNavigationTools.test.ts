@@ -656,16 +656,17 @@ describe("EpubNavigationTools teardown", () => {
     expect(viewerEl.querySelector(".epub-toc-button")).toBeNull();
   });
 
-  it("ignores direct rendered and selected handlers after destroy", async () => {
+  it("drives direct onRendered after destroy", async () => {
+    const selectionTrackerClear = vi.spyOn(EpubSelectionTracker.prototype, "clear");
     const { rendition, tools, viewerEl } = makeTools();
     tools.destroy();
-    const detachedRendition = Object.fromEntries(rendition.handlers);
-    rendition.handlers.clear();
 
     fireSelection(rendition);
     const firstDocument = document.implementation.createHTMLDocument("late-1");
     firstDocument.documentElement.append(firstDocument.createElement("body"));
-    rendition.fire("rendered", {}, { document: firstDocument } as unknown as Contents);
+    (tools as unknown as {
+      onRendered: (section: unknown, contents: { document: Document }) => void;
+    }).onRendered({}, { document: firstDocument });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     fireSelection(rendition);
@@ -674,10 +675,46 @@ describe("EpubNavigationTools teardown", () => {
     await vi.waitFor(() => {
       expect(viewerEl.querySelector(".epub-cfi-popup")?.classList.contains("open")).toBe(false);
     });
-    rendition.handlers.clear();
-    for (const [event, handlers] of Object.entries(detachedRendition)) {
-      rendition.handlers.set(event, handlers);
+    expect(selectionTrackerClear).not.toHaveBeenCalled();
+  });
+
+  it("drives direct onTocRendered after destroy", () => {
+    const { tools } = makeTools();
+    tools.destroy();
+
+    const firstDocument = document.implementation.createHTMLDocument("late-1");
+    const addEventListenerSpy = vi.spyOn(firstDocument, "addEventListener");
+    (tools as unknown as {
+      onTocRendered: (section: unknown, contents: { document: Document }) => void;
+    }).onTocRendered({}, { document: firstDocument });
+
+    expect(addEventListenerSpy).not.toHaveBeenCalled();
+  });
+
+  it("closes the TOC through the host keydown listener", async () => {
+    const { viewerEl } = makeTools();
+
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-toc-button")).not.toBeNull();
+    });
+
+    const tocButton = viewerEl.querySelector<HTMLButtonElement>(".epub-toc-button");
+    const tocPanel = viewerEl.querySelector<HTMLDivElement>(".epub-toc-panel");
+    if (!tocButton || !tocPanel) {
+      throw new Error("Expected TOC chrome to be rendered");
     }
+
+    tocButton.onclick?.(new MouseEvent("click", { bubbles: true }) as PointerEvent);
+    expect(tocPanel.classList.contains("open")).toBe(true);
+
+    viewerEl.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(tocPanel.classList.contains("open")).toBe(false);
+
+    viewerEl.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(tocPanel.classList.contains("open")).toBe(false);
+
+    viewerEl.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(tocPanel.classList.contains("open")).toBe(false);
   });
 });
 
