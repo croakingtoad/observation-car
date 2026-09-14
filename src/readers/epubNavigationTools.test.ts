@@ -354,6 +354,23 @@ describe("EpubKeyBridge", () => {
     expect(replacementRendition.next).toHaveBeenCalledOnce();
     replacementBridge.destroy();
   });
+
+  it("detaches its rendered handler only once across double destroy", () => {
+    const rendition = makeRendition();
+    const bridge = new EpubKeyBridge(rendition, document, vi.fn());
+    const renderedHandler = rendition.handlers.get("rendered")?.[0];
+    if (renderedHandler === undefined) {
+      throw new Error("test rendition has no rendered handler");
+    }
+
+    bridge.destroy();
+    bridge.destroy();
+
+    expect(rendition.off).toHaveBeenCalledExactlyOnceWith(
+      "rendered",
+      renderedHandler,
+    );
+  });
 });
 
 function makeBook(
@@ -425,6 +442,27 @@ function pointerEvent(
   return event;
 }
 
+function selectionContents(): Contents {
+  return {
+    window: {
+      getSelection: () => ({
+        rangeCount: 1,
+        getRangeAt: () => ({
+          getBoundingClientRect: () => ({ left: 5, top: 5, bottom: 15 }),
+        }),
+        toString: () => SELECTION_TEXT,
+      }),
+    },
+    document: {
+      defaultView: {
+        frameElement: {
+          getBoundingClientRect: () => ({ left: 10, top: 10 }),
+        },
+      },
+    },
+  } as unknown as Contents;
+}
+
 async function waitForSelectionListener(
   rendition: ReturnType<typeof makeRendition>,
 ): Promise<void> {
@@ -439,27 +477,7 @@ async function waitForSelectionListener(
  * two-character-range selection, wiring the popup copy handlers.
  */
 function fireSelection(rendition: ReturnType<typeof makeRendition>): void {
-  const selection = {
-    rangeCount: 1,
-    getRangeAt: () => ({
-      getBoundingClientRect: () => ({ left: 5, top: 5, bottom: 15 }),
-    }),
-    toString: () => SELECTION_TEXT,
-  };
-  const contents = {
-    window: { getSelection: () => selection },
-    document: {
-      defaultView: {
-        frameElement: {
-          getBoundingClientRect: () => ({
-            left: 10,
-            top: 10,
-          }),
-        },
-      },
-    },
-  } as unknown as Contents;
-  rendition.fire("selected", SELECTION_CFI, contents);
+  rendition.fire("selected", SELECTION_CFI, selectionContents());
 }
 
 let writeText: ReturnType<typeof vi.fn>;
@@ -1291,7 +1309,7 @@ describe("EpubNavigationTools lifecycle coverage fences", () => {
     tools.destroy();
   });
 
-  it("does not show a selection when entry is guarded by destruction", async () => {
+  it("does not run the selected handler detached by destroy", async () => {
     const selectionTrackerSetSelected = vi.spyOn(
       EpubSelectionTracker.prototype,
       "setSelected",
@@ -1308,6 +1326,41 @@ describe("EpubNavigationTools lifecycle coverage fences", () => {
       viewerEl.querySelector(".epub-cfi-popup")?.classList.contains("open"),
     ).toBe(false);
   });
+
+  it(
+    "does not show a selection from an in-flight event after destroy",
+    async () => {
+      const selectionTrackerSetSelected = vi.spyOn(
+        EpubSelectionTracker.prototype,
+        "setSelected",
+      );
+      const bookTitle = {
+        then: vi.fn((resolve: (title: string) => void) => {
+          resolve("Late Book");
+        }),
+      } as unknown as Promise<string>;
+      const { rendition, tools, viewerEl } = makeTools();
+      await waitForSelectionListener(rendition);
+      Object.defineProperty(tools, "bookTitle", {
+        configurable: true,
+        value: bookTitle,
+      });
+      const selectedHandler = rendition.handlers.get("selected")?.[0];
+      if (selectedHandler === undefined) {
+        throw new Error("test rendition has no selected handler");
+      }
+      tools.destroy();
+
+      selectedHandler(SELECTION_CFI, selectionContents());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(bookTitle.then).not.toHaveBeenCalled();
+      expect(selectionTrackerSetSelected).not.toHaveBeenCalled();
+      expect(
+        viewerEl.querySelector(".epub-cfi-popup")?.classList.contains("open"),
+      ).toBe(false);
+    },
+  );
 
   it("does not show a selection if destroyed while awaiting the book title", async () => {
     const selectionTrackerSetSelected = vi.spyOn(
@@ -1390,6 +1443,18 @@ describe("EpubNavigationTools lifecycle coverage fences", () => {
     ]);
     expect(removeCalls).toEqual(callsAfterFirstDestroy);
     expect(renderedDocument.documentElement.style.touchAction).toBe("");
+  });
+
+  it("does not repeat rendition detaches across double destroy", async () => {
+    const { rendition, tools } = makeTools({
+      flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+    await waitForSelectionListener(rendition);
+    tools.destroy();
+    const detachCalls = [...rendition.off.mock.calls];
+    tools.destroy();
+
+    expect(rendition.off.mock.calls).toEqual(detachCalls);
   });
 
   it("retains one document while rendering distinct views before pruning", async () => {

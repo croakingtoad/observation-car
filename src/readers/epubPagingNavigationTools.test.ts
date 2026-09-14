@@ -115,6 +115,16 @@ describe("F2.2 paging event wiring", () => {
     document.body.replaceChildren();
   });
 
+  it("keeps scrolled-mode documents untouched", () => {
+    const doc = renderedDocument(300, 900);
+    const page = vi.fn();
+
+    addPagingListeners(doc, "scrolled", page);
+
+    expect(page).not.toHaveBeenCalled();
+    expect(doc.documentElement.style.touchAction).toBe("");
+  });
+
   it("uses the visible page width for a tap in a multi-page section", () => {
     const doc = renderedDocument(300, 900);
     const page = vi.fn();
