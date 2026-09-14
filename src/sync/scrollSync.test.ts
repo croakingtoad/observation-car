@@ -254,6 +254,21 @@ describe("ScrollSync", () => {
     });
   });
 
+  it("ignores focus-mode setSections before the first controller state exists", () => {
+    vi.useFakeTimers();
+    const setFocusSections = vi.fn();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({
+      focusMode,
+      setFocusSections,
+    } as Partial<ConstructorParameters<typeof ScrollSync>[0]>);
+
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(setFocusSections).not.toHaveBeenCalled();
+  });
+
   it("does not move before the first anchor, then scrolls when the first anchor is reached", () => {
     vi.useFakeTimers();
     const rig = makeRig();

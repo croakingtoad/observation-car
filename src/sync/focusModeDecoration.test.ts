@@ -4,6 +4,8 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BookNoteSection } from "../model/bookNote";
+import type { ScrollEditor } from "./scrollSync";
+import { FocusModeController } from "./focusMode";
 import {
   focusModeViewPlugin,
   setFocusModeDecoration,
@@ -58,7 +60,7 @@ describe("focus-mode CM6 decoration", () => {
 
     setFocusModeDecoration({ cm: view }, true);
     setFocusSectionsDecoration(
-      { cm: view },
+      { cm: view } as unknown as ScrollEditor,
       [
         section(0, 1, 1),
         section(2, 3, 0),
@@ -75,6 +77,23 @@ describe("focus-mode CM6 decoration", () => {
       "1 section in other chapters folded",
     ]);
     expect(view.state.doc.toString()).toBe(NOTE);
+  });
+
+  it("seeds a first controller toggle from live pairing state", async () => {
+    view = createView();
+    const controller = new FocusModeController();
+    controller.toggle(
+      { cm: view } as unknown as ScrollEditor,
+      [section(0, 1, 0), section(2, 3, 1), section(4, 5, 2)],
+      section(4, 5, 2),
+    );
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(foldedWidgets(view).map((widget) => widget.textContent)).toEqual([
+      "1 section in other chapters folded",
+      "1 section in other chapters folded",
+    ]);
   });
 
   it("removes folding when the widget is clicked", async () => {
@@ -131,6 +150,21 @@ describe("focus-mode CM6 decoration", () => {
     view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
 
     expect(foldedWidgets(view)).toEqual([]);
+    expect(view.state.doc.toString()).toBe(`typed first\n${NOTE}`);
+  });
+
+  it("re-folds automatically on the next location after an in-document edit", () => {
+    view = createView();
+    enableFocus(section(4, 5, 0));
+
+    view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
+    setFocusSectionsDecoration(
+      { cm: view },
+      [section(0, 1, 0), section(2, 3, 1), section(5, 6, 2)],
+      section(5, 6, 2),
+    );
+
+    expect(foldedWidgets(view)).toHaveLength(2);
     expect(view.state.doc.toString()).toBe(`typed first\n${NOTE}`);
   });
 
