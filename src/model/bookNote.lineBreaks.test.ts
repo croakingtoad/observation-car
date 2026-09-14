@@ -129,6 +129,25 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
   it("has a complete, non-degenerate break table", () => {
     const inputs = LINE_BREAK_ROWS.map(textFor);
     expect(new Set(inputs).size).toBe(LINE_BREAK_ROWS.length);
+    expect(LINE_BREAK_ROWS.length).toBe(16);
+    expect(LINE_BREAK_ROWS.map((r) => r.name)).toEqual([
+      "LF only",
+      "CRLF only",
+      "lone CR only",
+      "mixed LF and CRLF",
+      "mixed LF and lone CR before anchor one",
+      "mixed CRLF and lone CR",
+      "all three line breaks mixed",
+      "CRLF immediately before an anchor heading",
+      "lone CR immediately before an anchor heading",
+      "consecutive LF blank lines",
+      "consecutive CRLF blank lines",
+      "consecutive lone CR blank lines",
+      "leading LF blank line and trailing CRLF",
+      "leading lone CR blank line, no trailing newline",
+      "empty body between two anchors",
+      "U+2028 and U+2029 are not line breaks",
+    ]);
 
     for (const row of LINE_BREAK_ROWS) {
       expect(row.breaks.length).toBe(documentLinesFor(row).length - 1);
@@ -139,8 +158,37 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
     // Deriving from the table under test is circular since a regression that
     // duplicates a mixed row would keep the count self-consistent.
     expect(mixedRowCount).toBe(7);
-    expect(LINE_BREAK_ROWS.some((row) => row.trailing !== undefined)).toBe(true);
-    expect(LINE_BREAK_ROWS.some((row) => row.trailing === undefined)).toBe(true);
+
+    const TRAILING: Record<string, "\n" | "\r\n" | "\r" | undefined> = {
+      "LF only": "\n",
+      "CRLF only": "\r\n",
+      "lone CR only": "\r",
+      "mixed LF and CRLF": "\n",
+      "mixed LF and lone CR before anchor one": undefined,
+      "mixed CRLF and lone CR": "\r\n",
+      "all three line breaks mixed": "\r",
+      "CRLF immediately before an anchor heading": "\n",
+      "lone CR immediately before an anchor heading": "\n",
+      "consecutive LF blank lines": "\n",
+      "consecutive CRLF blank lines": "\r\n",
+      "consecutive lone CR blank lines": "\r",
+      "leading LF blank line and trailing CRLF": "\r\n",
+      "leading lone CR blank line, no trailing newline": undefined,
+      "empty body between two anchors": undefined,
+      "U+2028 and U+2029 are not line breaks": undefined,
+    };
+    for (const row of LINE_BREAK_ROWS) {
+      const expected = TRAILING[row.name];
+      expect(row.trailing).toBe(expected);
+      if (expected !== undefined) {
+        expect(textFor(row).endsWith(expected)).toBe(true);
+      } else {
+        expect(textFor(row).endsWith("\n")).toBe(false);
+        expect(textFor(row).endsWith("\r")).toBe(false);
+      }
+    }
+    expect(LINE_BREAK_ROWS.filter((r) => r.trailing !== undefined).length).toBe(12);
+    expect(LINE_BREAK_ROWS.filter((r) => r.trailing === undefined).length).toBe(4);
 
     const MIXED_ROW_NAMES: readonly string[] = [
       "mixed LF and CRLF",
@@ -156,6 +204,8 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       const breakKinds = new Set(row.breaks);
       expect(breakKinds.size).toBeGreaterThanOrEqual(2);
     }
+    expect(MIXED_ROW_NAMES.length).toBe(7);
+    expect(new Set(MIXED_ROW_NAMES)).toEqual(new Set(LINE_BREAK_ROWS.filter((r) => new Set(r.breaks).size >= 2).map((r) => r.name)));
 
     // Census: verify that for the rows whose names claim a specific break
     // before anchor one, the produced text actually has that break.
@@ -168,7 +218,7 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       for (let i = 0; i < LINE_BREAK_ROWS.length; i++) {
         const row = LINE_BREAK_ROWS[i];
         const at = texts[i].indexOf(atNew);
-        if (at < 0) continue;
+        expect(at).toBeGreaterThanOrEqual(0);
         if (row.name === "mixed LF and lone CR before anchor one") {
           expect(texts[i].at(at - 1)).toBe("\r");
           expect(texts[i].at(at - 2)).not.toBe("\r");
@@ -188,18 +238,32 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
     {
       const texts = LINE_BREAK_ROWS.map(textFor);
       const atNew = anchor("one");
-      let seenLoneCR = false, seenCRLF = false, seenLF = false;
+      let loneCR = 0, crlf = 0, lf = 0;
       for (let i = 0; i < LINE_BREAK_ROWS.length; i++) {
         const at = texts[i].indexOf(atNew);
-        if (at < 0) continue;
+        expect(at).toBeGreaterThanOrEqual(0);
         const c = texts[i].at(at - 1);
-        if (c === "\r" && texts[i].at(at - 2) !== "\r") seenLoneCR = true;
-        if (c === "\n" && texts[i].at(at - 2) === "\r") seenCRLF = true;
-        if (c === "\n" && texts[i].at(at - 2) !== "\r") seenLF = true;
+        if (c === "\n" && texts[i].at(at - 2) === "\r") crlf++;
+        else if (c === "\n") lf++;
+        else if (c === "\r") loneCR++;
       }
-      expect(seenLoneCR).toBe(true);
-      expect(seenCRLF).toBe(true);
-      expect(seenLF).toBe(true);
+      expect(loneCR).toBe(5);
+      expect(crlf).toBe(5);
+      expect(lf).toBe(6);
+    }
+
+    // U+2028 / U+2029 are not real line breaks
+    {
+      const u2028row = LINE_BREAK_ROWS.find((r) => r.name === "U+2028 and U+2029 are not line breaks")!;
+      const u2028text = textFor(u2028row);
+      expect(u2028text).toContain("\u2028");
+      expect(u2028text).toContain("\u2029");
+      const doc = EditorState.create({ doc: u2028text }).doc;
+      for (let i = 1; i <= doc.lines; i++) {
+        if (doc.line(i).text.includes("\u2028")) {
+          expect(doc.line(i).text).toBe("first\u2028second");
+        }
+      }
     }
   });
 
@@ -212,10 +276,9 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       expect(parsed.sourceText).toBe(document.toString());
       expect(parsed.sections.length).toBe(2);
 
-      
       for (const section of parsed.sections) {
         const label = section.fragment.includes("/6/4") ? "one" : "two";
-        
+
         expect(document.line(section.headingLine + 1).text).toBe(anchor(label));
         expect(section.bodyRange.start).toBe(section.headingLine);
         expect(section.bodyRange.end).toBeLessThan(document.lines);
