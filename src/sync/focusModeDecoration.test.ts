@@ -111,6 +111,21 @@ describe("focus-mode CM6 decoration", () => {
     expect(foldedWidgets(view)).toEqual([]);
   });
 
+  it("splits focus widgets at a stale null-range section between two live foldable ones", () => {
+    view = createView();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    // Four sections: s0 (live, ch0), s1 (stale, ch1, null range in NOTE), s2 (live, ch2), s3 (live, ch3, current)
+    setFocusModeDecoration(editor, true);
+    setFocusSectionsDecoration(
+      editor,
+      [section(0, 1, 0), section(7, 8, 1), section(5, 6, 2), section(6, 7, 3)],
+      section(6, 7, 3),
+    );
+
+    expect(foldedWidgets(view)).toHaveLength(2);
+    expect(view.state.doc.toString()).toBe(NOTE);
+  });
+
   it("seeds a first controller toggle from live pairing state", async () => {
     view = createView();
     const controller = new FocusModeController();

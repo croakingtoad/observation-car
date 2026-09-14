@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BookNote, BookNoteSection } from "../model/bookNote";
 import { parseFragment } from "../model/anchor";
 import { FocusModeController } from "./focusMode";
-import { focusModeViewPlugin } from "./focusModeDecoration";
+import { focusModeViewPlugin, isFocusModeDecorationEnabled } from "./focusModeDecoration";
 import { DEFAULT_LOCATION_DEBOUNCE_MS } from "../readers/epubLocation";
 import type { Reader, ReaderPairing } from "./ReaderRegistry";
 import {
@@ -316,6 +316,34 @@ describe("ScrollSync", () => {
       rig.editor,
       expect.objectContaining({ headingLine: 6 }),
     );
+  });
+
+  it("disables focus mode decoration when the pairing is lost mid-session", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const { editor, view } = focusEditor();
+    rig.currentEditor = editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(
+        editor,
+        rig.pairing?.bookNote.sections ?? [],
+        rig.sync.getCurrentSection(editor),
+      );
+      expect(isFocusModeDecorationEnabled(editor)).toBe(true);
+
+      rig.pairing = undefined;
+      rig.reader.emit(CFI_2);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      expect(isFocusModeDecorationEnabled(editor)).toBe(false);
+      expect(view.state.doc.toString()).toBe(FOCUS_NOTE);
+    } finally {
+      view.destroy();
+    }
   });
 
   it("re-folds without another press after paging before the first anchor", () => {

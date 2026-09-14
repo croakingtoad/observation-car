@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import {
   MarkdownView,
   TFile,
@@ -21,6 +22,9 @@ import {
   ScrollSync,
   type LocationChanged,
 } from "./sync/scrollSync";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { focusModeViewPlugin, setFocusModeDecoration, setFocusSectionsDecoration } from "./sync/focusModeDecoration";
 
 const noticeMessages = vi.hoisted((): string[] => []);
 
@@ -1816,14 +1820,12 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([]);
   });
 
-  it("focuses a mixed note with both CFI and spine-href sections", async () => {
-    fake.linkDests.set("mixed.epub", "Books/Mixed.epub");
-    const book = addBookFile("Books/Mixed.epub");
-    const noteFile = addMdFile("Reading/Mixed.md", '---\ntype: book-note\nsource: "[[Books/Mixed.epub]]"\nformat: epub\n---\n\n## [[Books/Mixed.epub#epubcfi(/6/8!/4/2/1:0)|Cfi Ch. 1]]\ncfi body\n\n## [[Books/Mixed.epub#text/chapter2.xhtml|Href Ch. 2]]\nhref body', {
-      type: "book-note",
-      source: "[[Books/Mixed.epub]]",
-      format: "epub",
-    });
+  it("does not emit spine-href Notice for a zero-section paired note", async () => {
+    fake.linkDests.set("empty.epub", "Books/Empty.epub");
+    const book = addBookFile("Books/Empty.epub");
+    const noteFile = addMdFile("Reading/Empty.md", '---\ntype: book-note\nsource: "[[Books/Empty.epub]]"\nformat: epub\n---\n\nJust prose, no heading anchors.',
+      { type: "book-note", source: "[[Books/Empty.epub]]", format: "epub" },
+    );
     fire("metadata", "changed", [noteFile]);
     await settle();
 
@@ -1842,6 +1844,50 @@ describe("plugin wiring (substituted obsidian module)", () => {
     plugin.toggleFocusMode();
 
     expect(noticeMessages).toEqual([]);
+  });
+
+  it("focuses a mixed note with both CFI and spine-href sections — Item 5 fence", () => {
+    const docText = [
+      "## Cfi Ch. 0",
+      "cfi body 0",
+      "## Href Ch. 1",
+      "href body 1",
+      "## Cfi Ch. 2",
+      "cfi body 2",
+    ].join("\n");
+    const cmView = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: docText,
+        extensions: [focusModeViewPlugin],
+      }),
+    });
+    const editor = {
+      cm: cmView,
+      lineCount: () => cmView.state.doc.lines,
+      scrollIntoView: vi.fn(),
+    };
+
+    try {
+      setFocusModeDecoration(editor, true);
+      setFocusSectionsDecoration(
+        editor,
+        [
+{ headingLine: 0, bodyRange: { start: 0, end: 1 }, fragment: "epubcfi(/6/2!/4/2/1:0)", position: { kind: "epub-cfi" as const, cfi: "/6/2!/4/2/1:0" }, chapter: 0 },
+{ headingLine: 2, bodyRange: { start: 2, end: 3 }, fragment: "text/chapter1.xhtml", position: { kind: "epub-spine" as const, href: "text/chapter1.xhtml" }, chapter: null },
+{ headingLine: 4, bodyRange: { start: 4, end: 5 }, fragment: "epubcfi(/6/6!/4/2/1:0)", position: { kind: "epub-cfi" as const, cfi: "/6/6!/4/2/1:0" }, chapter: 2 },
+        ],
+        { headingLine: 4, bodyRange: { start: 4, end: 5 }, fragment: "epubcfi(/6/6!/4/2/1:0)", position: { kind: "epub-cfi" as const, cfi: "/6/6!/4/2/1:0" }, chapter: 2 },
+      );
+
+      expect(cmView.dom.querySelectorAll(".oc-focus-fold")).toHaveLength(1);
+      expect(
+        cmView.dom.querySelector(".oc-focus-fold")?.textContent,
+      ).toBe("2 sections in other chapters folded");
+      expect(cmView.state.doc.toString()).toBe(docText);
+    } finally {
+      cmView.destroy();
+    }
   });
 
   it("seeds focus mode on first toggle from the live reader location", async () => {

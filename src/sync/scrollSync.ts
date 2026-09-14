@@ -187,6 +187,7 @@ export class ScrollSync {
       pairing.bookNote.sections,
       position,
     );
+    // Do not call reset() here — focus mode must stay enabled through a no-match location so a subsequent match resumes folding.
     if (section === undefined) {
       const current = this.currentSection.get(pending.leaf);
       const editor = current?.editor.deref();
