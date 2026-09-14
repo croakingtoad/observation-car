@@ -1846,6 +1846,34 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([]);
   });
 
+  it("focuses a mixed note with both CFI and spine-href sections", async () => {
+    fake.linkDests.set("mixed.epub", "Books/Mixed.epub");
+    const book = addBookFile("Books/Mixed.epub");
+    const noteFile = addMdFile("Reading/Mixed.md", '---\ntype: book-note\nsource: "[[Books/Mixed.epub]]"\nformat: epub\n---\n\n## [[Books/Mixed.epub#epubcfi(/6/8!/4/2/1:0)|Cfi Ch. 1]]\ncfi body\n\n## [[Books/Mixed.epub#text/chapter2.xhtml|Href Ch. 2]]\nhref body', {
+      type: "book-note",
+      source: "[[Books/Mixed.epub]]",
+      format: "epub",
+    });
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const markdownView = new MarkdownViewDouble(
+      noteFile,
+      {
+        hasFocus: () => true,
+        getViewType: () => "markdown",
+        lineCount: () => 20,
+        scrollIntoView: vi.fn(),
+      },
+    );
+    fake.leaves.add({ view: markdownView });
+    openEpubReader(book);
+    noticeMessages.length = 0;
+    plugin.toggleFocusMode();
+
+    expect(noticeMessages).toEqual([]);
+  });
+
   it("focuses a mixed note with both CFI and spine-href sections — Item 5 fence", () => {
     const docText = [
       "## Cfi Ch. 0",
