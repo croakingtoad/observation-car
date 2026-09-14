@@ -582,9 +582,11 @@ export class EpubView extends FileView {
     this.restoringFile = file;
     let generation = this.renderGeneration;
     try {
-      if (!this.ownsReaderChange(file, generation)) {
-        return;
-      }
+      // The owner finally clears first; each waiter re-tests, then reads file/mode/CFI,
+      // captures generation in apply, and claims readerChange without awaiting, so
+      // ownership cannot move here and later waiters loop. This pre-write check could
+      // not stop a file swap during the awaited persist; harmless because this per-book
+      // choice remains the departed book's requested mode and renders when it reopens.
       await this.host.setEpubStylesheetMode(file.path, mode);
       if (!this.ownsReaderChange(file, generation)) {
         return;
@@ -678,9 +680,10 @@ export class EpubView extends FileView {
     this.restoringFile = file;
     let generation = this.renderGeneration;
     try {
-      if (!this.ownsReaderChange(file, generation)) {
-        return;
-      }
+      // The while-gate has the same atomic claim ordering described above, so file and
+      // generation cannot move here. A pre-write check could not stop a file swap during
+      // awaited updateSettings; harmless because it mutates settings synchronously, so
+      // the replacement book's render converges on the new value.
       await this.host.updateSettings({ epubFlowMode: mode });
       if (!this.ownsReaderChange(file, generation)) {
         return;
