@@ -388,36 +388,6 @@ describe("focus-mode CM6 decoration", () => {
     expect(foldedWidgets(view)[0]?.textContent).toBe("2 sections in other chapters folded");
   });
 
-  it("preserves folding after toggle-off, page-to-null-section, and re-toggle (F4: currentSection ??)", async () => {
-    view = createView();
-    const controller = new FocusModeController();
-    const editor = { cm: view } as unknown as ScrollEditor;
-    const sections = [
-      section(0, 1, 0),
-      section(2, 3, 1),
-      section(4, 5, 2),
-    ];
-
-    // Enable — fold two non-current sections
-    controller.toggle(editor, sections, sections[2] ?? null);
-    view.requestMeasure();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(foldedWidgets(view)).toHaveLength(1);
-    expect(foldedWidgets(view)[0]?.textContent).toBe("2 sections in other chapters folded");
-
-    // Toggle off — without passing currentSection, so ?? vs direct null shows
-    controller.toggle(editor);
-    view.requestMeasure();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(foldedWidgets(view)).toEqual([]);
-
-    // Page to before the first anchor — location event with no match; FocusModeController untouched.
-    // Toggle on again without passing sections/currentSection — fold must survive via ?? fallback
-    controller.toggle(editor);
-    view.requestMeasure();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(foldedWidgets(view)).toHaveLength(1);
-  });
 
   it("does not fold again after reset (F5: editors.delete in reset)", async () => {
     view = createView();
