@@ -192,6 +192,7 @@ describe("EpubNavigationTools — rendition event wiring", () => {
     const { emit } = await makeTools(tracker);
 
     emit("selected", CFI_RANGE, makeContents({ text: "quoted words" }));
+    await flush();
 
     expect(tracker.getSelection()).toEqual({
       text: "quoted words",
@@ -216,6 +217,7 @@ describe("EpubNavigationTools — rendition event wiring", () => {
 
     emit("rendered", undefined, contents);
     emit("selected", CFI_RANGE, contents);
+    await flush();
     expect(tracker.getSelection()).not.toBeNull();
 
     contents.state.collapsed = true;
@@ -228,6 +230,7 @@ describe("EpubNavigationTools — rendition event wiring", () => {
     const tracker = new EpubSelectionTracker();
     const { emit } = await makeTools(tracker);
     emit("selected", CFI_RANGE, makeContents({ text: "quoted words" }));
+    await flush();
     expect(tracker.getSelection()).not.toBeNull();
 
     emit("rendered", undefined, makeContents());

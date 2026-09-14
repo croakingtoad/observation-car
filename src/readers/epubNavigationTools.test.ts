@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Book, Rendition } from "epubjs";
+import type { Contents } from "epubjs";
 import {
   EpubKeyBridge,
   EpubNavigationTools,
@@ -33,6 +34,12 @@ function makeRendition() {
     next: vi.fn(),
     display: vi.fn(),
     destroy: vi.fn(),
+    off: vi.fn((event: string, handler: AnyHandler) => {
+      handlers.set(
+        event,
+        (handlers.get(event) ?? []).filter((registered) => registered !== handler),
+      );
+    }),
     themes: { register: vi.fn(), select: vi.fn(), override: vi.fn() },
     location: null,
     handlers,
@@ -40,6 +47,17 @@ function makeRendition() {
 }
 
 type RenderedHandler = Parameters<EpubKeyBridgeRendition["on"]>[1];
+
+function countListeners(
+  document: Document,
+  type: string,
+  implForWrapper: (
+    wrapper: unknown,
+  ) => { _eventListeners?: Record<string, Array<{ callback: unknown }>> },
+): number {
+  const documentImpl = implForWrapper(document);
+  return documentImpl._eventListeners?.[type]?.length ?? 0;
+}
 
 class FakeRendition implements EpubKeyBridgeRendition {
   readonly prev = vi.fn(async (): Promise<void> => undefined);
@@ -305,6 +323,12 @@ function makeTools(overrides: {
   const viewerEl = document.createElement("div");
   const book = makeBook(overrides);
   const rendition = makeRendition();
+  const beforeRendition = Object.fromEntries(
+    ["relocated", "resized", "rendered", "selected"].map((event) => [
+      event,
+      rendition.handlers.get(event)?.length ?? 0,
+    ]),
+  );
   const tools = new EpubNavigationTools(
     viewerEl,
     "library/book.epub",
@@ -312,7 +336,16 @@ function makeTools(overrides: {
     rendition as unknown as Rendition,
     new EpubSelectionTracker(),
   );
-  return { viewerEl, book, rendition, tools };
+  return { viewerEl, book, rendition, tools, beforeRendition };
+}
+
+async function waitForSelectionListener(
+  rendition: ReturnType<typeof makeRendition>,
+): Promise<void> {
+  await vi.waitFor(() => {
+    expect(rendition.handlers.get("selected")).toHaveLength(1);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /**
@@ -327,10 +360,20 @@ function fireSelection(rendition: ReturnType<typeof makeRendition>): void {
     }),
     toString: () => SELECTION_TEXT,
   };
-  rendition.fire("selected", SELECTION_CFI, {
+  const contents = {
     window: { getSelection: () => selection },
-    document: { defaultView: null },
-  });
+    document: {
+      defaultView: {
+        frameElement: {
+          getBoundingClientRect: () => ({
+            left: 10,
+            top: 10,
+          }),
+        },
+      },
+    },
+  } as unknown as Contents;
+  rendition.fire("selected", SELECTION_CFI, contents);
 }
 
 let writeText: ReturnType<typeof vi.fn>;
@@ -391,10 +434,9 @@ describe("EpubNavigationTools clipboard copy (Tier 2 finding 3)", () => {
 
   it("copies the selection link and flashes the popup button on success", async () => {
     const { viewerEl, rendition } = makeTools();
-    await vi.waitFor(() => {
-      expect(rendition.handlers.get("selected")).toBeDefined();
-    });
+    await waitForSelectionListener(rendition);
     fireSelection(rendition);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const cfiBtn = viewerEl.querySelector(".epub-cfi-copy") as HTMLButtonElement;
     cfiBtn.click();
@@ -409,10 +451,9 @@ describe("EpubNavigationTools clipboard copy (Tier 2 finding 3)", () => {
   it("shows the failure state on the popup button when the write is rejected", async () => {
     writeText.mockRejectedValue(new DOMException("denied", "NotAllowedError"));
     const { viewerEl, rendition } = makeTools();
-    await vi.waitFor(() => {
-      expect(rendition.handlers.get("selected")).toBeDefined();
-    });
+    await waitForSelectionListener(rendition);
     fireSelection(rendition);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const cfiBtn = viewerEl.querySelector(".epub-cfi-copy") as HTMLButtonElement;
     cfiBtn.click();
@@ -423,10 +464,9 @@ describe("EpubNavigationTools clipboard copy (Tier 2 finding 3)", () => {
 
   it("copies the quote plus link from the popup", async () => {
     const { viewerEl, rendition } = makeTools();
-    await vi.waitFor(() => {
-      expect(rendition.handlers.get("selected")).toBeDefined();
-    });
+    await waitForSelectionListener(rendition);
     fireSelection(rendition);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const quoteBtn = viewerEl.querySelector(".epub-cfi-quote") as HTMLButtonElement;
     quoteBtn.click();
@@ -471,3 +511,128 @@ describe("EpubNavigationTools setup failures (Tier 2 finding 3)", () => {
     expect(rendition.handlers.get("selected")).toBeUndefined();
   });
 });
+
+
+describe("EpubNavigationTools teardown", () => {
+  it("removes every rendition listener the class registered", async () => {
+    const { rendition, tools, beforeRendition } = makeTools();
+
+    await waitForSelectionListener(rendition);
+
+    tools.destroy();
+
+    for (const [event, count] of Object.entries(beforeRendition)) {
+      expect(rendition.handlers.get(event)?.length).toBe(count);
+    }
+  });
+
+  it("removes per-iframe listeners from every rendered document", async () => {
+    const implForWrapper = await loadImplForWrapper();
+    const { rendition, tools } = makeTools();
+    await waitForSelectionListener(rendition);
+    tools.destroy();
+    const first = document.implementation.createHTMLDocument("first");
+    const second = document.implementation.createHTMLDocument("second");
+    first.documentElement.append(first.createElement("body"));
+    second.documentElement.append(second.createElement("body"));
+    const before = [first, second].map((document) => ({
+      selectionchange: countListeners(document, "selectionchange", implForWrapper),
+      mousedown: countListeners(document, "mousedown", implForWrapper),
+    }));
+
+    const renderedFirst = first as unknown as Contents & { document: Document };
+    const renderedSecond = second as unknown as Contents & { document: Document };
+    rendition.fire("rendered", {}, renderedFirst);
+    rendition.fire("rendered", {}, renderedSecond);
+
+    [first, second].forEach((document, index) => {
+      expect(countListeners(document, "selectionchange", implForWrapper)).toBe(
+        before[index].selectionchange,
+      );
+      expect(countListeners(document, "mousedown", implForWrapper)).toBe(
+        before[index].mousedown,
+      );
+    });
+  });
+
+  it("removes pre-rendered iframe listeners when destroyed", async () => {
+    const implForWrapper = await loadImplForWrapper();
+    const { rendition, tools } = makeTools();
+    await waitForSelectionListener(rendition);
+    const first = document.implementation.createHTMLDocument("first");
+    const second = document.implementation.createHTMLDocument("second");
+    first.documentElement.append(first.createElement("body"));
+    second.documentElement.append(second.createElement("body"));
+
+    rendition.fire(
+      "rendered",
+      {},
+      { document: first } as unknown as Contents,
+    );
+    rendition.fire(
+      "rendered",
+      {},
+      { document: second } as unknown as Contents,
+    );
+    tools.destroy();
+
+    for (const renderedDocument of [first, second]) {
+      expect(
+        countListeners(renderedDocument, "selectionchange", implForWrapper),
+      ).toBe(0);
+      expect(countListeners(renderedDocument, "mousedown", implForWrapper)).toBe(
+        0,
+      );
+    }
+  });
+
+  it("is idempotent", () => {
+    const { rendition, tools } = makeTools();
+    tools.destroy();
+    const afterFirst = new Map(
+      [...rendition.handlers].map(([event, handlers]) => [event, [...handlers]]),
+    );
+
+    expect(() => tools.destroy()).not.toThrow();
+
+    for (const [event, handlers] of afterFirst) {
+      expect(rendition.handlers.get(event)).toEqual(handlers);
+    }
+  });
+
+  it("ignores rendered and selected events delivered after destroy", async () => {
+    const implForWrapper = await loadImplForWrapper();
+    const { rendition, tools, viewerEl } = makeTools();
+    tools.destroy();
+    const renderedDocument = document.implementation.createHTMLDocument("late");
+    renderedDocument.documentElement.append(renderedDocument.createElement("body"));
+
+    expect(() => rendition.fire("rendered", {}, renderedDocument)).not.toThrow();
+    expect(countListeners(renderedDocument, "selectionchange", implForWrapper)).toBe(0);
+
+    fireSelection(rendition);
+    const firstDocument = document.implementation.createHTMLDocument("late-1");
+    firstDocument.documentElement.append(firstDocument.createElement("body"));
+    rendition.fire("rendered", {}, { document: firstDocument } as unknown as Contents);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    fireSelection(rendition);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-cfi-popup")?.classList.contains("open")).toBe(false);
+    });
+  });
+});
+
+type JsdDocumentImpl = {
+  _eventListeners?: Record<string, Array<{ callback: unknown }>>;
+};
+
+async function loadImplForWrapper(): Promise<(wrapper: unknown) => JsdDocumentImpl> {
+  const utilsModule = await import("jsdom/lib/generated/idl/utils.js" as string);
+  const utils = (utilsModule.default ?? utilsModule) as unknown as {
+    implForWrapper: (wrapper: unknown) => JsdDocumentImpl;
+  };
+  return utils.implForWrapper;
+}
