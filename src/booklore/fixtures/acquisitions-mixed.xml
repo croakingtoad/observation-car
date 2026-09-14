@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Fixture: acquisitions-mixed — acquisition feed with an EPUB-only entry,
+  a PDF-only entry, a dual-format entry carrying a cover and a thumbnail,
+  and an entry with no authors.
+  SPEC-DERIVED: hand-authored from OPDS 1.2 (catalog module) and Atom
+  (RFC 4287); not captured from a live Booklore instance. LOCO-101
+  surveyed all 68 books in the live library and found no book carrying
+  more than one format, so the dual-format case has no live equivalent.
+  Kept for the both-formats path (PRD F5.4); its single-format entries are
+  superseded by the live-captured fixtures in this directory.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>urn:uuid:1f2e3d4c-all-books</id>
+  <title>All Books</title>
+  <updated>2026-09-02T10:00:00Z</updated>
+  <entry>
+    <id>urn:uuid:aa11bb22-epub-only</id>
+    <title>The Lighthouse at the End</title>
+    <author><name>Mara Voss</name></author>
+    <updated>2026-09-02T10:00:00Z</updated>
+    <summary type="html"><p>A keeper, a storm, and a light that should not exist.</p></summary>
+    <category term="Mystery"/>
+    <link rel="http://opds-spec.org/acquisition/open-access" type="application/epub+zip" href="/api/v1/opds/download/201.epub"/>
+  </entry>
+  <entry>
+    <id>urn:uuid:cc33dd44-pdf-only</id>
+    <title>Field Notes on Gravity</title>
+    <author><name>Dr. Ione Whitfield</name></author>
+    <updated>2026-08-21T15:45:00Z</updated>
+    <category term="Science"/>
+    <link rel="http://opds-spec.org/acquisition" type="application/pdf" href="download/202.pdf"/>
+  </entry>
+  <entry>
+    <id>urn:uuid:ee55ff66-both-formats</id>
+    <title>Maps of Elsewhere</title>
+    <author><name>J. T. Marlowe</name></author>
+    <updated>2026-07-14T09:12:00Z</updated>
+    <summary type="html"><p>An atlas of places that moved.</p></summary>
+    <category term="Fantasy"/>
+    <category term="Novel"/>
+    <link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="/api/v1/opds/download/203.epub"/>
+    <link rel="http://opds-spec.org/acquisition/buy" type="application/pdf" href="https://store.example.com/pay?item=203"/>
+    <link rel="http://opds-spec.org/image" type="image/jpeg" href="/api/v1/covers/203.jpg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" type="image/jpeg" href="/api/v1/covers/203-thumb.jpg"/>
+  </entry>
+  <entry>
+    <id>urn:uuid:99aa88bb-no-authors</id>
+    <title>Anonymous Broadsides</title>
+    <updated>2026-06-30T12:00:00Z</updated>
+    <link rel="http://opds-spec.org/acquisition/open-access" type="application/epub+zip" href="/api/v1/opds/download/204.epub"/>
+  </entry>
+</feed>

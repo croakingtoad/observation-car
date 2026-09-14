@@ -1,0 +1,12 @@
+<!--
+  Fixture: auth-401 — the plain-text body of the HTTP 401 response
+  Booklore returns for a Basic Auth request with a wrong password
+  (not XML). Used by the client's auth error path.
+  LIVE CAPTURE (LOCO-101, 2026-09-12 UTC): fetched from a real
+  Booklore instance.
+  Request: GET /api/v1/opds with OPDS Basic Auth; the password was
+  wrong on purpose and is redacted from every record of this capture.
+  Redaction: the instance host (a tailnet address) was substituted
+  with booklore.example; the body itself carries no host string.
+-->
+HTTP Status 401 - Bad credentials

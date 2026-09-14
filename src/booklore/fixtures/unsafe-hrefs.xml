@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>urn:booklore:unsafe-hrefs</id>
+  <title>Unsafe href probes</title>
+  <entry>
+    <id>urn:booklore:book:javascript</id>
+    <title>JavaScript hrefs</title>
+    <link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="javascript:alert(1)" />
+    <link rel="http://opds-spec.org/image" type="image/jpeg" href="javascript:alert(2)" />
+  </entry>
+  <entry>
+    <id>urn:booklore:book:data</id>
+    <title>Data hrefs</title>
+    <link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="data:application/epub+zip,unsafe" />
+    <link rel="http://opds-spec.org/image" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%3E%3C/svg%3E" />
+  </entry>
+  <entry>
+    <id>urn:booklore:book:safe</id>
+    <title>HTTP hrefs</title>
+    <link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="/api/v1/opds/books/3.epub" />
+    <link rel="http://opds-spec.org/image" type="image/jpeg" href="http://booklore.example/covers/3.jpg" />
+  </entry>
+</feed>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fixture: nav-libraries — a navigation feed one level below the root,
+  with a single entry whose title carries an &apos; entity.
+  LIVE CAPTURE (LOCO-101, 2026-09-12 UTC): verbatim response from a real
+  Booklore instance (the requester's self-hosted library), fetched over
+  OPDS Basic Auth.
+  Request: GET /api/v1/opds/libraries
+  Redaction: the instance host (a tailnet address) was substituted with
+  booklore.example. Booklore serves only site-relative hrefs, so no host
+  string appears in the body — substitution verified at capture.
+--><feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>urn:booklore:navigation:libraries</id>
+  <title>Libraries</title>
+  <updated>2026-09-12T01:18:34.959461551Z</updated>
+  <link rel="self" href="/api/v1/opds/libraries" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start" href="/api/v1/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="search" type="application/opensearchdescription+xml" title="Search" href="/api/v1/opds/search.opds"/>
+  <entry>
+    <title>Marty&apos;s Library</title>
+    <id>urn:booklore:library:1</id>
+    <updated>2026-09-12T01:18:34.959489094Z</updated>
+    <link rel="subsection" href="/api/v1/opds/catalog?libraryId=1" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <content type="text">Marty&apos;s Library</content>
+  </entry>
+</feed>

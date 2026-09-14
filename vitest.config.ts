@@ -4,12 +4,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
-      // The `obsidian` npm package ships types only (`main: ""` — the API
-      // is provided by the Obsidian app at runtime), so Vite cannot
-      // resolve the bare import; unit tests get the runtime stand-in.
-      obsidian: fileURLToPath(
-        new URL("./src/test/obsidian-mock.ts", import.meta.url),
-      ),
+      // The `obsidian` npm package is types-only (the app provides the
+      // real module at runtime), so Vite cannot resolve it; point it at a
+      // loud-failure stub and let tests inject their own fakes.
+      obsidian: fileURLToPath(new URL("./src/test/obsidian-stub.ts", import.meta.url)),
     },
   },
   test: {

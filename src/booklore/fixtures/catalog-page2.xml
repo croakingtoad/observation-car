@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fixture: catalog-page2 — second page of the same feed (size=3).
+  The back link uses rel="previous" (not rel="prev"). One entry carries a
+  <summary> whose HTML is escaped into the text (&lt;p&gt;…&lt;/p&gt;), and
+  the author strings mix "Surname, Given" and "Given Surname" spellings
+  for the same person in the source library.
+  LIVE CAPTURE (LOCO-101, 2026-09-12 UTC): verbatim response from a real
+  Booklore instance (the requester's self-hosted library), fetched over
+  OPDS Basic Auth.
+  Request: GET /api/v1/opds/catalog?page=2&size=3
+  Redaction: the instance host (a tailnet address) was substituted with
+  booklore.example. Booklore serves only site-relative hrefs, so no host
+  string appears in the body — substitution verified at capture.
+--><feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/terms/" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <id>urn:booklore:catalog</id>
+  <title>Booklore Catalog</title>
+  <updated>2026-09-12T01:18:35.264565879Z</updated>
+  <opensearch:totalResults>68</opensearch:totalResults>
+  <opensearch:startIndex>4</opensearch:startIndex>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
+  <link rel="self" href="/api/v1/opds/catalog?page=2&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="start" href="/api/v1/opds" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="search" type="application/opensearchdescription+xml" title="Search" href="/api/v1/opds/search.opds"/>
+  <link rel="first" href="/api/v1/opds/catalog?page=1&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="previous" href="/api/v1/opds/catalog?page=1&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="next" href="/api/v1/opds/catalog?page=3&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="last" href="/api/v1/opds/catalog?page=23&amp;size=3" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <entry>
+    <title>The Book of Forms</title>
+    <id>urn:booklore:book:89</id>
+    <updated>2026-09-02T18:59:09Z</updated>
+    <author><name>Lewis Turco</name></author>
+    <dc:publisher>University of New Mexico Press</dc:publisher>
+    <dc:language>en</dc:language>
+    <category term="Poetry"/>
+    <link href="/api/v1/opds/89/download?fileId=90" rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/89/cover?2026-09-02T18:59:09Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/89/cover?2026-09-02T18:59:09Z" type="image/jpeg"/>
+  </entry>
+  <entry>
+    <title>The Matter With Things: Our Brains, Our Delusions, and the Unmaking of the World</title>
+    <id>urn:booklore:book:88</id>
+    <updated>2026-06-26T05:00:00Z</updated>
+    <author><name>McGilchrist, Iain</name></author>
+    <dc:publisher>Perspectiva Press</dc:publisher>
+    <dc:language>en</dc:language>
+    <summary>&lt;p&gt;This book addresses some of the oldest and hardest questions humanity faces - ones that, however, have a practical urgency for all of us today. Who are we? What is the world? How can we understand consciousness, matter, space and time? Is the cosmos without purpose or value? Can we really neglect the sacred and divine? In doing so, he argues that we have become enslaved to an account of things dominated by the brain&apos;s left hemisphere, one that blinds us to an awe-inspiring reality that is all around us, had we but eyes to see it. He suggests that in order to understand ourselves and the world we need science and intuition, reason and imagination, not just one or two; that they are in any case far from being in conflict; and that the brain&apos;s right hemisphere plays the most important part in each. And he shows us how to recognise the signature of the left hemisphere in our thinking, so as to avoid making decisions that bring disaster in their wake. Following the paths of cutting-edge neurology, philosophy and physics, he reveals how each leads us to a similar vision of the world, one that is both profound and beautiful - and happens to be in line with the deepest traditions of human wisdom. It is a vision that returns the world to life, and us to a better way of living in it: one we must embrace if we are to survive.&lt;/p&gt;</summary>
+    <link href="/api/v1/opds/88/download?fileId=89" rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/88/cover?2026-06-26T05:00:00Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/88/cover?2026-06-26T05:00:00Z" type="image/jpeg"/>
+  </entry>
+  <entry>
+    <title>The Matter With Things: Our Brains, Our Delusions and the Unmaking of the World</title>
+    <id>urn:booklore:book:87</id>
+    <updated>2026-06-25T19:19:25Z</updated>
+    <author><name>Iain McGilchrist</name></author>
+    <dc:publisher>Perspectiva Press</dc:publisher>
+    <dc:language>en</dc:language>
+    <link href="/api/v1/opds/87/download?fileId=88" rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB"/>
+    <link rel="http://opds-spec.org/image" href="/api/v1/opds/87/cover?2026-06-25T19:20:10Z" type="image/jpeg"/>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/opds/87/cover?2026-06-25T19:20:10Z" type="image/jpeg"/>
+  </entry>
+</feed>
