@@ -45,11 +45,34 @@ interface EpubRenderedView {
   window: Window;
 }
 
-type RenderedContents = Pick<Contents, "document">;
+type EpubFrameElement = Element & Pick<HTMLIFrameElement, "contentDocument">;
+type RenderedContents = Pick<Contents, "document" | "window">;
 type RenderedHandler = (
   section: unknown,
   contents: RenderedContents,
 ) => void;
+
+function isEpubFrameElement(element: Element): element is EpubFrameElement {
+  return element.localName === "iframe" && "contentDocument" in element;
+}
+
+function captureFrameElement(view: EpubRenderedView): EpubFrameElement {
+  const frameElement = view.window.frameElement;
+  if (frameElement === null || !isEpubFrameElement(frameElement)) {
+    throw new Error("epub.js rendered contents without an iframe frame element");
+  }
+  return frameElement;
+}
+
+function isDiscardedView(
+  document: Document,
+  frameElement: EpubFrameElement,
+): boolean {
+  return (
+    frameElement.isConnected === false ||
+    frameElement.contentDocument !== document
+  );
+}
 
 export interface EpubKeyBridgeRendition {
   on(event: "rendered", handler: RenderedHandler): unknown;
@@ -72,15 +95,17 @@ function hasClosest(
  * cancels the relay, so browser-native actions such as copy run only once.
  */
 export class EpubKeyBridge {
-  private readonly documents = new Set<Document>();
+  private readonly documents = new Map<Document, EpubFrameElement>();
   private destroyed = false;
 
   private readonly onRendered: RenderedHandler = (_section, contents) => {
     if (this.destroyed) {
       return;
     }
+    const frameElement = captureFrameElement(contents);
+    this.pruneDiscardedDocuments();
     contents.document.addEventListener("keydown", this.onKeyDown);
-    this.documents.add(contents.document);
+    this.documents.set(contents.document, frameElement);
 
     // Keep focus on the iframe so page keys keep working.
     contents.document.body?.setAttribute("tabindex", "0");
@@ -145,10 +170,19 @@ export class EpubKeyBridge {
     }
     this.destroyed = true;
     this.rendition.off("rendered", this.onRendered);
-    for (const document of this.documents) {
+    for (const document of this.documents.keys()) {
       document.removeEventListener("keydown", this.onKeyDown);
     }
     this.documents.clear();
+  }
+
+  private pruneDiscardedDocuments(): void {
+    for (const [document, frameElement] of this.documents) {
+      if (isDiscardedView(document, frameElement)) {
+        document.removeEventListener("keydown", this.onKeyDown);
+        this.documents.delete(document);
+      }
+    }
   }
 
   private forwardToHost(event: KeyboardEvent): void {
@@ -449,7 +483,13 @@ export function addPagingListeners(
 
 type PagingListeners = {
   document: Document;
+  frameElement: EpubFrameElement;
   remove: () => void;
+};
+
+type DocumentListeners = {
+  frameElement: EpubFrameElement;
+  listeners: Map<string, Set<EventListener>>;
 };
 
 const FONT_SIZE_DEFAULT = 100;
@@ -570,10 +610,7 @@ export class EpubNavigationTools {
     this.actions?.onNewNote();
   };
   private bookTitle: Promise<string> | null = null;
-  private readonly documentListeners = new Map<
-    Document,
-    Map<string, Set<EventListener>>
-  >();
+  private readonly documentListeners = new Map<Document, DocumentListeners>();
   private readonly hostKeyListeners = new Set<{
     target: HTMLElement;
     type: string;
@@ -605,6 +642,7 @@ export class EpubNavigationTools {
       return;
     }
 
+    const frameElement = captureFrameElement(contents);
     this.pruneDiscardedViewListeners();
 
     // A rendered view has no selection yet. In particular, epub.js
@@ -619,7 +657,12 @@ export class EpubNavigationTools {
       this.onIframeSelectionChange(contents);
     };
     contents.document.addEventListener("selectionchange", selectionChangeHandler);
-    this.addDocumentListener(contents.document, "selectionchange", selectionChangeHandler);
+    this.addDocumentListener(
+      contents.document,
+      frameElement,
+      "selectionchange",
+      selectionChangeHandler,
+    );
 
     // Keep focus on the iframe so page keys keep working.
     (contents.document.body as HTMLElement).setAttribute("tabindex", "0");
@@ -634,18 +677,25 @@ export class EpubNavigationTools {
       return;
     }
 
+    const frameElement = captureFrameElement(contents);
     contents.document.addEventListener("mousedown", this.onDocumentMouseDown);
-    this.addDocumentListener(contents.document, "mousedown", this.onDocumentMouseDown);
+    this.addDocumentListener(
+      contents.document,
+      frameElement,
+      "mousedown",
+      this.onDocumentMouseDown,
+    );
   };
 
   private readonly onPageRendered = (
     _section: unknown,
-    view: { document: Document },
+    view: EpubRenderedView,
   ): void => {
     if (this.destroyed || this.flow?.mode !== "paginated") {
       return;
     }
 
+    const frameElement = captureFrameElement(view);
     this.pruneDiscardedViewListeners();
 
     const removePagingListeners = addPagingListeners(
@@ -660,6 +710,7 @@ export class EpubNavigationTools {
     );
     this.pagingListeners.add({
       document: view.document,
+      frameElement,
       remove: removePagingListeners,
     });
   };
@@ -728,8 +779,8 @@ export class EpubNavigationTools {
     this.rendition.off("rendered", this.onPageRendered);
     this.rendition.off("selected", this.onSelected);
 
-    for (const [document, listeners] of this.documentListeners) {
-      for (const [type, handlers] of listeners) {
+    for (const [document, viewListeners] of this.documentListeners) {
+      for (const [type, handlers] of viewListeners.listeners) {
         for (const handler of handlers) {
           document.removeEventListener(type, handler);
         }
@@ -744,21 +795,19 @@ export class EpubNavigationTools {
 
   private addDocumentListener(
     document: Document,
+    frameElement: EpubFrameElement,
     type: string,
     handler: EventListener,
   ): void {
-    const listeners = this.documentListeners.get(document) ?? new Map();
+    const listeners = this.documentListeners.get(document)?.listeners ?? new Map();
     listeners.set(type, (listeners.get(type) ?? new Set()).add(handler));
-    this.documentListeners.set(document, listeners);
+    this.documentListeners.set(document, { frameElement, listeners });
   }
 
   private pruneDiscardedViewListeners(): void {
-    const isDiscarded = (document: Document): boolean =>
-      document.defaultView?.frameElement?.isConnected === false;
-
-    for (const [document, listeners] of this.documentListeners) {
-      if (isDiscarded(document)) {
-        for (const [type, handlers] of listeners) {
+    for (const [document, viewListeners] of this.documentListeners) {
+      if (isDiscardedView(document, viewListeners.frameElement)) {
+        for (const [type, handlers] of viewListeners.listeners) {
           for (const handler of handlers) {
             document.removeEventListener(type, handler);
           }
@@ -768,7 +817,12 @@ export class EpubNavigationTools {
     }
 
     for (const pagingListener of this.pagingListeners) {
-      if (isDiscarded(pagingListener.document)) {
+      if (
+        isDiscardedView(
+          pagingListener.document,
+          pagingListener.frameElement,
+        )
+      ) {
         pagingListener.remove();
         this.pagingListeners.delete(pagingListener);
       }

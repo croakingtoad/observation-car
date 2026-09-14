@@ -76,9 +76,15 @@ async function buildViewer(
   });
 
   const renderContents = (): HTMLDocument => {
-    const contentsDocument = document.implementation.createHTMLDocument("contents");
+    const iframe = document.createElement("iframe");
+    viewerEl.appendChild(iframe);
+    const contentsDocument = iframe.contentDocument;
+    const contentsWindow = iframe.contentWindow;
+    if (contentsDocument === null || contentsWindow === null) {
+      throw new Error("jsdom did not create an iframe browsing context");
+    }
     for (const handler of eventHandlers["rendered"] ?? []) {
-      handler({}, { document: contentsDocument });
+      handler({}, { document: contentsDocument, window: contentsWindow });
     }
     return contentsDocument;
   };

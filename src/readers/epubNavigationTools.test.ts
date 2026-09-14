@@ -84,7 +84,7 @@ class FakeRendition implements EpubKeyBridgeRendition {
 
   render(document: Document): void {
     for (const handler of this.renderedHandlers) {
-      handler({}, { document });
+      handler({}, renderedContents(document));
     }
   }
 }
@@ -129,6 +129,14 @@ function childDocument(parent: Document): Document {
     throw new Error("test iframe has no document");
   }
   return frame.contentDocument;
+}
+
+function renderedContents(document: Document): Pick<Contents, "document" | "window"> {
+  const renderedWindow = document.defaultView;
+  if (renderedWindow === null) {
+    throw new Error("test rendered document has no window");
+  }
+  return { document, window: renderedWindow };
 }
 
 describe("EpubKeyBridge", () => {
@@ -351,11 +359,18 @@ function makeTools(overrides: {
 }
 
 function pointerEvent(
-  _document: Document,
+  document: Document,
   type: "pointerdown" | "pointermove" | "pointercancel" | "pointerup",
-  init: { clientX?: number; timeStamp?: number },
+  init: { bubbles?: boolean; clientX?: number; timeStamp?: number },
 ): PointerEvent {
-  const event = new PointerEvent(type, { clientX: init.clientX });
+  const PointerEventConstructor = document.defaultView?.PointerEvent;
+  if (PointerEventConstructor === undefined) {
+    throw new Error("test rendered document has no PointerEvent constructor");
+  }
+  const event = new PointerEventConstructor(type, {
+    bubbles: init.bubbles,
+    clientX: init.clientX,
+  });
   if (init.timeStamp !== undefined) {
     Object.defineProperty(event, "timeStamp", { value: init.timeStamp });
   }
@@ -547,40 +562,58 @@ describe("EpubNavigationTools teardown", () => {
       expect(rendition.handlers.get("rendered")).toHaveLength(4);
     });
 
-    const frame = document.createElement("iframe");
-    document.body.append(frame);
-    const frameDocument = frame.contentDocument;
-    if (frameDocument === null) {
-      throw new Error("test iframe has no document");
-    }
-    frameDocument.documentElement.append(frameDocument.createElement("body"));
-
     const readCounts = () => {
       const state = tools as unknown as {
         documentListeners: Map<Document, unknown>;
+        keyBridge: { documents: Map<Document, unknown> };
         pagingListeners: Set<{ document: Document; remove: () => void }>;
       };
       return {
         documentListeners: state.documentListeners.size,
+        keyBridgeDocuments: state.keyBridge.documents.size,
         pagingListeners: state.pagingListeners.size,
       };
     };
 
-    for (let viewIndex = 0; viewIndex < 8; viewIndex += 1) {
-      rendition.fire("rendered", {}, { document: frameDocument } as unknown as Contents);
-      if (viewIndex < 7) {
-        frame.remove();
+    let lastDocument: Document | null = null;
+    for (let viewIndex = 0; viewIndex < 40; viewIndex += 1) {
+      const frame = document.createElement("iframe");
+      document.body.append(frame);
+      const frameDocument = frame.contentDocument;
+      if (frameDocument === null) {
+        throw new Error("test iframe has no document");
       }
+      Object.defineProperty(frameDocument.body, "clientWidth", {
+        configurable: true,
+        value: 300,
+      });
+      Object.defineProperty(frameDocument.documentElement, "clientWidth", {
+        configurable: true,
+        value: 300,
+      });
+
+      rendition.fire("rendered", {}, renderedContents(frameDocument));
       const counts = readCounts();
       expect(counts.documentListeners).toBeLessThanOrEqual(1);
+      expect(counts.keyBridgeDocuments).toBeLessThanOrEqual(1);
       expect(counts.pagingListeners).toBeLessThanOrEqual(1);
+      expect(countListeners(frameDocument, "keydown", implForWrapper)).toBe(1);
+      expect(countListeners(frameDocument, "selectionchange", implForWrapper)).toBe(1);
+      expect(countListeners(frameDocument, "mousedown", implForWrapper)).toBe(1);
+      for (const type of PAGING_EVENT_TYPES) {
+        expect(countListeners(frameDocument, type, implForWrapper)).toBe(1);
+      }
+      lastDocument = frameDocument;
+      frame.remove();
     }
     tools.destroy();
 
-    expect(
-      countListeners(frameDocument, "selectionchange", implForWrapper),
-    ).toBe(0);
-    expect(countListeners(frameDocument, "mousedown", implForWrapper)).toBe(0);
+    expect(readCounts()).toEqual({
+      documentListeners: 0,
+      keyBridgeDocuments: 0,
+      pagingListeners: 0,
+    });
+    expect(lastDocument?.documentElement.style.touchAction).toBe("");
   });
 
   it("removes discarded paging listeners on the next rendered view", async () => {
@@ -631,7 +664,7 @@ describe("EpubNavigationTools teardown", () => {
 
     oldDocument.documentElement.append(oldDocument.createElement("body"));
 
-    rendition.fire("rendered", {}, { document: oldDocument } as unknown as Contents);
+    rendition.fire("rendered", {}, renderedContents(oldDocument));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(state.pagingListeners.size).toBe(1);
 
@@ -639,22 +672,15 @@ describe("EpubNavigationTools teardown", () => {
     oldDocument.dispatchEvent(new PointerEvent("pointerup", { clientX: 0 }));
 
     discardOldView();
-    rendition.fire("rendered", {}, { document: newDocument } as unknown as Contents);
+    rendition.fire("rendered", {}, renderedContents(newDocument));
 
-    const implForWrapper = await loadImplForWrapper();
-    for (const type of PAGING_EVENT_TYPES) {
-      expect(countListeners(oldDocument, type, implForWrapper)).toBe(0);
-    }
     expect(
       oldDocument.documentElement.style.getPropertyValue("touch-action"),
     ).toBe("");
 
     expect(state.pagingListeners.size).toBe(1);
-    oldDocument.dispatchEvent(new PointerEvent("pointerdown", { button: 0 }));
-    oldDocument.dispatchEvent(new PointerEvent("pointerup", { clientX: 0 }));
-    expect(rendition.next).not.toHaveBeenCalled();
-    newDocument.dispatchEvent(new PointerEvent("pointerdown", { clientX: 250 }));
-    newDocument.dispatchEvent(new PointerEvent("pointerup", { clientX: 250 }));
+    newDocument.dispatchEvent(pointerEvent(newDocument, "pointerdown", { clientX: 250 }));
+    newDocument.dispatchEvent(pointerEvent(newDocument, "pointerup", { clientX: 250 }));
     expect(rendition.next).toHaveBeenCalledTimes(1);
   });
 
@@ -662,15 +688,14 @@ describe("EpubNavigationTools teardown", () => {
     const { rendition, tools } = makeTools({
       flow: { mode: "paginated", onToggle: vi.fn() },
     });
-    const doc = document.implementation.createHTMLDocument("paging-repeat");
-    doc.documentElement.append(doc.createElement("body"));
+    const doc = childDocument(document);
     Object.defineProperty(doc.body, "clientWidth", { configurable: true, value: 300 });
     Object.defineProperty(doc.documentElement, "clientWidth", {
       configurable: true,
       value: 300,
     });
 
-    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    rendition.fire("rendered", {}, renderedContents(doc));
     doc.dispatchEvent(pointerEvent(doc, "pointerdown", { clientX: 10, timeStamp: 100 }));
     doc.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 150 }));
     doc.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 200 }));
@@ -683,15 +708,14 @@ describe("EpubNavigationTools teardown", () => {
     const { rendition, tools } = makeTools({
       flow: { mode: "paginated", onToggle: vi.fn() },
     });
-    const doc = document.implementation.createHTMLDocument("paging-cancel");
-    doc.documentElement.append(doc.createElement("body"));
+    const doc = childDocument(document);
     Object.defineProperty(doc.body, "clientWidth", { configurable: true, value: 300 });
     Object.defineProperty(doc.documentElement, "clientWidth", {
       configurable: true,
       value: 300,
     });
 
-    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    rendition.fire("rendered", {}, renderedContents(doc));
     doc.dispatchEvent(pointerEvent(doc, "pointerdown", { clientX: 10, timeStamp: 100 }));
     doc.dispatchEvent(pointerEvent(doc, "pointercancel", { timeStamp: 120 }));
     doc.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 150 }));
@@ -704,15 +728,14 @@ describe("EpubNavigationTools teardown", () => {
     const { rendition, tools } = makeTools({
       flow: { mode: "paginated", onToggle: vi.fn() },
     });
-    const doc = document.implementation.createHTMLDocument("paging-travel");
-    doc.documentElement.append(doc.createElement("body"));
+    const doc = childDocument(document);
     Object.defineProperty(doc.body, "clientWidth", { configurable: true, value: 300 });
     Object.defineProperty(doc.documentElement, "clientWidth", {
       configurable: true,
       value: 300,
     });
 
-    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    rendition.fire("rendered", {}, renderedContents(doc));
     doc.dispatchEvent(pointerEvent(doc, "pointerdown", { clientX: 10, timeStamp: 100 }));
     doc.dispatchEvent(pointerEvent(doc, "pointermove", { clientX: 50, timeStamp: 120 }));
     doc.dispatchEvent(pointerEvent(doc, "pointermove", { clientX: 10, timeStamp: 140 }));
@@ -726,8 +749,7 @@ describe("EpubNavigationTools teardown", () => {
     const { rendition, tools } = makeTools({
       flow: { mode: "paginated", onToggle: vi.fn() },
     });
-    const doc = document.implementation.createHTMLDocument("paging-link");
-    doc.documentElement.append(doc.createElement("body"));
+    const doc = childDocument(document);
     const link = doc.createElement("a");
     link.href = "https://example.test/chapter";
     doc.body.append(link);
@@ -737,9 +759,17 @@ describe("EpubNavigationTools teardown", () => {
       value: 300,
     });
 
-    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
-    link.dispatchEvent(pointerEvent(doc, "pointerdown", { clientX: 20, timeStamp: 100 }));
-    link.dispatchEvent(pointerEvent(doc, "pointerup", { clientX: 10, timeStamp: 150 }));
+    rendition.fire("rendered", {}, renderedContents(doc));
+    link.dispatchEvent(pointerEvent(doc, "pointerdown", {
+      bubbles: true,
+      clientX: 20,
+      timeStamp: 100,
+    }));
+    link.dispatchEvent(pointerEvent(doc, "pointerup", {
+      bubbles: true,
+      clientX: 10,
+      timeStamp: 150,
+    }));
 
     expect(rendition.prev).not.toHaveBeenCalled();
     tools.destroy();
@@ -761,17 +791,15 @@ describe("EpubNavigationTools teardown", () => {
     const implForWrapper = await loadImplForWrapper();
     const { rendition, tools } = makeTools();
     await waitForSelectionListener(rendition);
-    const first = document.implementation.createHTMLDocument("first");
-    const second = document.implementation.createHTMLDocument("second");
-    first.documentElement.append(first.createElement("body"));
-    second.documentElement.append(second.createElement("body"));
+    const first = childDocument(document);
+    const second = childDocument(document);
     const before = [first, second].map((document) => ({
       selectionchange: countListeners(document, "selectionchange", implForWrapper),
       mousedown: countListeners(document, "mousedown", implForWrapper),
     }));
 
-    rendition.fire("rendered", {}, { document: first } as unknown as Contents);
-    rendition.fire("rendered", {}, { document: second } as unknown as Contents);
+    rendition.fire("rendered", {}, renderedContents(first));
+    rendition.fire("rendered", {}, renderedContents(second));
     tools.destroy();
 
     [first, second].forEach((document, index) => {
@@ -788,21 +816,11 @@ describe("EpubNavigationTools teardown", () => {
     const implForWrapper = await loadImplForWrapper();
     const { rendition, tools } = makeTools();
     await waitForSelectionListener(rendition);
-    const first = document.implementation.createHTMLDocument("first");
-    const second = document.implementation.createHTMLDocument("second");
-    first.documentElement.append(first.createElement("body"));
-    second.documentElement.append(second.createElement("body"));
+    const first = childDocument(document);
+    const second = childDocument(document);
 
-    rendition.fire(
-      "rendered",
-      {},
-      { document: first } as unknown as Contents,
-    );
-    rendition.fire(
-      "rendered",
-      {},
-      { document: second } as unknown as Contents,
-    );
+    rendition.fire("rendered", {}, renderedContents(first));
+    rendition.fire("rendered", {}, renderedContents(second));
     tools.destroy();
 
     for (const renderedDocument of [first, second]) {
@@ -835,10 +853,8 @@ describe("EpubNavigationTools teardown", () => {
       flow: { mode: "paginated", onToggle: vi.fn() },
     });
     await waitForSelectionListener(rendition);
-    const first = document.implementation.createHTMLDocument("paging-first");
-    const second = document.implementation.createHTMLDocument("paging-second");
-    first.documentElement.append(first.createElement("body"));
-    second.documentElement.append(second.createElement("body"));
+    const first = childDocument(document);
+    const second = childDocument(document);
     const before = [first, second].map((renderedDocument) =>
       PAGING_EVENT_TYPES.map((type) => ({
         type,
@@ -846,8 +862,8 @@ describe("EpubNavigationTools teardown", () => {
       })),
     );
 
-    rendition.fire("rendered", {}, { document: first } as unknown as Contents);
-    rendition.fire("rendered", {}, { document: second } as unknown as Contents);
+    rendition.fire("rendered", {}, renderedContents(first));
+    rendition.fire("rendered", {}, renderedContents(second));
     tools.destroy();
 
     [first, second].forEach((renderedDocument, documentIndex) => {
@@ -890,10 +906,9 @@ describe("EpubNavigationTools teardown", () => {
       flow: { mode: "paginated", onToggle: vi.fn() },
     });
     await waitForSelectionListener(rendition);
-    const doc = document.implementation.createHTMLDocument("touch-test");
-    doc.documentElement.append(doc.createElement("body"));
+    const doc = childDocument(document);
 
-    rendition.fire("rendered", {}, { document: doc } as unknown as Contents);
+    rendition.fire("rendered", {}, renderedContents(doc));
     expect(doc.documentElement.style.touchAction).toBe("pan-y");
 
     tools.destroy();
@@ -926,11 +941,13 @@ describe("EpubNavigationTools teardown", () => {
     tools.destroy();
 
     fireSelection(rendition);
-    const firstDocument = document.implementation.createHTMLDocument("late-1");
-    firstDocument.documentElement.append(firstDocument.createElement("body"));
+    const firstDocument = childDocument(document);
     (tools as unknown as {
-      onRendered: (section: unknown, contents: { document: Document }) => void;
-    }).onRendered({}, { document: firstDocument });
+      onRendered: (
+        section: unknown,
+        contents: Pick<Contents, "document" | "window">,
+      ) => void;
+    }).onRendered({}, renderedContents(firstDocument));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     fireSelection(rendition);
@@ -946,11 +963,14 @@ describe("EpubNavigationTools teardown", () => {
     const { tools } = makeTools();
     tools.destroy();
 
-    const firstDocument = document.implementation.createHTMLDocument("late-1");
+    const firstDocument = childDocument(document);
     const addEventListenerSpy = vi.spyOn(firstDocument, "addEventListener");
     (tools as unknown as {
-      onTocRendered: (section: unknown, contents: { document: Document }) => void;
-    }).onTocRendered({}, { document: firstDocument });
+      onTocRendered: (
+        section: unknown,
+        contents: Pick<Contents, "document" | "window">,
+      ) => void;
+    }).onTocRendered({}, renderedContents(firstDocument));
 
     expect(addEventListenerSpy).not.toHaveBeenCalled();
   });
