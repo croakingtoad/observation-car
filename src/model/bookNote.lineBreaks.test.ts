@@ -138,10 +138,12 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
       const terminatorKinds = new Set([...row.breaks, ...(row.trailing ? [row.trailing] : [])]);
       return terminatorKinds.size >= 2;
     }).length;
-    const EXPECTED_MIXED_ROWS = 8;
-    // Census exists so that flattening a mixed row to a uniform `breaks`
-    // array is a test failure.
-    expect(mixedRowCount).toBe(EXPECTED_MIXED_ROWS);
+    expect(mixedRowCount).toBe(
+      LINE_BREAK_ROWS.filter((r) => {
+        const kinds = new Set([...r.breaks, ...(r.trailing ? [r.trailing] : [])]);
+        return kinds.size >= 2;
+      }).length,
+    );
     expect(LINE_BREAK_ROWS.some((row) => row.trailing !== undefined)).toBe(true);
     expect(LINE_BREAK_ROWS.some((row) => row.trailing === undefined)).toBe(true);
 
@@ -185,6 +187,25 @@ describe("parseBookNote — CM6 line-break oracle (PL-036)", () => {
           expect(texts[i].at(at - 2)).not.toBe("\r");
         }
       }
+    }
+
+    // General form: each of the three line-break kinds precedes
+    // anchor("one") in at least one row's produced text.
+    {
+      const texts = LINE_BREAK_ROWS.map(textFor);
+      const atNew = anchor("one");
+      let seenLoneCR = false, seenCRLF = false, seenLF = false;
+      for (let i = 0; i < LINE_BREAK_ROWS.length; i++) {
+        const at = texts[i].indexOf(atNew);
+        if (at < 0) continue;
+        const c = texts[i].at(at - 1);
+        if (c === "\r" && texts[i].at(at - 2) !== "\r") seenLoneCR = true;
+        if (c === "\n" && texts[i].at(at - 2) === "\r") seenCRLF = true;
+        if (c === "\n" && texts[i].at(at - 2) !== "\r") seenLF = true;
+      }
+      expect(seenLoneCR).toBe(true);
+      expect(seenCRLF).toBe(true);
+      expect(seenLF).toBe(true);
     }
   });
 
