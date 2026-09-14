@@ -541,7 +541,11 @@ describe("EpubNavigationTools teardown", () => {
     const { rendition, tools } = makeTools({
       flow: { mode: "paginated", onToggle: vi.fn() },
     });
+    const implForWrapper = await loadImplForWrapper();
     await waitForSelectionListener(rendition);
+    await vi.waitFor(() => {
+      expect(rendition.handlers.get("rendered")).toHaveLength(4);
+    });
 
     const frame = document.createElement("iframe");
     document.body.append(frame);
@@ -571,11 +575,21 @@ describe("EpubNavigationTools teardown", () => {
       expect(counts.documentListeners).toBeLessThanOrEqual(1);
       expect(counts.pagingListeners).toBeLessThanOrEqual(1);
     }
+    tools.destroy();
+
+    expect(
+      countListeners(frameDocument, "selectionchange", implForWrapper),
+    ).toBe(0);
+    expect(countListeners(frameDocument, "mousedown", implForWrapper)).toBe(0);
   });
 
-  it("removes discarded paging listeners on the next rendered view", () => {
+  it("removes discarded paging listeners on the next rendered view", async () => {
     const { rendition, tools } = makeTools({
       flow: { mode: "paginated", onToggle: vi.fn() },
+    });
+
+    await vi.waitFor(() => {
+      expect(rendition.handlers.get("rendered")).toHaveLength(4);
     });
     const state = tools as unknown as {
       pagingListeners: Set<{ document: Document; remove: () => void }>;
@@ -618,6 +632,7 @@ describe("EpubNavigationTools teardown", () => {
     oldDocument.documentElement.append(oldDocument.createElement("body"));
 
     rendition.fire("rendered", {}, { document: oldDocument } as unknown as Contents);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(state.pagingListeners.size).toBe(1);
 
     oldDocument.dispatchEvent(new PointerEvent("pointerdown", { button: 0 }));
@@ -625,6 +640,15 @@ describe("EpubNavigationTools teardown", () => {
 
     discardOldView();
     rendition.fire("rendered", {}, { document: newDocument } as unknown as Contents);
+
+    const implForWrapper = await loadImplForWrapper();
+    for (const type of PAGING_EVENT_TYPES) {
+      expect(countListeners(oldDocument, type, implForWrapper)).toBe(0);
+    }
+    expect(
+      oldDocument.documentElement.style.getPropertyValue("touch-action"),
+    ).toBe("");
+
     expect(state.pagingListeners.size).toBe(1);
     oldDocument.dispatchEvent(new PointerEvent("pointerdown", { button: 0 }));
     oldDocument.dispatchEvent(new PointerEvent("pointerup", { clientX: 0 }));
