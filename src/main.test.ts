@@ -305,8 +305,8 @@ interface FakeLeaf {
   detached: boolean;
   detach(): void;
   getRoot(): object;
-    getViewState(): { type: string };
-    loadIfDeferred(): Promise<void>;
+  getViewState(): { type: string };
+  loadIfDeferred(): Promise<void>;
   openFile(file: TFile): Promise<void>;
 }
 
@@ -1328,11 +1328,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([]);
   });
 
-  it("resolves the most recently active reader when the active view is not a file-backed reader", async () => {
+  it("resolves the most recently active deferred reader", async () => {
     const firstBook = addBookFile("Books/One.epub");
     const secondBook = addBookFile("Books/Two.epub");
     openEpubReader(firstBook);
-    const second = openEpubReader(secondBook, "main", { deferredView: true });
+    const second = openEpubReader(secondBook, "main", {
+      deferredView: true,
+    });
+    fake.leaves.add(second.leaf);
     fake.runtime.activeView = { file: null };
     fake.runtime.mostRecentMainLeaf = second.leaf;
 
@@ -1340,25 +1343,26 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     expect(fake.createdFiles).toEqual(["Reading/Two.md"]);
     expect(fake.openedFiles).toEqual(["Reading/Two.md"]);
+    fake.leaves.delete(second.leaf);
   });
 
   it("does not mistake an active markdown leaf for its open book", async () => {
-    const book = addBookFile("Books/A.epub");
-    const noteFile = addMdFile("Books/A.md", "not a book", null);
+    const book = addBookFile("Books/Novel.epub");
+    const noteFile = addMdFile("Books/Other.md", "not a book", null);
     const markdownLeaf = makeMarkdownLeaf(noteFile, {
       hasFocus: () => true,
       getViewType: () => "markdown",
       lineCount: () => 20,
       scrollIntoView: vi.fn(),
     });
-    fake.leaves.add(markdownLeaf);
     openEpubReader(book);
+    fake.leaves.add(markdownLeaf);
     fake.runtime.activeView = { file: null };
     fake.runtime.mostRecentMainLeaf = markdownLeaf;
 
     await invokeCreateBookNoteForTesting();
 
-    expect(fake.createdFiles).toEqual(["Reading/A.md"]);
+    expect(fake.createdFiles).toEqual(["Reading/Novel.md"]);
   });
 
   it("resolves a single open reader when no MRU leaf is available", async () => {
@@ -1375,39 +1379,37 @@ describe("plugin wiring (substituted obsidian module)", () => {
     void leaf;
   });
 
-  it("resolves the only readable book among deferred readers", async () => {
+  it("resolves the only loaded book among one loaded and one deferred reader", async () => {
     const firstBook = addBookFile("Books/A.epub");
     const secondBook = addBookFile("Books/B.epub");
-    openEpubReader(firstBook);
-    openEpubReader(secondBook, "main", { deferredView: true });
+    const first = openEpubReader(firstBook);
+    fake.leaves.delete(first.leaf);
+    fake.runtime.mostRecentMainLeaf = null;
+    const deferred = openEpubReader(secondBook, "main", {
+      deferredView: true,
+    });
+    fake.leaves.add(deferred.leaf);
     fake.runtime.activeView = { file: null };
     fake.runtime.mostRecentMainLeaf = null;
 
     await invokeCreateBookNoteForTesting();
 
     expect(noticeMessages).toEqual([]);
-    expect(fake.createdFiles).toEqual(["Reading/A.md"]);
-    expect(fake.openedFiles).toEqual(["Reading/A.md"]);
+    expect(fake.createdFiles).toEqual(["Reading/B.md"]);
+    expect(fake.openedFiles).toEqual(["Reading/B.md"]);
     expect(noticeMessages).not.toContain(
       "Multiple books are open: A, B. Click the book you want, then run Create book note again.",
     );
+    fake.leaves.delete(deferred.leaf);
   });
 
   it("requires view state to agree with the reader view type", async () => {
     const book = addBookFile("Books/A.epub");
-    const mismatchedLeaf: FakeLeaf = {
-      view: {
-        file: book,
-        getViewType: (): string => "observation-car-epub",
-      },
-      area: "main",
-      detached: false,
-      detach: () => {},
-      getRoot: () => fake.rootSplit,
-      openFile: async (): Promise<void> => {},
-      getViewState: (): { type: string } => ({ type: "markdown" }),
-      loadIfDeferred: async (): Promise<void> => {},
-    };
+    const { leaf } = openEpubReader(book);
+    const mismatchedLeaf = leaf;
+    mismatchedLeaf.getViewState = (): { type: string } => ({
+      type: "markdown",
+    });
     fake.leaves.add(mismatchedLeaf);
     fake.runtime.activeView = { file: null };
     fake.runtime.mostRecentMainLeaf = null;
@@ -2237,6 +2239,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([
       "Focus mode needs CFI anchors; this note\'s anchors are chapter hrefs.",
     ]);
+    expect(isFocusModeDecorationEnabled(editor)).toBe(false);
   });
 
   it("focuses a CFI-anchor note with no spine-href Notice", async () => {
@@ -2271,6 +2274,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     expect(noticeMessages).toEqual([]);
     expect(isFocusModeDecorationEnabled(editor)).toBe(true);
+    expect(cmView.dom.querySelectorAll(".oc-focus-fold")).toHaveLength(0);
     (plugin as unknown as { focusMode: FocusModeController }).focusMode.toggle(
       editor as never,
     );
@@ -2308,6 +2312,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     expect(noticeMessages).toEqual([]);
     expect(isFocusModeDecorationEnabled(editor)).toBe(true);
+    expect(cmView.dom.querySelectorAll(".oc-focus-fold")).toHaveLength(0);
     cmView.destroy();
   });
 
@@ -2343,6 +2348,9 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     expect(noticeMessages).toEqual([]);
     expect(isFocusModeDecorationEnabled(editor)).toBe(true);
+    expect(
+      (plugin as unknown as { focusMode: FocusModeController }).focusMode,
+    ).toBeDefined();
     cmView.destroy();
   });
 
