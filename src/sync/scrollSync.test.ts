@@ -1286,7 +1286,7 @@ describe("scrollHeadingIntoView", () => {
       "late note two",
     ];
     const currentNote = [...fm, ...body].join("\n");
-    const loneCrNote = [...fm, ...body].join("\n");
+    const loneCrNote = [...fm, ...body].join("\r");
     const { editor, view } = focusEditor(currentNote);
     const loneCrParse = parseBookNote(loneCrNote);
 
