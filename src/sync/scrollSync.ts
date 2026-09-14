@@ -10,6 +10,7 @@ import type { Reader, ReaderPairing } from "./ReaderRegistry";
 import { codeMirrorView } from "./codeMirrorView";
 import { setCurrentSectionDecoration } from "./currentSectionDecoration";
 import type { FocusModeController } from "./focusMode";
+import { isFocusModeDecorationEnabled } from "./focusModeDecoration";
 
 /** The reader-side debounce leaves 50 ms of the 200 ms PRD budget. */
 export const DEFAULT_SCROLL_DEBOUNCE_MS = 25;
@@ -274,12 +275,18 @@ export class ScrollSync {
     key: string,
   ): void {
     const previousEditor = this.currentSection.get(leaf)?.editor.deref();
+    const focusWasActive =
+      previousEditor !== undefined &&
+      isFocusModeDecorationEnabled(previousEditor);
     if (previousEditor !== undefined && previousEditor !== editor) {
       this.setCurrentSection(previousEditor, null);
       this.deps.focusMode?.reset(previousEditor);
     }
     this.setCurrentSection(editor, section);
     if (this.deps.focusMode !== undefined) {
+      if (focusWasActive && !isFocusModeDecorationEnabled(editor)) {
+        this.deps.focusMode.toggle(editor, pairing.bookNote.sections, section);
+      }
       this.deps.focusMode.setSections(editor, pairing.bookNote.sections);
       this.deps.focusMode.setCurrentSection(editor, section);
     }

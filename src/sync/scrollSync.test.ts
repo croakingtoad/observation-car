@@ -409,19 +409,90 @@ describe("ScrollSync", () => {
       rig.currentEditor = second.editor;
       rig.reader.emit(CFI_2);
       vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
-      expect(focusWidgetCounts(first.view, second.view)).toEqual([0, 0]);
-
-      focusMode.toggle(
-        second.editor,
-        sections,
-        rig.sync.getCurrentSection(second.editor),
-      );
       expect(focusWidgetCounts(first.view, second.view)).toEqual([0, 1]);
       expect(first.view.state.doc.toString()).toBe(FOCUS_NOTE);
       expect(second.view.state.doc.toString()).toBe(FOCUS_NOTE);
     } finally {
       first.view.destroy();
       second.view.destroy();
+    }
+  });
+
+  it("resets focus mode on a displaced editor when a replacement editor appears", async () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const note = Array.from(
+      { length: 12 },
+      (_, line) => `line ${line + 1}`,
+    ).join("\n");
+    const sections = (rig.pairing?.bookNote.sections ?? []).map((section) => ({
+      ...section,
+      chapter: section.headingLine === 9 ? 1 : 0,
+    }));
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(sections),
+    );
+    const firstCm = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: note,
+        extensions: [focusModeViewPlugin],
+      }),
+    });
+    const firstEditor = createFocusEditor(firstCm);
+    const secondCm = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: note,
+        extensions: [focusModeViewPlugin],
+      }),
+    });
+    const secondEditor = createFocusEditor(secondCm);
+    rig.currentEditor = firstEditor;
+    firstCm.requestMeasure();
+    secondCm.requestMeasure();
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    vi.useFakeTimers();
+
+    try {
+      focusMode.toggle(firstEditor, sections, sections[0] ?? null);
+      expect(isFocusModeDecorationEnabled(firstEditor)).toBe(true);
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      firstCm.requestMeasure();
+      vi.advanceTimersByTime(0);
+      const firstBeforeSwap =
+        firstCm.dom.querySelectorAll(".oc-focus-fold").length;
+
+      rig.currentEditor = secondEditor;
+      rig.reader.emit(CFI_2);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      firstCm.requestMeasure();
+      secondCm.requestMeasure();
+      vi.advanceTimersByTime(0);
+      secondCm.requestMeasure();
+      vi.advanceTimersByTime(0);
+      const firstAfterSwap =
+        firstCm.dom.querySelectorAll(".oc-focus-fold").length;
+      const secondAfterSwap = isFocusModeDecorationEnabled(secondEditor)
+        ? 1
+        : 0;
+
+      expect({ firstBeforeSwap, firstAfterSwap, secondAfterSwap }).toEqual({
+        firstBeforeSwap: 1,
+        firstAfterSwap: 0,
+        secondAfterSwap: 1,
+      });
+      expect(firstCm.state.doc.toString()).toBe(note);
+      expect(secondCm.state.doc.toString()).toBe(note);
+    } finally {
+      firstCm.destroy();
+      secondCm.destroy();
     }
   });
 
@@ -772,4 +843,14 @@ function pairing(
 
 function file(path: string): TFile {
   return { path } as TFile;
+}
+
+function createFocusEditor(cm: EditorView): ScrollEditor & {
+  readonly cm: EditorView;
+} {
+  return {
+    cm,
+    lineCount: () => cm.state.doc.lines,
+    scrollIntoView: vi.fn(),
+  };
 }
