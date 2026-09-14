@@ -96,7 +96,7 @@ function emptyNoteText(): string {
   return '---\ntype: book-note\nsource: "[[Books/Test.epub]]"\nformat: epub\n---';
 }
 
-function fakeEditor(initial: string): FakeEditor {
+function fakeEditor(initial: string, hasFocus?: boolean): FakeEditor {
   let value = initial;
   const setValue = vi.fn((next: string) => {
     value = next;
@@ -106,7 +106,7 @@ function fakeEditor(initial: string): FakeEditor {
   const focus = vi.fn();
   const editor = {
     getValue: () => value,
-    hasFocus: () => false,
+    hasFocus: () => hasFocus ?? false,
     setValue,
     setCursor,
     scrollIntoView,
@@ -499,8 +499,7 @@ describe("new note here", () => {
 
   it("prefers the focused editor when the note is open in two panes", async () => {
     // Two note leaves, second one focused
-    const focusedEditor = fakeEditor(noteText());
-    (focusedEditor.editor as any).hasFocus = () => true;
+    const focusedEditor = fakeEditor(noteText(), true);
 
     const unfocusedEditor = fakeEditor(noteText());
 
