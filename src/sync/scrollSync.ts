@@ -88,6 +88,7 @@ export class ScrollSync {
   private readonly pending = new Map<WorkspaceLeaf, PendingScroll>();
   private readonly lastEditorChange = new WeakMap<ScrollEditor, number>();
   private readonly currentSection = new Map<WorkspaceLeaf, CurrentSection>();
+  private readonly lastEditor = new Map<WorkspaceLeaf, WeakRef<ScrollEditor>>();
 
   constructor(deps: ScrollSyncDeps) {
     this.deps = deps;
@@ -258,13 +259,13 @@ export class ScrollSync {
 
   private clearCurrentSection(leaf: WorkspaceLeaf): void {
     const current = this.currentSection.get(leaf);
-    if (current === undefined) return;
-    const editor = current.editor.deref();
+    const editor = current?.editor.deref() ?? this.lastEditor.get(leaf)?.deref();
     if (editor !== undefined) {
       this.setCurrentSection(editor, null);
       this.deps.focusMode?.reset(editor);
     }
     this.currentSection.delete(leaf);
+    this.lastEditor.delete(leaf);
   }
 
   private applyCurrentSection(
@@ -274,7 +275,9 @@ export class ScrollSync {
     section: BookNoteSection,
     key: string,
   ): void {
-    const previousEditor = this.currentSection.get(leaf)?.editor.deref();
+    const previousEditor =
+      this.currentSection.get(leaf)?.editor.deref() ??
+      this.lastEditor.get(leaf)?.deref();
     const focusWasActive =
       previousEditor !== undefined &&
       isFocusModeDecorationEnabled(previousEditor);
@@ -294,6 +297,7 @@ export class ScrollSync {
       leaf,
       { key, section, editor: new WeakRef(editor) },
     );
+    this.lastEditor.set(leaf, new WeakRef(editor));
   }
 
   private setCurrentSection(

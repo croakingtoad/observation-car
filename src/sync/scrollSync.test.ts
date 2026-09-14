@@ -418,6 +418,131 @@ describe("ScrollSync", () => {
     }
   });
 
+  it("preserves focus mode when an unmatched location precedes editor displacement", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const sections = [section(1, CFI_1, 0), section(3, CFI_2, 1)];
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(sections),
+    );
+    const first = focusEditor();
+    const second = focusEditor();
+    rig.currentEditor = first.editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(
+        first.editor,
+        sections,
+        rig.sync.getCurrentSection(first.editor),
+      );
+
+      rig.reader.emit("/6/4!/4/2/1:0");
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      rig.currentEditor = second.editor;
+      rig.reader.emit(CFI_2);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      expect(isFocusModeDecorationEnabled(second.editor)).toBe(true);
+    } finally {
+      first.view.destroy();
+      second.view.destroy();
+    }
+  });
+
+  it("turns focus mode off on reader close after an unmatched location", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const { editor, view } = focusEditor();
+    rig.currentEditor = editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(
+        editor,
+        rig.pairing?.bookNote.sections ?? [],
+        rig.sync.getCurrentSection(editor),
+      );
+      rig.reader.emit("/6/4!/4/2/1:0");
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      rig.leafOpen = false;
+      rig.sync.refresh();
+
+      expect(isFocusModeDecorationEnabled(editor)).toBe(false);
+      expect(rig.sync.getCurrentSection(editor)).toBeNull();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("starts re-registered reader leaves without stale editor carry-over", () => {
+    vi.useFakeTimers();
+    const rig = makeRig();
+
+    rig.reader.emit(CFI_1);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+    rig.leafOpen = false;
+    rig.sync.refresh();
+
+    const firstEditor = rig.editor;
+    rig.setCurrentSection.mockClear();
+    rig.currentEditor = {
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    };
+    rig.leafOpen = true;
+    rig.sync.register(rig.leaf, rig.reader);
+    rig.reader.emit(CFI_2);
+    vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+    expect(rig.setCurrentSection).not.toHaveBeenCalledWith(firstEditor, null);
+  });
+
+  it("keeps an already-enabled replacement editor focused during displacement", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const sections = [section(1, CFI_1, 0), section(3, CFI_2, 1)];
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(sections),
+    );
+    const first = focusEditor();
+    const second = focusEditor();
+    rig.currentEditor = first.editor;
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+      focusMode.toggle(
+        first.editor,
+        sections,
+        rig.sync.getCurrentSection(first.editor),
+      );
+      focusMode.toggle(second.editor, sections, sections[0] ?? null);
+      expect(isFocusModeDecorationEnabled(second.editor)).toBe(true);
+
+      rig.currentEditor = second.editor;
+      rig.reader.emit(CFI_2);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      expect(isFocusModeDecorationEnabled(second.editor)).toBe(true);
+    } finally {
+      first.view.destroy();
+      second.view.destroy();
+    }
+  });
+
   it("resets focus mode on a displaced editor when a replacement editor appears", async () => {
     vi.useFakeTimers();
     const focusMode = new FocusModeController();
