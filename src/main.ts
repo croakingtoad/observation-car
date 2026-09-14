@@ -465,7 +465,12 @@ export default class ObservationCarPlugin extends Plugin {
   private moveEpubStylesheetMode(file: TFile, oldPath: string): void {
     const previousMode = this.epubStylesheetModes[oldPath];
     const destinationMode = this.epubStylesheetModes[file.path];
-    if (previousMode === undefined && destinationMode === undefined) {
+    const previousLocation = this.epubLastLocations[oldPath];
+    if (
+      previousMode === undefined &&
+      destinationMode === undefined &&
+      previousLocation === undefined
+    ) {
       return;
     }
     delete this.epubStylesheetModes[oldPath];
@@ -473,15 +478,26 @@ export default class ObservationCarPlugin extends Plugin {
     if (file.extension.toLowerCase() === "epub" && previousMode !== undefined) {
       this.epubStylesheetModes[file.path] = previousMode;
     }
+    if (previousLocation !== undefined) {
+      delete this.epubLastLocations[oldPath];
+      delete this.epubLastLocations[file.path];
+      if (file.extension.toLowerCase() === "epub") {
+        this.epubLastLocations[file.path] = previousLocation;
+      }
+    }
     this.persistEpubStylesheetCleanup("rename");
   }
 
-  /** Drop state for a deleted path before that path can be reused. */
+  /** Drop all per-book state (stylesheet mode + last location) for a deleted path. */
   private dropEpubStylesheetMode(path: string): void {
-    if (this.epubStylesheetModes[path] === undefined) {
+    if (
+      this.epubStylesheetModes[path] === undefined &&
+      this.epubLastLocations[path] === undefined
+    ) {
       return;
     }
     delete this.epubStylesheetModes[path];
+    delete this.epubLastLocations[path];
     this.persistEpubStylesheetCleanup("delete");
   }
 

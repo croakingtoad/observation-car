@@ -865,6 +865,45 @@ describe("plugin wiring (substituted obsidian module)", () => {
       (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
     ).toMatchObject({ epubStylesheetModes: {} });
   });
+  it("moves a last location on rename and drops it on delete", async () => {
+    await plugin.rememberEpubLocation(SOURCE, FIRST_SAVED_CFI);
+    const renamedPath = "Books/Renamed.epub";
+    const renamed = new TFileDouble(renamedPath, "epub");
+    fake.files.delete(SOURCE);
+    fake.files.set(renamedPath, renamed);
+
+    fire("vault", "rename", [renamed, SOURCE]);
+
+    expect(plugin.getLastEpubLocation(SOURCE)).toBeNull();
+    expect(plugin.getLastEpubLocation(renamedPath)).toBe(FIRST_SAVED_CFI);
+
+    fake.files.delete(renamedPath);
+    fire("metadata", "deleted", [renamed]);
+
+    expect(plugin.getLastEpubLocation(renamedPath)).toBeNull();
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({ epubLastLocations: {} });
+  });
+
+  it("does not carry a last location to a renamed non-EPUB file", async () => {
+    await plugin.rememberEpubLocation(SOURCE, FIRST_SAVED_CFI);
+    const renamedPath = "Books/Note.md";
+    const renamed = new TFileDouble(renamedPath, "md");
+    fake.files.delete(SOURCE);
+    fake.files.set(renamedPath, renamed);
+
+    fire("vault", "rename", [renamed, SOURCE]);
+
+    expect(plugin.getLastEpubLocation(SOURCE)).toBeNull();
+    expect(plugin.getLastEpubLocation(renamedPath)).toBeNull();
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({ epubLastLocations: {} });
+  });
+
 
   it("suppresses only an identical location rewrite", async () => {
     const { persistencePlugin, saves } = makePersistencePlugin();
