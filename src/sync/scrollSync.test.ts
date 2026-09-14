@@ -573,6 +573,56 @@ describe("ScrollSync", () => {
       second.view.destroy();
     }
   });
+  it("reports focus mode disabled for a ScrollEditor with no live CM6 view (F3a: non-CM6 guard)", () => {
+    const editor = { lineCount: () => 10, scrollIntoView: vi.fn() } as unknown as ScrollEditor;
+    expect(isFocusModeDecorationEnabled(editor)).toBe(false);
+  });
+
+  it("does not enable focus mode on displacement from a no-cm editor (F3b: non-CM6 guard)", () => {
+    vi.useFakeTimers();
+    const focusMode = new FocusModeController();
+    const rig = makeRig({ focusMode });
+    const sections = [section(1, CFI_1, 0), section(3, CFI_2, 1)];
+    rig.pairing = pairing(
+      rig.leaf,
+      rig.reader,
+      rig.bookFile,
+      bookNote(sections),
+    );
+    const noCmEditor = {
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    } as unknown as ScrollEditor;
+    rig.currentEditor = noCmEditor;
+
+    const secondCm = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: FOCUS_NOTE,
+        extensions: [focusModeViewPlugin],
+      }),
+    });
+    const secondEditor = {
+      cm: secondCm,
+      lineCount: () => secondCm.state.doc.lines,
+      scrollIntoView: vi.fn(),
+    };
+
+    try {
+      rig.reader.emit(CFI_1);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      rig.currentEditor = secondEditor;
+      rig.reader.emit(CFI_2);
+      vi.advanceTimersByTime(DEFAULT_SCROLL_DEBOUNCE_MS);
+
+      expect(isFocusModeDecorationEnabled(secondEditor)).toBe(false);
+      expect(focusWidgetCount(secondCm)).toBe(0);
+    } finally {
+      secondCm.destroy();
+    }
+  });
+
 
   it("resets focus mode on a displaced editor when a replacement editor appears", async () => {
     vi.useFakeTimers();

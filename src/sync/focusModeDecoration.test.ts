@@ -338,6 +338,113 @@ describe("focus-mode CM6 decoration", () => {
     expect(() => setFocusModeDecoration({}, true)).not.toThrow();
     expect(() => setFocusSectionsDecoration({}, [], null)).not.toThrow();
   });
+
+  it("replaces the whole multi-section run with one widget (F1: runStart guard)", async () => {
+    const doc = ["## A", "body a", "## B", "body b", "## C", "body c"].join("\n");
+    view = createView(doc);
+
+    const current = section(4, 5, 2);
+    setFocusModeDecoration({ cm: view }, true);
+    setFocusSectionsDecoration(
+      { cm: view },
+      [section(0, 1, 0), section(2, 3, 1), section(4, 5, 2)],
+      current,
+    );
+
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // One widget covers both non-current sections in one run
+    expect(foldedWidgets(view)).toHaveLength(1);
+    expect(foldedWidgets(view)[0]?.textContent).toBe("2 sections in other chapters folded");
+    // The first section text is replaced — not in the rendered DOM
+    expect(view.dom.textContent).not.toContain("## A");
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it("updates the widget count when the same-position run shrinks (F2: FoldedSectionWidget.eq)", async () => {
+    view = createView();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const three = [
+      section(0, 1, 0),
+      section(2, 3, 0),
+      section(4, 5, 0),
+      section(6, 6, 1),
+    ];
+    setFocusModeDecoration(editor, true);
+    setFocusSectionsDecoration(editor, three, section(6, 6, 1));
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)[0]?.textContent).toBe("3 sections in other chapters folded");
+
+    const two = [
+      section(0, 1, 0),
+      section(2, 3, 0),
+      section(6, 6, 1),
+    ];
+    setFocusSectionsDecoration(editor, two, section(6, 6, 1));
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)[0]?.textContent).toBe("2 sections in other chapters folded");
+  });
+
+  it("preserves folding after toggle-off, page-to-null-section, and re-toggle (F4: currentSection ??)", async () => {
+    view = createView();
+    const controller = new FocusModeController();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const sections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
+      section(4, 5, 2),
+    ];
+
+    // Enable — fold two non-current sections
+    controller.toggle(editor, sections, sections[2] ?? null);
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)).toHaveLength(1);
+    expect(foldedWidgets(view)[0]?.textContent).toBe("2 sections in other chapters folded");
+
+    // Toggle off — without passing currentSection, so ?? vs direct null shows
+    controller.toggle(editor);
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)).toEqual([]);
+
+    // Page to before the first anchor — location event with no match; FocusModeController untouched.
+    // Toggle on again without passing sections/currentSection — fold must survive via ?? fallback
+    controller.toggle(editor);
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)).toHaveLength(1);
+  });
+
+  it("does not fold again after reset (F5: editors.delete in reset)", async () => {
+    view = createView();
+    const controller = new FocusModeController();
+    const editor = { cm: view } as unknown as ScrollEditor;
+    const sections = [
+      section(0, 1, 0),
+      section(2, 3, 1),
+      section(4, 5, 2),
+    ];
+
+    controller.toggle(editor, sections, sections[2] ?? null);
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)).toHaveLength(1);
+
+    controller.reset(editor);
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)).toEqual([]);
+
+    controller.toggle(editor);
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(foldedWidgets(view)).toEqual([]);
+  });
+
 });
 
 function createView(doc = NOTE): EditorView {
