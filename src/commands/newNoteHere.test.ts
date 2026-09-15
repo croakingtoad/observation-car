@@ -190,6 +190,13 @@ function makeHarness(options: {
         createLeafBySplit: vi.fn(() => splitLeaf),
       },
     },
+    // Pane placement now lives in the reading layout, which
+    // `readingLayout.test.ts` covers; here the double records that the
+    // note pane was asked for beside the right reader leaf.
+    openBookNotePane: vi.fn(async (_leaf: WorkspaceLeaf | null) => {
+      await splitLeaf.openFile(noteFile);
+      return splitLeaf;
+    }),
     addCommand: (command: Command) => {
       commands.push(command);
       return command;
@@ -428,9 +435,9 @@ describe("new note here", () => {
 
     await newNoteHereFromReader(harness.plugin, harness.readerLeaf);
 
-    expect(harness.plugin.app.workspace.createLeafBySplit).toHaveBeenCalledWith(
+    expect(harness.plugin.openBookNotePane).toHaveBeenCalledWith(
       harness.readerLeaf,
-      "vertical",
+      expect.objectContaining({ path: NOTE_PATH }),
     );
     expect(harness.editor.value()).toContain(
       `## [[${SOURCE}${MIDDLE}|Ch. 2 — note]]`,

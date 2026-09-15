@@ -289,6 +289,7 @@ interface FakeVault {
   rootSplit: object;
   sidebarRoot: object;
   createdSplitLeaves: FakeLeaf[];
+  createdTabLeaves: { leaf: FakeLeaf; group: FakeTabGroup; index: number }[];
   runtime: {
     activeView: unknown;
     mostRecentMainLeaf: FakeLeaf | null;
@@ -297,9 +298,15 @@ interface FakeVault {
   };
 }
 
+/** A tab group, matching Obsidian's `leaf.parent` with its `children`. */
+interface FakeTabGroup {
+  children: FakeLeaf[];
+}
+
 interface FakeLeaf {
   view: unknown;
   area: "main" | "sidebar";
+  parent: FakeTabGroup;
   splitDirection?: "vertical" | "horizontal";
   splitFrom?: FakeLeaf;
   detached: boolean;
@@ -329,6 +336,11 @@ function makeFakeVault(): FakeVault {
   const rootSplit = {};
   const sidebarRoot = {};
   const createdSplitLeaves: FakeLeaf[] = [];
+  const createdTabLeaves: {
+    leaf: FakeLeaf;
+    group: FakeTabGroup;
+    index: number;
+  }[] = [];
   const runtime = {
     activeView: null as unknown,
     mostRecentMainLeaf: null as FakeLeaf | null,
@@ -340,13 +352,18 @@ function makeFakeVault(): FakeVault {
     area: "main" | "sidebar",
     root: object,
     view: unknown = null,
+    group: FakeTabGroup = { children: [] },
   ): FakeLeaf {
     const leaf: FakeLeaf = {
       view,
       area,
+      parent: group,
       detached: false,
       detach: () => {
         leaf.detached = true;
+        const index = leaf.parent.children.indexOf(leaf);
+        if (index !== -1) leaf.parent.children.splice(index, 1);
+        leaves.delete(leaf);
       },
       getRoot: () => root,
       openFile: async (file: TFile): Promise<void> => {
@@ -358,11 +375,23 @@ function makeFakeVault(): FakeVault {
           "file" in leaf.view
         ) {
           (leaf.view as { file: TFile | null }).file = file;
+        } else {
+          // Obsidian gives an opened leaf a view for the file's type, so
+          // the double does too — otherwise a leaf that has opened a note
+          // would report no file at all and the reading layout could not
+          // recognise the note pane.
+          leaf.view = { file, getViewType: (): string => "markdown" };
         }
       },
-      getViewState: (): { type: string } => ({ type: "markdown" }),
+      // Obsidian derives the state's type from the leaf's view, so the
+      // double does too: the reading layout asks a leaf whether it is a
+      // reader this way, and `createBookNote` filters on it.
+      getViewState: (): { type: string } => ({
+        type: fakeViewType(leaf.view) ?? "markdown",
+      }),
       loadIfDeferred: async (): Promise<void> => {},
     };
+    group.children.push(leaf);
     return leaf;
   }
 
@@ -473,6 +502,26 @@ function makeFakeVault(): FakeVault {
       revealLeaf: async (leaf: FakeLeaf): Promise<void> => {
         runtime.mostRecentMainLeaf = leaf;
       },
+      iterateRootLeaves: (callback: (leaf: FakeLeaf) => void): void => {
+        for (const leaf of [...leaves]) {
+          if (isFakeLeaf(leaf) && leaf.area === "main" && !leaf.detached) {
+            callback(leaf);
+          }
+        }
+      },
+      // A tab added to an existing group: same root, same parent, no new
+      // group — the distinction the reading layout depends on.
+      createLeafInParent: (group: FakeTabGroup, index: number): FakeLeaf => {
+        const sibling = group.children[0];
+        const root = sibling?.getRoot() ?? rootSplit;
+        const area = root === rootSplit ? "main" : "sidebar";
+        const leaf = makeLeaf(area, root, null, group);
+        group.children.splice(group.children.indexOf(leaf), 1);
+        group.children.splice(index, 0, leaf);
+        createdTabLeaves.push({ leaf, group, index });
+        leaves.add(leaf);
+        return leaf;
+      },
       createLeafBySplit: (
         sourceLeaf: FakeLeaf,
         direction: "vertical" | "horizontal",
@@ -485,6 +534,7 @@ function makeFakeVault(): FakeVault {
         leaf.splitDirection = direction;
         leaf.splitFrom = sourceLeaf;
         createdSplitLeaves.push(leaf);
+        leaves.add(leaf);
         return leaf;
       },
     },
@@ -512,8 +562,44 @@ function makeFakeVault(): FakeVault {
     rootSplit,
     sidebarRoot,
     createdSplitLeaves,
+    createdTabLeaves,
     runtime,
   };
+}
+
+/** Vault path a fake leaf shows, mirroring `main.ts`'s own read. */
+function leafPath(leaf: FakeLeaf): string | null {
+  const view: unknown = leaf.view;
+  if (typeof view === "object" && view !== null && "file" in view) {
+    const file: unknown = view.file;
+    if (typeof file === "object" && file !== null && "path" in file) {
+      if (typeof file.path === "string") return file.path;
+    }
+  }
+  return null;
+}
+
+function isFakeLeaf(value: unknown): value is FakeLeaf {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "area" in value &&
+    "parent" in value
+  );
+}
+
+/** The view type a fake view reports, matching Obsidian's `getViewType`. */
+function fakeViewType(view: unknown): string | null {
+  if (
+    typeof view === "object" &&
+    view !== null &&
+    "getViewType" in view &&
+    typeof view.getViewType === "function"
+  ) {
+    const type: unknown = view.getViewType();
+    return typeof type === "string" ? type : null;
+  }
+  return null;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -583,6 +669,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const markdownLeaf: FakeLeaf = {
       view: new MarkdownViewDouble(noteFile, editor),
       area: "main",
+      parent: { children: [] },
       detached: false,
       detach: () => {
         markdownLeaf.detached = true;
@@ -592,6 +679,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
       getViewState: (): { type: string } => ({ type: "markdown" }),
       loadIfDeferred: async (): Promise<void> => {},
     };
+    markdownLeaf.parent.children.push(markdownLeaf);
     return markdownLeaf;
   }
 
@@ -672,7 +760,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
   function openEpubReader(
     book: TFile,
     area: "main" | "sidebar" = "main",
-    options: { deferredView?: boolean } = {},
+    options: { deferredView?: boolean; group?: FakeTabGroup } = {},
   ): {
     leaf: FakeLeaf;
     view: {
@@ -691,6 +779,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const leaf: FakeLeaf = {
       view: null,
       area,
+      parent: options.group ?? { children: [] },
       detached: false,
       detach: () => {
         leaf.detached = true;
@@ -704,6 +793,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
       }),
       loadIfDeferred: async (): Promise<void> => {},
     };
+    leaf.parent.children.push(leaf);
     const view = factory(leaf) as {
       file: TFile | null;
       getViewType(): string;
@@ -1328,6 +1418,97 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([]);
   });
 
+  /** Tab groups every live main-area leaf currently belongs to. */
+  function tabGroups(): Set<FakeTabGroup> {
+    const groups = new Set<FakeTabGroup>();
+    for (const leaf of fake.leaves) {
+      if (isFakeLeaf(leaf) && leaf.area === "main" && !leaf.detached) {
+        groups.add(leaf.parent);
+      }
+    }
+    return groups;
+  }
+
+  it("keeps two books and their two notes in two tab groups", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+    const { leaf: leafB } = openEpubReader(bookB, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    fake.runtime.activeView = { file: bookB, leaf: leafB };
+    await invokeCreateBookNoteForTesting();
+
+    expect(fake.createdFiles).toEqual(["Reading/A.md", "Reading/B.md"]);
+    // The second note is a tab beside the first, not a third tab group
+    // (LOCO-430: two books used to produce three or four groups).
+    expect(fake.createdSplitLeaves).toHaveLength(1);
+    expect(fake.createdTabLeaves).toHaveLength(1);
+    expect(fake.createdTabLeaves[0]?.group).toBe(
+      fake.createdSplitLeaves[0]?.parent,
+    );
+    expect(tabGroups().size).toBe(2);
+    expect(noticeMessages).toEqual([]);
+  });
+
+  it("returns a note pane a second book took over, and moves the book to the book pane", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+    const notes = notePane.parent;
+
+    // Seed the snapshot, then reproduce what Obsidian does on a
+    // file-explorer click while the note pane is active: `getLeaf(false)`
+    // hands back that pane and the book loads into it.
+    fire("workspace", "layout-change", []);
+    notePane.view = {
+      file: bookB,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    expect(notePane.detached).toBe(true);
+    expect(books.children.map((leaf) => leafPath(leaf))).toEqual([
+      "Books/A.epub",
+      "Books/B.epub",
+    ]);
+    expect(notes.children.map((leaf) => leafPath(leaf))).toEqual([
+      "Reading/A.md",
+    ]);
+    expect(tabGroups().size).toBe(2);
+  });
+
+  it("gives a book that displaced another book its own tab rather than replacing it", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA, view } = openEpubReader(bookA, "main", {
+      group: books,
+    });
+
+    fire("workspace", "layout-change", []);
+    // Obsidian reused book A's own leaf for book B.
+    view.file = bookB;
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    expect(leafA.detached).toBe(false);
+    expect(books.children.map((leaf) => leafPath(leaf))).toEqual([
+      "Books/B.epub",
+      "Books/A.epub",
+    ]);
+    expect(tabGroups().size).toBe(1);
+  });
+
   it("resolves the most recently active deferred reader", async () => {
     const firstBook = addBookFile("Books/One.epub");
     const secondBook = addBookFile("Books/Two.epub");
@@ -1626,6 +1807,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const markdownLeaf: FakeLeaf = {
       view: markdownView,
       area: "main",
+      parent: { children: [] },
       detached: false,
       detach: () => {
         markdownLeaf.detached = true;
@@ -1635,6 +1817,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
       getViewState: (): { type: string } => ({ type: "markdown" }),
       loadIfDeferred: async (): Promise<void> => {},
     };
+    markdownLeaf.parent.children.push(markdownLeaf);
     fake.leaves.add(markdownLeaf);
     const { view } = openEpubReader(book);
     const retargetedSource = "Books/Retargeted.epub";
@@ -2144,6 +2327,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const markdownLeaf: FakeLeaf = {
       view: markdownView,
       area: "main",
+      parent: { children: [] },
       detached: false,
       detach: () => {
         markdownLeaf.detached = true;
@@ -2153,6 +2337,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
       getViewState: (): { type: string } => ({ type: "markdown" }),
       loadIfDeferred: async (): Promise<void> => {},
     };
+    markdownLeaf.parent.children.push(markdownLeaf);
     fake.leaves.add(markdownLeaf);
 
     const book = fake.files.get(SOURCE);

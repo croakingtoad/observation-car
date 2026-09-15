@@ -143,15 +143,9 @@ async function findOrOpenEditor(
   if (noteFile instanceof TFile === false) {
     throw new Error(`The paired book note no longer exists: ${pairing.notePath}`);
   }
-  const noteLeaf = plugin.app.workspace.createLeafBySplit(
-    pairing.leaf,
-    "vertical",
-  );
-  if (noteLeaf.getRoot() !== plugin.app.workspace.rootSplit) {
-    noteLeaf.detach();
-    throw new Error("The book-note split was created outside the main area");
-  }
-  await noteLeaf.openFile(noteFile);
+  // Same central note-pane resolution as the two book-note commands, so
+  // F4.6 cannot build a tab group of its own either (LOCO-430).
+  const noteLeaf = await plugin.openBookNotePane(pairing.leaf, noteFile);
   if (noteLeaf.view instanceof MarkdownView === false) {
     throw new Error("The paired book note did not open in a Markdown editor");
   }

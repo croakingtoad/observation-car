@@ -4,6 +4,7 @@ import {
   Plugin,
   TFile,
   type WorkspaceLeaf,
+  type WorkspaceSplit,
 } from "obsidian";
 import { registerCreateBookNoteCommand } from "./commands/createBookNote";
 import {
@@ -36,6 +37,16 @@ import type { EpubStylesheetMode } from "./readers/epubStyles";
 import { loadPluginData, serializePluginData } from "./pluginData";
 import { installEpubLinkHandler } from "./epubLinkHandler";
 import {
+  findDisplacements,
+  openBesideInGroup,
+  openBookInBookGroup,
+  openNoteBesideReader,
+  snapshotRootLeaves,
+  type Displacement,
+  type LayoutWorkspace,
+  type TabGroup,
+} from "./workspace/readingLayout";
+import {
   ReaderRegistry,
   type Reader,
   type ReaderPairing,
@@ -47,6 +58,13 @@ import {
 import { currentSectionViewPlugin } from "./sync/currentSectionDecoration";
 import { focusModeViewPlugin } from "./sync/focusModeDecoration";
 import { FocusModeController } from "./sync/focusMode";
+
+/**
+ * File extensions routed to the in-plugin reader. One list, so the
+ * reading layout's "is this a book?" test cannot drift from what
+ * `registerExtensions` actually claims. PDF joins it in E003.
+ */
+const READER_EXTENSIONS: readonly string[] = ["epub"];
 
 /**
  * Observation Car — plugin entry point.
@@ -85,6 +103,15 @@ export default class ObservationCarPlugin extends Plugin {
 
   /** Read-only CM6 focus decoration state (PRD F4.5). */
   private focusMode!: FocusModeController;
+
+  /**
+   * Main-area leaf → vault path as of the last reconciliation, the only
+   * way to tell that Obsidian reused a pane rather than opening one
+   * (`readingLayout.findDisplacements`).
+   */
+  private layoutSnapshot: Map<WorkspaceLeaf, string> = new Map();
+  /** Guards the reconciler against the layout events its own opens raise. */
+  private reconcilingLayout = false;
 
   async onload(): Promise<void> {
     const pluginData = loadPluginData(await this.loadData());
@@ -165,7 +192,7 @@ export default class ObservationCarPlugin extends Plugin {
       this.scrollSync.register(leaf, reader);
       return reader;
     });
-    this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
+    this.registerExtensions([...READER_EXTENSIONS], EPUB_VIEW_TYPE);
     this.register(installEpubLinkHandler(this.app));
     this.registerEditorExtension(currentSectionViewPlugin);
     this.registerEditorExtension(focusModeViewPlugin);
@@ -185,11 +212,19 @@ export default class ObservationCarPlugin extends Plugin {
       this.app.workspace.on("layout-change", () => {
         this.readerRegistry.refresh();
         this.scrollSync.refresh();
+        this.reconcileReadingLayout();
       }),
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         this.readerRegistry.refresh();
+        // Both events are hooked on purpose: `layout-change` can land
+        // while the repurposed leaf still reports its old file, and
+        // `file-open` is the one event guaranteed to fire after the new
+        // file is in place. The snapshot diff is idempotent, so whichever
+        // arrives with the settled path does the work and the other is a
+        // no-op.
+        this.reconcileReadingLayout();
         if (this.settings.autoOpenBookNote && file !== null) {
           void openBookNoteBesideRecentReader(this, file);
         }
@@ -359,6 +394,133 @@ export default class ObservationCarPlugin extends Plugin {
   /** Reader-toolbar bridge for F4.6's leaf-pinned action. */
   newNoteHereFromReader(leaf: WorkspaceLeaf): void {
     void newNoteHereFromReader(this, leaf);
+  }
+
+  /**
+   * The single way a book note reaches the screen: revealed where it is
+   * already open, else a new tab in the note pane. Every command that
+   * used to call `getLeaf("split", …)` or `createLeafBySplit` itself now
+   * comes through here, which is what stops the second book's note from
+   * building a third tab group.
+   */
+  async openBookNotePane(
+    readerLeaf: WorkspaceLeaf | null,
+    note: TFile,
+  ): Promise<WorkspaceLeaf> {
+    return openNoteBesideReader(this.readingLayout(), readerLeaf, note);
+  }
+
+  /**
+   * Adapt Obsidian's workspace to the layout module's seam. This is the
+   * only place that knows both APIs.
+   */
+  private readingLayout(): LayoutWorkspace<WorkspaceLeaf> {
+    const { workspace } = this.app;
+    return {
+      rootSplit: workspace.rootSplit,
+      rootLeaves: () => {
+        const leaves: WorkspaceLeaf[] = [];
+        workspace.iterateRootLeaves((leaf) => {
+          leaves.push(leaf);
+        });
+        return leaves;
+      },
+      pathOf: (leaf) => leafFilePath(leaf),
+      isReader: (leaf) => leaf.getViewState().type === EPUB_VIEW_TYPE,
+      tabCount: (group) => tabGroupSize(group),
+      // Obsidian types this parameter `WorkspaceSplit`, but a tab group
+      // (`WorkspaceTabs`) is what `leaf.parent` yields and what the app
+      // itself passes when adding a tab to an existing group. The cast
+      // is the type gap, not a behaviour assumption.
+      createLeafInParent: (group, index) =>
+        workspace.createLeafInParent(group as WorkspaceSplit, index),
+      createLeafBySplit: (leaf, direction) =>
+        workspace.createLeafBySplit(leaf, direction),
+      splitActiveLeaf: (direction) => workspace.getLeaf("split", direction),
+      revealLeaf: (leaf) => workspace.revealLeaf(leaf),
+    };
+  }
+
+  /**
+   * Put a book that took over the wrong pane, and whatever it pushed out
+   * of that pane, back where the reading layout says they belong.
+   *
+   * Obsidian decides which leaf a file-explorer click lands in, and
+   * `getLeaf(false)` hands back an existing navigable leaf — the note
+   * pane, when that is what was last active. There is no hook to refuse
+   * it, so this reads the reuse back off the leaf snapshot afterwards.
+   */
+  private reconcileReadingLayout(): void {
+    if (this.reconcilingLayout) return;
+
+    const layout = this.readingLayout();
+    const current = snapshotRootLeaves(layout);
+    const displacements = findDisplacements(
+      this.layoutSnapshot,
+      current,
+      isBookPath,
+    );
+    // Adopt the new snapshot before acting: the opens below raise more
+    // layout events, and their leaves must read as new rather than as
+    // further displacements.
+    this.layoutSnapshot = current;
+    if (displacements.length === 0) return;
+
+    this.reconcilingLayout = true;
+    void this.restoreDisplacedPanes(displacements).finally(() => {
+      this.reconcilingLayout = false;
+      this.layoutSnapshot = snapshotRootLeaves(this.readingLayout());
+    });
+  }
+
+  private async restoreDisplacedPanes(
+    displacements: readonly Displacement<WorkspaceLeaf>[],
+  ): Promise<void> {
+    const layout = this.readingLayout();
+    for (const displacement of displacements) {
+      try {
+        const displaced = this.app.vault.getAbstractFileByPath(
+          displacement.displacedPath,
+        );
+        if (displaced instanceof TFile === false) continue;
+
+        if (isBookPath(displacement.displacedPath)) {
+          // A book took another book's pane. Both belong in the book
+          // group, which is where the reused leaf already sits, so the
+          // displaced book only needs a tab of its own beside it. Its
+          // reading position is restored from `epubLastLocations`.
+          await openBesideInGroup(layout, displacement.leaf, displaced);
+          continue;
+        }
+
+        const book = this.app.vault.getAbstractFileByPath(
+          displacement.bookPath,
+        );
+        const relocated =
+          book instanceof TFile
+            ? await openBookInBookGroup(layout, book, displacement.leaf)
+            : null;
+        if (relocated === null) {
+          // No book pane anywhere else, so the reused leaf becomes the
+          // book pane and the note it displaced moves to a note pane
+          // beside it. Nothing is detached in this branch.
+          await openNoteBesideReader(layout, displacement.leaf, displaced);
+          continue;
+        }
+
+        // The reused leaf was the note pane: give the note a tab back in
+        // that same group before detaching the leaf, so the group cannot
+        // collapse in between.
+        await openBesideInGroup(layout, displacement.leaf, displaced);
+        displacement.leaf.detach();
+        await layout.revealLeaf(relocated);
+      } catch (error) {
+        console.error(
+          "[observation-car] could not restore the reading layout",
+          error,
+        );
+      }
+    }
   }
 
   /** Toggle read-only focus decoration for the active paired note. */
@@ -546,4 +708,49 @@ export default class ObservationCarPlugin extends Plugin {
       );
     }
   }
+}
+
+/**
+ * Vault path of the file a main-area leaf is showing, or null.
+ *
+ * The view's own `file` is read structurally rather than through
+ * `instanceof FileView`, so any view that exposes one answers. The view
+ * state is the fallback because a background leaf is deferred
+ * (`WorkspaceLeaf.isDeferred`) and carries a `DeferredView` with no
+ * `file` — the same reason `epubLinkHandler` reads the view state when
+ * matching an already-open book.
+ */
+function leafFilePath(leaf: WorkspaceLeaf): string | null {
+  const view: unknown = leaf.view;
+  if (typeof view === "object" && view !== null && "file" in view) {
+    const file: unknown = view.file;
+    if (typeof file === "object" && file !== null && "path" in file) {
+      if (typeof file.path === "string") return file.path;
+    }
+  }
+  const state: unknown = leaf.getViewState().state;
+  if (typeof state !== "object" || state === null || !("file" in state)) {
+    return null;
+  }
+  return typeof state.file === "string" ? state.file : null;
+}
+
+/** True for a path the plugin's own reader view owns. */
+function isBookPath(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  if (dot === -1) return false;
+  const extension = path.slice(dot + 1).toLowerCase();
+  return READER_EXTENSIONS.includes(extension);
+}
+
+/**
+ * Tabs in a group. Obsidian publishes `leaf.parent` but not the group's
+ * `children`, so this is the same narrow runtime seam `toggleSplitRatio`
+ * uses for the split dimensions: read it if the shape holds, and return
+ * null rather than guessing if a later release changes it.
+ */
+function tabGroupSize(group: TabGroup): number | null {
+  if (!("children" in group)) return null;
+  const children: unknown = group.children;
+  return Array.isArray(children) ? children.length : null;
 }

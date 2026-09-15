@@ -1,4 +1,10 @@
-import { Notice, normalizePath, TFile, TFolder } from "obsidian";
+import {
+  Notice,
+  normalizePath,
+  TFile,
+  TFolder,
+  type WorkspaceLeaf,
+} from "obsidian";
 import type ObservationCarPlugin from "../main";
 import { EpubView, EPUB_VIEW_TYPE } from "../readers/EpubView";
 
@@ -19,8 +25,13 @@ export function registerCreateBookNoteCommand(
   });
 }
 
+/**
+ * `leaf` is the reader the book was resolved from, carried alongside the
+ * book so the note pane opens beside *that* reader. It is null only when
+ * the resolution came from an active view with no leaf to read.
+ */
 type BookResolution =
-  | { kind: "book"; book: TFile }
+  | { kind: "book"; book: TFile; leaf: WorkspaceLeaf | null }
   | { kind: "none" }
   | { kind: "ambiguous"; books: TFile[] };
 
@@ -42,7 +53,7 @@ async function resolveAndCreateBookNote(
       );
       return;
     }
-    await createOrOpenBookNote(plugin, resolution.book);
+    await createOrOpenBookNote(plugin, resolution.book, resolution.leaf);
   } catch (error) {
     console.error("[observation-car] could not resolve the current book", error);
     new Notice("Could not create book note. Check the developer console for details.");
@@ -52,9 +63,10 @@ async function resolveAndCreateBookNote(
 async function currentBook(
   plugin: ObservationCarPlugin,
 ): Promise<BookResolution> {
-  const activeBook = plugin.app.workspace.getActiveViewOfType(EpubView)?.file;
+  const activeView = plugin.app.workspace.getActiveViewOfType(EpubView);
+  const activeBook = activeView?.file;
   if (activeBook !== null && activeBook !== undefined) {
-    return { kind: "book", book: activeBook };
+    return { kind: "book", book: activeBook, leaf: activeView?.leaf ?? null };
   }
 
   const mostRecentLeaf = plugin.app.workspace.getMostRecentLeaf();
@@ -65,7 +77,7 @@ async function currentBook(
         ? mostRecentLeaf.view.file
         : null;
     if (mostRecentBook !== null) {
-      return { kind: "book", book: mostRecentBook };
+      return { kind: "book", book: mostRecentBook, leaf: mostRecentLeaf };
     }
   }
 
@@ -76,21 +88,26 @@ async function currentBook(
     return { kind: "none" };
   }
   if (openLeaves.length > 1) {
-    const books: TFile[] = [];
+    const found: { book: TFile; leaf: WorkspaceLeaf }[] = [];
     for (const leaf of openLeaves) {
       await leaf.loadIfDeferred();
       const book = leaf.view instanceof EpubView ? leaf.view.file : null;
-      if (book !== null) books.push(book);
+      if (book !== null) found.push({ book, leaf });
     }
-    if (books.length > 1) return { kind: "ambiguous", books };
-    if (books.length === 1) return { kind: "book", book: books[0] };
+    if (found.length > 1) {
+      return { kind: "ambiguous", books: found.map((entry) => entry.book) };
+    }
+    const only = found[0];
+    if (only !== undefined) {
+      return { kind: "book", book: only.book, leaf: only.leaf };
+    }
     return { kind: "none" };
   }
 
   const leaf = openLeaves[0];
   await leaf.loadIfDeferred();
   const book = leaf.view instanceof EpubView ? leaf.view.file : null;
-  return book === null ? { kind: "none" } : { kind: "book", book };
+  return book === null ? { kind: "none" } : { kind: "book", book, leaf };
 }
 
 
@@ -101,10 +118,11 @@ async function currentBook(
 async function createOrOpenBookNote(
   plugin: ObservationCarPlugin,
   book: TFile,
+  readerLeaf: WorkspaceLeaf | null,
 ): Promise<void> {
   try {
     const note = await getOrCreateBookNote(plugin, book);
-    await openBookNote(plugin, note);
+    await plugin.openBookNotePane(readerLeaf, note);
   } catch (error) {
     console.error("[observation-car] could not create book note", error);
     new Notice("Could not create book note. Check the developer console for details.");
@@ -165,33 +183,6 @@ async function ensureFolder(
     }
     await plugin.app.vault.createFolder(currentPath);
   }
-}
-
-async function openBookNote(
-  plugin: ObservationCarPlugin,
-  note: TFile,
-): Promise<void> {
-  const workspace = plugin.app.workspace;
-  const markdownLeaves = workspace.getLeavesOfType("markdown");
-  const matchingLeaf = markdownLeaves.find((leaf) =>
-    leafMatchesNote(leaf, note),
-  );
-  if (matchingLeaf !== undefined) {
-    await workspace.revealLeaf(matchingLeaf);
-    return;
-  }
-
-  const splitLeaf = workspace.getLeaf("split", "vertical");
-  await splitLeaf.openFile(note);
-}
-
-function leafMatchesNote(
-  leaf: { getViewState(): { type?: string }; view?: unknown },
-  note: TFile,
-): boolean {
-  if (leaf.getViewState().type !== "markdown") return false;
-  const view = leaf.view as { file?: { path?: string } | null } | null;
-  return view?.file?.path === note.path;
 }
 
 
