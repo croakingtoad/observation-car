@@ -584,6 +584,10 @@ describe("parseBookNote — purity", () => {
     "body",
   ]);
 
+  it("retains the exact source text used to produce the parse", () => {
+    expect(parseBookNote(SAMPLE).sourceText).toBe(SAMPLE);
+  });
+
   it("returns equal results for the same input", () => {
     expect(parseBookNote(SAMPLE)).toEqual(parseBookNote(SAMPLE));
   });
@@ -592,6 +596,72 @@ describe("parseBookNote — purity", () => {
     const before = SAMPLE;
     parseBookNote(SAMPLE, { anchorHeadingLevel: 3 });
     expect(SAMPLE).toBe(before);
+  });
+});
+
+describe("parseBookNote — CRLF normalisation (LOCO-924)", () => {
+  const SOURCE = "Books/Surprised by Grace.epub";
+  const FRONTMATTER = [
+    "---",
+    "type: book-note",
+    `source: "[[${SOURCE}]]"`,
+    "format: epub",
+    "---",
+  ];
+
+  it("normalises CRLF to LF in sourceText and preserves section line indices", () => {
+    const body = [
+      "preamble",
+      `## [[${SOURCE}#epubcfi(/6/8!/4/2/1:0)|Ch 1]]`,
+      "first paragraph",
+      "second paragraph",
+      `## [[${SOURCE}#epubcfi(/6/14!/4/2/12:0)|Ch 3]]`,
+      "more text",
+    ];
+    const crlfText = [...FRONTMATTER, ...body].join("\r\n");
+    const lfText = [...FRONTMATTER, ...body].join("\n");
+
+    const crlfNote = parseBookNote(crlfText);
+    const lfNote = parseBookNote(lfText);
+
+    expect(crlfNote.sourceText).toBe(lfText);
+    expect(crlfNote.sourceText).not.toBe(crlfText);
+    expect(crlfNote.sections).toEqual(lfNote.sections);
+    expect(crlfNote.sections.map((s) => s.headingLine)).toEqual(
+      lfNote.sections.map((s) => s.headingLine),
+    );
+    expect(crlfNote.sections.length).toBeGreaterThan(0);
+  });
+});
+
+describe("parseBookNote — lone CR line indices (LOCO-936)", () => {
+  const SOURCE = "Books/x.epub";
+  const body = [
+    "intro\rmore",
+    `## [[${SOURCE}#epubcfi(/6/4!/4/2/1:0)|Later]]`,
+    "body a",
+    `## [[${SOURCE}#epubcfi(/6/2!/4/2/1:0)|Earlier]]`,
+    "body b",
+  ];
+  const text = [
+    "---",
+    `source: "[[${SOURCE}]]"`,
+    "format: epub",
+    "---",
+    ...body,
+  ].join("\n");
+  const parsed = parseBookNote(text);
+
+  it("indexes lone CR as a line break for every section", () => {
+    expect(parsed.sections).toHaveLength(2);
+    expect(
+      parsed.sections.map(
+        (section) => parsed.sourceText.split("\n")[section.headingLine],
+      ),
+    ).toEqual([
+      `## [[${SOURCE}#epubcfi(/6/4!/4/2/1:0)|Later]]`,
+      `## [[${SOURCE}#epubcfi(/6/2!/4/2/1:0)|Earlier]]`,
+    ]);
   });
 });
 

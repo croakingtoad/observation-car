@@ -52,6 +52,7 @@
 import {
   AnchorError,
   parseFragment,
+  spineIndexFromCfi,
   type AnchorKind,
   type AnchorPosition,
 } from "./anchor";
@@ -118,6 +119,11 @@ export interface BookNoteDiagnostic {
 }
 
 export interface BookNote {
+  /**
+   * Markdown source normalized to LF line endings, matching CM6's
+   * document representation.
+   */
+  readonly sourceText: string;
   readonly frontmatter: BookNoteFrontmatter;
   /** Anchor sections in file order (see module docs on ordering). */
   readonly sections: readonly BookNoteSection[];
@@ -142,7 +148,7 @@ export function parseBookNote(
 ): BookNote {
   const anchorHeadingLevel = options?.anchorHeadingLevel ?? DEFAULT_ANCHOR_HEADING_LEVEL;
   const resolveLink = options?.resolveLink;
-  const lines = text.split(/\r?\n/);
+  const lines = text.split(/\r\n?|\n/);
   const data = parseFrontmatter(lines);
   const source = extractSource(data);
   const format = extractFormat(data);
@@ -191,7 +197,12 @@ export function parseBookNote(
     });
   }
 
-  return { frontmatter: { data, source, format }, sections, diagnostics };
+  return {
+    sourceText: text.split(/\r\n?|\n/).join("\n"),
+    frontmatter: { data, source, format },
+    sections,
+    diagnostics,
+  };
 }
 
 /**
@@ -402,21 +413,15 @@ function extractWikilinks(text: string): readonly Wikilink[] {
 }
 
 /**
- * 0-based spine item index from a bare CFI, or null when the chapter
- * component is not the canonical two-component form.
+ * 0-based spine item index from a CFI anchor, or null when the chapter
+ * component is not the canonical two-component form (parsing shared
+ * with the reader's LocationChanged events, F2.5, in `anchor.ts`).
  */
 function chapterOf(position: AnchorPosition): number | null {
-  if (position.kind !== "epub-cfi") return null;
-  const spineEnd = position.cfi.indexOf("!");
-  if (spineEnd === -1) return null;
-  const match = /^\/(\d+)(?:\[[^\][]*\])?\/(\d+)(?:\[[^\][]*\])?$/.exec(
-    position.cfi.slice(0, spineEnd),
-  );
-  if (match === null) return null;
-  const second = Number(match[2]);
-  if (second < 2 || second % 2 !== 0) return null;
-  const index = second / 2 - 1;
-  return Number.isSafeInteger(index) ? index : null;
+  if (position.kind !== "epub-cfi") {
+    return null;
+  }
+  return spineIndexFromCfi(position.cfi);
 }
 
 const FRONTMATTER_DELIMITER = /^---[ \t]*$/;

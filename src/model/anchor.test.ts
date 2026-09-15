@@ -7,6 +7,7 @@ import {
   buildPdfFragment,
   comparePositions,
   parseFragment,
+  spineIndexFromCfi,
   type SelectionRect,
 } from "./anchor";
 
@@ -320,5 +321,34 @@ describe("comparePositions — kinds and consistency", () => {
       pagePosition(7, [14, 0, 16, 40]),
       pagePosition(9),
     ]);
+  });
+});
+
+describe("spineIndexFromCfi", () => {
+  it("derives the 0-based spine item index from the chapter component", () => {
+    // Same convention as the BookNote model: N/2 − 1 of the second step.
+    expect(spineIndexFromCfi("/6/8!/4/2/1:0")).toBe(3);
+    expect(spineIndexFromCfi("/6/14!/4/2/12:0")).toBe(6);
+    expect(spineIndexFromCfi("/2/2!/4/2/1:0")).toBe(0);
+  });
+
+  it("takes the chapter from the base component of a range CFI", () => {
+    expect(spineIndexFromCfi("/6/4!/4/2/6:32,/2/1:1,/2/1:80")).toBe(1);
+  });
+
+  it("accepts node-id assertions on either step", () => {
+    expect(spineIndexFromCfi("/6[chap01ref]/8[body01]!/4/2/1:3")).toBe(3);
+  });
+
+  it("accepts the epubcfi(...) wrapper relocated events carry", () => {
+    expect(spineIndexFromCfi("epubcfi(/6/8!/4/2/1:0)")).toBe(3);
+  });
+
+  it("returns null for non-canonical chapter components", () => {
+    expect(spineIndexFromCfi("/6/8")).toBeNull(); // missing "!"
+    expect(spineIndexFromCfi("/6!")).toBeNull(); // missing second step
+    expect(spineIndexFromCfi("/6/0!/4/2/1:0")).toBeNull(); // zero offset
+    expect(spineIndexFromCfi("/6/7!")).toBeNull(); // odd offset
+    expect(spineIndexFromCfi("")).toBeNull();
   });
 });
