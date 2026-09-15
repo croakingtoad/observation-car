@@ -154,6 +154,90 @@ function renderedContents(document: Document): RenderedView {
 }
 
 describe("EpubKeyBridge", () => {
+  it("activates the book leaf before forwarding a non-paging key", () => {
+    const { host, iframe } = documents();
+    const rendition = new FakeRendition();
+    const beforeForward = vi.fn();
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), beforeForward);
+    rendition.render(iframe);
+    const hostHandler = vi.fn();
+    host.addEventListener("keydown", hostHandler);
+
+    iframe.dispatchEvent(
+      keyboardEvent(iframe, "x", {
+        code: "KeyX",
+        keyCode: 88,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(beforeForward).toHaveBeenCalledOnce();
+    expect(hostHandler).toHaveBeenCalledOnce();
+    expect(beforeForward.mock.invocationCallOrder[0]).toBeLessThan(
+      hostHandler.mock.invocationCallOrder[0],
+    );
+    bridge.destroy();
+  });
+
+  it("does not activate for paging, copy, interactive targets, or consumed keys", () => {
+    const { host, iframe } = documents();
+    const rendition = new FakeRendition();
+    const beforeForward = vi.fn();
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), beforeForward);
+    rendition.render(iframe);
+    const hostHandler = vi.fn();
+    host.addEventListener("keydown", hostHandler);
+
+    for (const key of ["ArrowLeft", "ArrowRight", "PageUp", "PageDown"]) {
+      iframe.dispatchEvent(
+        keyboardEvent(iframe, key, {
+          code: key,
+          keyCode:
+            key === "PageUp" ? 33 : key === "PageDown" ? 34 : key === "ArrowLeft" ? 37 : 39,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+    for (const metaKey of [false, true]) {
+      iframe.dispatchEvent(
+        keyboardEvent(iframe, "c", {
+          code: "KeyC",
+          keyCode: 67,
+          ctrlKey: !metaKey,
+          metaKey,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    const interactiveTarget = iframe.createElement("button");
+    iframe.body.append(interactiveTarget);
+    interactiveTarget.dispatchEvent(
+      keyboardEvent(iframe, "x", {
+        code: "KeyX",
+        keyCode: 88,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    const consumed = keyboardEvent(iframe, "x", {
+      code: "KeyX",
+      keyCode: 88,
+      bubbles: true,
+      cancelable: true,
+    });
+    consumed.preventDefault();
+    iframe.dispatchEvent(consumed);
+
+    expect(beforeForward).not.toHaveBeenCalled();
+    expect(hostHandler).not.toHaveBeenCalled();
+    bridge.destroy();
+  });
+
   it("forwards an equivalent non-paging key event to the host document", () => {
     const { host, iframe } = documents();
     const rendition = new FakeRendition();

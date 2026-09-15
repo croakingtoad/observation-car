@@ -1116,3 +1116,77 @@ describe("EpubView location events (F2.5)", () => {
     expect(documentSpy).not.toHaveBeenCalled();
   });
 });
+
+function childDocument(parent: Document): Document {
+  const frame = parent.createElement("iframe");
+  parent.body.append(frame);
+  if (frame.contentDocument === null) {
+    throw new Error("test book iframe has no document");
+  }
+  return frame.contentDocument;
+}
+
+function renderedView(bookDocument: Document) {
+  const renderedWindow = bookDocument.defaultView;
+  const frameElement = renderedWindow?.frameElement;
+  if (renderedWindow === undefined || frameElement === null) {
+    throw new Error("test rendered document has no frame element");
+  }
+  return {
+    contents: {},
+    document: bookDocument,
+    iframe: frameElement,
+    window: renderedWindow,
+  };
+}
+
+describe("EpubView keystroke activation", () => {
+  it("activates the chorded book's leaf, not the currently active book", async () => {
+    const leafA = { id: "book-a" } as WorkspaceLeaf;
+    const leafB = { id: "book-b" } as WorkspaceLeaf;
+    const setActiveLeaf = vi.fn();
+    const readBinary = vi.fn(async (openedFile: TFile) =>
+      openedFile.path === "library/a.epub"
+        ? new Uint8Array([1])
+        : new Uint8Array([2]),
+    );
+    const makeEpubView = (leaf: WorkspaceLeaf): EpubView => {
+      const view = new EpubView(leaf, makeHost());
+      Object.assign(view, {
+        app: { vault: { readBinary }, workspace: { setActiveLeaf } },
+      });
+      return view;
+    };
+    const viewA = makeEpubView(leafA);
+    const viewB = makeEpubView(leafB);
+    await viewA.onLoadFile(file("library/a.epub"));
+    await viewB.onLoadFile(file("library/b.epub"));
+
+    const workspaceFrame = document.createElement("iframe");
+    document.body.append(workspaceFrame);
+    const workspaceDocument = workspaceFrame.contentDocument;
+    if (workspaceDocument === null) {
+      throw new Error("test workspace document is missing");
+    }
+    const bookADocument = childDocument(workspaceDocument);
+    const bookBDocument = childDocument(workspaceDocument);
+    const [renditionA, renditionB] = FakeRendition.instances;
+    renditionA.emit("rendered", {}, renderedView(bookADocument));
+    renditionB.emit("rendered", {}, renderedView(bookBDocument));
+
+    bookADocument.dispatchEvent(
+      new bookADocument.defaultView!.KeyboardEvent("keydown", {
+        key: "x",
+        code: "KeyX",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(setActiveLeaf).toHaveBeenCalledOnce();
+    expect(setActiveLeaf).toHaveBeenCalledWith(leafA, { focus: false });
+    expect(setActiveLeaf).not.toHaveBeenCalledWith(leafB, { focus: false });
+    await viewA.onClose();
+    await viewB.onClose();
+  });
+});
