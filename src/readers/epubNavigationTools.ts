@@ -30,6 +30,7 @@
  */
 import { type Book, type Contents, type Rendition } from "epubjs";
 import type Locations from "epubjs/types/locations";
+import type { PackagingMetadataObject } from "epubjs/types/packaging";
 import { type Location } from "epubjs/types/rendition";
 import { AnchorError, buildEpubCfiFragment } from "../model/anchor";
 import type { NavItem } from "epubjs/types/navigation";
@@ -39,6 +40,27 @@ import type { EpubFlowMode } from "../settings";
 import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 
 const EPUBCFI_WRAPPER = "epubcfi(";
+const UNTITLED_BOOK_TITLE = "Untitled";
+
+type EpubMetadata = Omit<PackagingMetadataObject, "title"> & {
+  title: string | null;
+};
+
+type EpubNavigationBook = Omit<Book, "loaded"> & {
+  loaded: Omit<Book["loaded"], "metadata"> & {
+    metadata: Promise<EpubMetadata>;
+  };
+};
+
+function normalizeEpubTitle(title: EpubMetadata["title"]): string {
+  if (title !== null) {
+    return title;
+  }
+  console.warn(
+    '[Observation Car] EPUB metadata title is null; using "Untitled".',
+  );
+  return UNTITLED_BOOK_TITLE;
+}
 
 interface EpubRenderedView {
   contents?: unknown;
@@ -632,7 +654,7 @@ export class EpubNavigationTools {
     event.stopPropagation();
     this.actions?.onNewNote();
   };
-  private bookTitle: Promise<string> | null = null;
+  private readonly bookTitle: Promise<string>;
   private readonly documentListeners = new Map<Document, DocumentListeners>();
   private readonly hostKeyListeners = new Set<{
     target: HTMLElement;
@@ -758,7 +780,7 @@ export class EpubNavigationTools {
   constructor(
     viewerEl: HTMLElement,
     private readonly bookPath: string,
-    private readonly book: Book,
+    private readonly book: EpubNavigationBook,
     private readonly rendition: Rendition,
     private readonly selectionTracker: EpubSelectionTracker,
     private readonly flow?: EpubFlowControls,
@@ -779,8 +801,8 @@ export class EpubNavigationTools {
       (key) => this.pageKeyJump(key),
     );
     this.bookTitle = this.book.loaded.metadata
-      .then((metadata) => metadata.title)
-      .catch(() => "Untitled");
+      .then((metadata) => normalizeEpubTitle(metadata.title))
+      .catch(() => UNTITLED_BOOK_TITLE);
     void this.addSelectionListener().catch((error: unknown) =>
       this.reportSetupFailure(viewerEl, "Selection copying", error),
     );
@@ -968,7 +990,7 @@ export class EpubNavigationTools {
     if (this.destroyed) {
       return;
     }
-    const title = (await this.bookTitle) ?? "Untitled";
+    const title = await this.bookTitle;
     if (this.destroyed) {
       return;
     }
@@ -1043,7 +1065,7 @@ export class EpubNavigationTools {
     if (this.destroyed) {
       return;
     }
-    const bookTitle = metadata.title;
+    const bookTitle = normalizeEpubTitle(metadata.title);
 
     const tocButton = document.createElement("button");
     tocButton.className = "epub-button epub-toc-button";
