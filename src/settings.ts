@@ -22,6 +22,13 @@ export interface ObservationCarSettings {
   noteTemplate: string;
   /** Whether focus mode starts on when a book note opens beside its reader. */
   focusModeDefault: boolean;
+  /** Whether opening a reader also opens its book note beside it. */
+  autoOpenBookNote: boolean;
+  /**
+   * F2.2 — EPUB reader flow mode. Persisted as a global plugin setting;
+   * per-book state is F2.4's job (LOCO-29).
+   */
+  epubFlowMode: EpubFlowMode;
   /**
    * Fallback chapter window (in pages, ± each side) for PDFs without an
    * outline. Default ±10.
@@ -45,6 +52,9 @@ export const PDF_CHAPTER_WINDOW_MIN = 1;
 export const PDF_CHAPTER_WINDOW_MAX = 100;
 export const SPLIT_RATIO_MIN = 5;
 export const SPLIT_RATIO_MAX = 95;
+
+/** F2.2 — the EPUB reader's flow modes (PRD §6 E002). */
+export type EpubFlowMode = "paginated" | "scrolled";
 
 /**
  * Frontmatter shape from PRD §5.2 with placeholders that note-creation
@@ -73,6 +83,8 @@ export const DEFAULT_SETTINGS: ObservationCarSettings = {
   anchorHeadingLevel: 2,
   noteTemplate: DEFAULT_NOTE_TEMPLATE,
   focusModeDefault: false,
+  epubFlowMode: "paginated",
+  autoOpenBookNote: false,
   pdfChapterWindowPages: 10,
   splitReadRatioPercent: 60,
   splitWriteRatioPercent: 40,
@@ -130,6 +142,17 @@ export function mergeSettings(stored: unknown): ObservationCarSettings {
   }
   if (typeof partial.focusModeDefault === "boolean") {
     settings.focusModeDefault = partial.focusModeDefault;
+  }
+  // Whitelist check, not a string passthrough: anything outside the two
+  // modes falls back to the default (a hand-edited data.json is legal input).
+  if (
+    typeof partial.epubFlowMode === "string" &&
+    (partial.epubFlowMode === "paginated" || partial.epubFlowMode === "scrolled")
+  ) {
+    settings.epubFlowMode = partial.epubFlowMode;
+  }
+  if (typeof partial.autoOpenBookNote === "boolean") {
+    settings.autoOpenBookNote = partial.autoOpenBookNote;
   }
   if (typeof partial.pdfChapterWindowPages === "number") {
     settings.pdfChapterWindowPages = clampInt(

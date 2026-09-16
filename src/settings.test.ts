@@ -51,9 +51,14 @@ describe("F1.4 settings defaults", () => {
 
   it("defaults focus mode off and leaves Booklore credentials empty", () => {
     expect(DEFAULT_SETTINGS.focusModeDefault).toBe(false);
+    expect(DEFAULT_SETTINGS.autoOpenBookNote).toBe(false);
     expect(DEFAULT_SETTINGS.bookloreBaseUrl).toBe("");
     expect(DEFAULT_SETTINGS.opdsUsername).toBe("");
     expect(DEFAULT_SETTINGS.opdsPassword).toBe("");
+  });
+
+  it("defaults the EPUB flow mode to paginated", () => {
+    expect(DEFAULT_SETTINGS.epubFlowMode).toBe("paginated");
   });
 
   it("seeds the note template with the PRD §5.2 frontmatter and placeholders", () => {
@@ -120,10 +125,32 @@ describe("F1.4 data.json persistence (mergeSettings)", () => {
   });
 
   it("keeps valid values from a partial stored object", () => {
-    const merged = mergeSettings({ focusModeDefault: true, noteTemplate: "custom" });
+    const merged = mergeSettings({
+      autoOpenBookNote: true,
+      focusModeDefault: true,
+      noteTemplate: "custom",
+    });
+    expect(merged.autoOpenBookNote).toBe(true);
     expect(merged.focusModeDefault).toBe(true);
     expect(merged.noteTemplate).toBe("custom");
     expect(merged.pdfChapterWindowPages).toBe(10);
+  });
+
+  it("round-trips a stored EPUB flow mode", () => {
+    expect(mergeSettings({ epubFlowMode: "scrolled" }).epubFlowMode).toBe("scrolled");
+    expect(mergeSettings({ epubFlowMode: "paginated" }).epubFlowMode).toBe("paginated");
+  });
+
+  it("falls back to paginated for flow modes outside the whitelist", () => {
+    for (const bad of ["SCROLLED", "paginated ", "scroll", 42, true, null]) {
+      expect(mergeSettings({ epubFlowMode: bad }).epubFlowMode).toBe("paginated");
+    }
+  });
+
+  it("wires the auto-open setting into the settings tab", () => {
+    const tabSource = readSourceFile("settingsTab.ts");
+    expect(tabSource).toContain('setName("Open book note automatically")');
+    expect(tabSource).toContain("autoOpenBookNote");
   });
 
   it("drops unknown keys from stored data", () => {
