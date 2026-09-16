@@ -331,7 +331,7 @@ export class EpubView extends FileView {
         navigationTools,
         locationEvents,
       );
-      this.renderLoadError(error);
+      this.renderLoadError(error, generation);
       throw error;
     } finally {
       window.clearTimeout(displayTimeout);
@@ -394,8 +394,13 @@ export class EpubView extends FileView {
    * Render a readable, leaf-contained failure after the partial reader
    * has been discarded, using a fresh container without abandoned
    * reader controls.
+   * A generation guard prevents a superseded render's late rejection from
+   * overwriting a newer render's successfully mounted book.
    */
-  private renderLoadError(error: unknown): void {
+  private renderLoadError(error: unknown, generation: number): void {
+    if (generation !== this.renderGeneration) {
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     this.contentEl.replaceChildren();
     const notice = this.contentEl.createDiv({ cls: "epub-load-error" });
