@@ -1,4 +1,11 @@
+// @vitest-environment jsdom
+
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import ePub from "epubjs";
+import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AnchorError } from "../model/anchor";
 import {
   DEFAULT_LOCATION_DEBOUNCE_MS,
   EpubLocationTracker,
@@ -20,6 +27,34 @@ const TOC: readonly TocItem[] = [
 ];
 
 const rel = (cfi: string, href: string) => ({ cfi, href });
+
+async function buildEpub2EmptyNcxFixture(): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve(
+    "src/model/fixtures/minimal-epub2-empty-ncx",
+  );
+  const fixtureFiles = [
+    "mimetype",
+    "META-INF/container.xml",
+    "EPUB/package.opf",
+    "EPUB/toc.ncx",
+    "EPUB/chapter-1.xhtml",
+  ] as const;
+  const zip = new JSZip();
+
+  for (const fixturePath of fixtureFiles) {
+    let contents = await readFile(resolve(fixtureRoot, fixturePath), "utf8");
+    if (fixturePath === "mimetype") {
+      contents = contents.trimEnd();
+    }
+    zip.file(fixturePath, contents, { createFolders: false });
+  }
+
+  return zip.generateAsync({
+    compression: "STORE",
+    platform: "UNIX",
+    type: "arraybuffer",
+  });
+}
 
 describe("tocLabelForHref", () => {
   it("resolves a chapter from an exact spine href match", () => {
@@ -60,6 +95,17 @@ describe("tocLabelForHref", () => {
       },
     ];
     expect(tocLabelForHref(toc, "chapters/ch2.xhtml")).toBe("Chapter Two");
+  });
+
+  it("skips hrefless entries while searching their subitems", () => {
+    const toc: readonly TocItem[] = [
+      {
+        label: "Part One",
+        href: null,
+        subitems: [{ label: "Chapter One", href: "chapters/ch1.xhtml" }],
+      },
+    ];
+    expect(tocLabelForHref(toc, "chapters/ch1.xhtml")).toBe("Chapter One");
   });
 
   it("returns null when no TOC item points at the spine item", () => {
@@ -134,6 +180,15 @@ describe("locationForRelocation", () => {
     // A non-canonical chapter component is likewise not a valid fragment.
     expect(locationForRelocation(rel("/6!x", "ch1.xhtml"), TOC)).toBeNull();
   });
+
+  it("drops relocations without a spine href", () => {
+    expect(
+      locationForRelocation(
+        { cfi: "/6/8!/4/2/1:0", href: null },
+        TOC,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("EpubLocationTracker", () => {
@@ -161,6 +216,37 @@ describe("EpubLocationTracker", () => {
     vi.advanceTimersByTime(1);
     expect(seen).toHaveLength(1);
     tracker.destroy();
+  });
+
+  it("emits events after receiving a live EPUB 2 TOC with hrefless entries", async () => {
+    const fixture = await buildEpub2EmptyNcxFixture();
+    const book = ePub(fixture);
+    const tracker = new EpubLocationTracker(0);
+    const seen: EpubLocation[] = [];
+
+    try {
+      await book.opened;
+      const navigation = await book.loaded.navigation;
+      tracker.setToc(navigation.toc);
+      tracker.on((location) => seen.push(location));
+      tracker.onRelocated({
+        cfi: "/6/2!/4/2/1:0",
+        href: "chapter-1.xhtml",
+      });
+
+      await vi.waitFor(() => {
+        expect(seen).toEqual([
+          {
+            fragment: "#epubcfi(/6/2!/4/2/1:0)",
+            chapter: 0,
+            label: "Ch. 0",
+          },
+        ]);
+      });
+    } finally {
+      tracker.destroy();
+      await book.destroy();
+    }
   });
 
   it("coalesces a burst into one event after the last move", () => {
@@ -200,6 +286,37 @@ describe("EpubLocationTracker", () => {
     tracker.setToc(TOC); // navigation resolves before the debounced emit
     vi.advanceTimersByTime(150);
     expect(seen[0].label).toBe("The Opening Image");
+    tracker.destroy();
+  });
+
+  it("rejects unusable TOC hrefs recursively at the setToc boundary", () => {
+    const tracker = new EpubLocationTracker();
+
+    expect(() =>
+      tracker.setToc([{ label: "Empty", href: "" }]),
+    ).toThrow(AnchorError);
+    expect(() =>
+      tracker.setToc([
+        {
+          label: "Nested",
+          href: "ch1.xhtml",
+          subitems: [{ label: "Invalid", href: 42 as unknown as string | null }],
+        },
+      ]),
+    ).toThrow(AnchorError);
+
+    tracker.destroy();
+  });
+
+  it("ignores relocations without a spine href", () => {
+    vi.useFakeTimers();
+    const tracker = new EpubLocationTracker();
+    const seen = collect(tracker);
+
+    tracker.onRelocated({ cfi: "/6/8!/4/2/1:0", href: null });
+    vi.advanceTimersByTime(1000);
+    expect(seen).toHaveLength(0);
+    expect(tracker.current()).toBeNull();
     tracker.destroy();
   });
 

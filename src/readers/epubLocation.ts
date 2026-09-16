@@ -42,14 +42,14 @@ export interface EpubLocation {
 /** Structural subset of an epub.js TOC item (`Navigation.toc`). */
 export interface TocItem {
   readonly label: string;
-  readonly href: string;
+  readonly href: string | null;
   readonly subitems?: readonly TocItem[];
 }
 
 /** The relocated position the tracker needs from a rendition event. */
 export interface RelocatedPosition {
   readonly cfi: string;
-  readonly href: string;
+  readonly href: string | null;
 }
 
 /**
@@ -66,7 +66,7 @@ export function tocLabelForHref(
   const target = normalizeHref(spineHref);
   const find = (items: readonly TocItem[]): string | null => {
     for (const item of items) {
-      if (normalizeHref(item.href) === target) {
+      if (item.href !== null && normalizeHref(item.href) === target) {
         return item.label;
       }
       if (item.subitems !== undefined) {
@@ -95,7 +95,7 @@ export function locationForRelocation(
   position: RelocatedPosition,
   toc: readonly TocItem[],
 ): EpubLocation | null {
-  if (position.cfi.length === 0) {
+  if (position.cfi.length === 0 || position.href === null) {
     return null;
   }
   let fragment: string;
@@ -143,7 +143,7 @@ export class EpubLocationTracker {
    * same label that `current()` derives.
    */
   setToc(toc: readonly TocItem[]): void {
-    this.toc = toc;
+    this.toc = assertTocItems(toc);
     if (this.latest !== null) {
       this.onRelocated(this.latest);
     }
@@ -151,7 +151,7 @@ export class EpubLocationTracker {
 
   /** Feed one relocated position; the emitted event is debounced. */
   onRelocated(position: RelocatedPosition | null): void {
-    if (this.destroyed || position === null) {
+    if (this.destroyed || position === null || position.href === null) {
       return;
     }
     if (locationForRelocation(position, this.toc) === null) {
@@ -197,11 +197,11 @@ export class EpubLocationTracker {
     const position = this.pending;
     this.pending = null;
     if (position === null) {
-      return;
+      throw new AnchorError("location flush invariant violated: no position");
     }
     const location = locationForRelocation(position, this.toc);
     if (location === null) {
-      return;
+      throw new AnchorError("location flush invariant violated: no location");
     }
     for (const listener of [...this.listeners]) {
       try {
@@ -211,6 +211,28 @@ export class EpubLocationTracker {
       }
     }
   }
+}
+
+function assertTocHref(body: unknown): string | null {
+  if (body === null) {
+    return null;
+  }
+  if (typeof body !== "string" || body.length === 0) {
+    throw new AnchorError("TOC href must be a usable string or null");
+  }
+  return body;
+}
+
+function assertTocItems(
+  toc: readonly TocItem[],
+): readonly TocItem[] {
+  return toc.map((item) => {
+    const href = assertTocHref(item.href);
+    if (item.subitems === undefined) {
+      return { ...item, href };
+    }
+    return { ...item, href, subitems: assertTocItems(item.subitems) };
+  });
 }
 
 /**

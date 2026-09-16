@@ -295,9 +295,6 @@ function assertSpineHref(body: unknown): string {
   if (typeof body !== "string" || body.length === 0) {
     throw new AnchorError("spine href must be a usable string");
   }
-  if (body.length === 0) {
-    throw new AnchorError("spine href must not be empty");
-  }
   if (body.includes("#")) {
     throw new AnchorError(`spine href must not contain "#": "${body}"`);
   }
