@@ -140,7 +140,9 @@ export class EpubKeyBridge {
       return;
     }
     if (event.key === "PageUp" || event.key === "PageDown") {
-      void this.pageKeyJump(event.key);
+      void Promise.resolve(this.pageKeyJump(event.key)).catch((error: unknown) => {
+        console.warn("[Observation Car] Page-key navigation failed:", error);
+      });
       event.preventDefault();
       return;
     }
@@ -912,16 +914,36 @@ export class EpubNavigationTools {
   private async pageKeyJump(key: string): Promise<void> {
     const toc = await this.book.loaded.navigation;
     const currentHref = this.rendition.location?.start?.href;
-    const tocItems = toc.toc;
-    const idx = tocItems.findIndex((item) => this.sanitize(item.href) === this.sanitize(currentHref ?? ""));
+    const currentLocation = this.navigationLocation(currentHref);
+    if (currentLocation.length === 0) {
+      return;
+    }
+    const tocItems = flattenToc(toc.toc).filter((item) => item.href !== null);
+    const idx = tocItems.findIndex((item) => this.navigationLocation(item.href) === currentLocation);
     let targetIdx = -1;
-    if (key === "PageUp" && idx < tocItems.length - 1) {
+    if (key === "PageUp" && idx !== -1 && idx < tocItems.length - 1) {
       targetIdx = idx + 1;
     } else if (key === "PageDown" && idx > 0) {
       targetIdx = idx - 1;
     }
     if (targetIdx !== -1) {
-      await this.rendition.display(tocItems[targetIdx].href);
+      const targetEntry = tocItems[targetIdx];
+      if (targetEntry === undefined || targetEntry.href === null) {
+        return;
+      }
+      await this.rendition.display(targetEntry.href);
+    }
+  }
+
+  private navigationLocation(href: string | null | undefined): string {
+    if (typeof href !== "string" || href.length === 0) {
+      return "";
+    }
+    const withoutFragment = href.split("#", 1)[0];
+    try {
+      return decodeURI(withoutFragment);
+    } catch {
+      return withoutFragment;
     }
   }
 
