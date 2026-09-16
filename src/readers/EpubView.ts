@@ -314,7 +314,7 @@ export class EpubView extends FileView {
         rendition.display(),
         new Promise<never>((_, reject) => {
           displayTimeout = window.setTimeout(() => {
-            reject(new Error("the EPUB did not finish loading within 5 seconds"));
+            reject(new Error(`the EPUB did not finish loading within ${EPUB_DISPLAY_TIMEOUT_MS / 1000} seconds`));
           }, EPUB_DISPLAY_TIMEOUT_MS);
         }),
       ]);

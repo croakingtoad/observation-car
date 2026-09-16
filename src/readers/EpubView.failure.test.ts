@@ -226,7 +226,7 @@ describe("EpubView malformed-book failure path", () => {
       const view = loaded.view;
       expect(loaded.error).toBeInstanceOf(Error);
       expect((loaded.error as Error).message).toMatch(
-        /EPUB did not finish loading|not a zip|malformed|Failed to load/i,
+        /EPUB did not finish loading/i,
       );
 
       expect(view.contentEl.querySelectorAll(".epub-load-error")).toHaveLength(
