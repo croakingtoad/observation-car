@@ -714,7 +714,10 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     expect(FakeBook.instances).toHaveLength(1);
     expect(FakeBook.instances[0].destroyed).toBe(true);
     expect(FakeBook.instances[0].rendition.destroyed).toBe(true);
-    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(1);
+    expect(view.contentEl.querySelector(".epub-load-error")?.textContent).toContain(
+      "display blew up",
+    );
   });
 
   it("a failed readBinary propagates without leaving a reader", async () => {
