@@ -130,9 +130,15 @@ export function spineIndexFromCfi(cfi: string): number | null {
   return Number.isSafeInteger(index) ? index : null;
 }
 
-export function buildEpubSpineFragment(href: string): string {
-  assertSpineHref(href);
-  return `#${href}`;
+/**
+ * Build a chapter-level EPUB fragment.
+ *
+ * Empty or missing hrefs are rejected at this boundary: `#` is not a
+ * meaningful spine anchor and parseFragment deliberately rejects it too.
+ */
+export function buildEpubSpineFragment(href: string | undefined): string {
+  const validHref = assertSpineHref(href);
+  return `#${validHref}`;
 }
 
 /**
@@ -285,7 +291,13 @@ function parseSelectionRect(value: string): SelectionRect {
   return [x1, y1, x2, y2] as const;
 }
 
-function assertSpineHref(body: string): string {
+function assertSpineHref(body: string | undefined): string {
+  if (body === undefined) {
+    throw new AnchorError("spine href must be a string");
+  }
+  if (body.length === 0) {
+    throw new AnchorError("spine href must not be empty");
+  }
   if (body.includes("#")) {
     throw new AnchorError(`spine href must not contain "#": "${body}"`);
   }

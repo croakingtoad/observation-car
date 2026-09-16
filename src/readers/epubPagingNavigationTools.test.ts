@@ -73,7 +73,7 @@ function renderedDocument(bodyWidth: number, documentWidth: number): Document {
   return doc;
 }
 
-function epubBookWithToc(href: string, label: string): Book {
+function epubBookWithToc(href: unknown, label: string): Book {
   return {
     loaded: {
       metadata: Promise.resolve({ title: "Test Book" }),
@@ -91,7 +91,7 @@ function inertRendition(): Rendition {
   } as unknown as Rendition;
 }
 
-async function clickTocCopy(href: string, label: string): Promise<void> {
+async function clickTocCopy(href: unknown, label: string): Promise<void> {
   new EpubNavigationTools(
     document.body,
     "Books/Test Book.epub",
@@ -217,7 +217,7 @@ describe("TOC link copying", () => {
 
     expect(writeText).not.toHaveBeenCalled();
     expect(showNotice).toHaveBeenCalledWith(
-      expect.stringContaining("Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support."),
+      expect.stringContaining('Could not copy link: spine href must not contain "#"'),
     );
   });
 
@@ -234,6 +234,69 @@ describe("TOC link copying", () => {
       "[[Books/Test Book.epub#text/chapter.xhtml|Test Book, Part ｜ 1 ］］ Notes]]",
     );
     expect(showNotice).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing href without exposing an internal TypeError", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    await clickTocCopy(undefined, "Group heading");
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(showNotice).toHaveBeenCalledWith(
+      expect.stringContaining("spine href must be a string"),
+    );
+    expect(showNotice).not.toHaveBeenCalledWith(
+      expect.stringContaining("Cannot read properties of undefined"),
+    );
+  });
+
+  it("does not expose unexpected non-AnchorError details", async () => {
+    const originalIncludes = String.prototype.includes;
+    vi.spyOn(String.prototype, "includes").mockImplementation(function (
+      this: string,
+      searchString,
+      position,
+    ) {
+      if (String(this) === "throw-unexpected.xhtml") {
+        throw new TypeError("internal implementation detail");
+      }
+      return originalIncludes.call(this, searchString, position);
+    });
+    const tools = new EpubNavigationTools(
+      document.body,
+      "Books/Test Book.epub",
+      epubBookWithToc("chapter.xhtml", "Chapter"),
+      inertRendition(),
+      new EpubSelectionTracker(),
+      undefined,
+    );
+    const button = document.createElement("button");
+    const event = {
+      currentTarget: button,
+      stopPropagation: vi.fn(),
+    } as unknown as Event;
+
+    await (
+      tools as unknown as {
+        copyTocLink(
+          event: Event,
+          bookTitle: string,
+          href: string,
+          label: string,
+        ): Promise<void>;
+      }
+    ).copyTocLink(event, "Test Book", "throw-unexpected.xhtml", "Chapter");
+
+    expect(showNotice).toHaveBeenCalledWith(
+      "Could not copy this table-of-contents link. Check the developer console for details.",
+    );
+    expect(showNotice).not.toHaveBeenCalledWith(
+      expect.stringContaining("internal implementation detail"),
+    );
   });
 });
 

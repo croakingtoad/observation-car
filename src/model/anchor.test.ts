@@ -164,6 +164,21 @@ describe("buildFragment", () => {
     expect(() => buildEpubSpineFragment("a b")).toThrowError(AnchorError);
   });
 
+  it("rejects an empty spine href at both build and parse boundaries", () => {
+    expect(() =>
+      buildFragment({ kind: "epub-spine", href: "" }),
+    ).toThrowError(new AnchorError("spine href must not be empty"));
+    expect(() => parseFragment("#")).toThrowError(
+      new AnchorError("fragment is empty"),
+    );
+  });
+
+  it("rejects a missing spine href with AnchorError", () => {
+    expect(() => buildEpubSpineFragment(undefined)).toThrowError(
+      new AnchorError("spine href must be a string"),
+    );
+  });
+
   it("builds PDF fragments in PDF++-compatible syntax", () => {
     expect(buildPdfFragment(7)).toBe("#page=7");
     expect(buildPdfFragment(7, [12, 0, 14, 40])).toBe(
