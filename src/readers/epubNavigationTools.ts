@@ -585,7 +585,7 @@ export class EpubFontSizeStepper {
       ) {
         return value;
       }
-    } catch {
+    } catch (error) {
       // Storage can be unavailable in restricted webviews; keep the control functional in-memory.
     }
     return FONT_SIZE_DEFAULT;
@@ -594,7 +594,7 @@ export class EpubFontSizeStepper {
   private writeStoredValue(): void {
     try {
       localStorage.setItem(this.storageKey, String(this.currentValue));
-    } catch {
+    } catch (error) {
       // See readStoredValue: persistence is optional when the webview denies storage.
     }
   }
@@ -612,6 +612,10 @@ export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
   private tocButton: HTMLButtonElement | null = null;
   private isTocOpen = false;
+  /** Escape wikilink metacharacters that would break the `[[path|alias]]` grammar. */
+  private escapeWikilinkText(str: string): string {
+    return str.replaceAll("|", "｜").replaceAll("]", "］");
+  }
   private readonly copyPanel: HTMLDivElement;
   private locations: Promise<Locations> | null = null;
   private currentLocation: Location | null = null;
@@ -1116,16 +1120,18 @@ export class EpubNavigationTools {
     let fragment: string;
     try {
       fragment = buildEpubSpineFragment(href);
-    } catch {
+    } catch (error) {
+      console.warn("[Observation Car] Failed to copy TOC link", error);
       new Notice(
-        "Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.",
+        `Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.\n${(error as AnchorError).message}`,
       );
       return;
     }
-    const safeLabel = label.replaceAll("|", "｜").replaceAll("]", "］");
+    const escapedTitle = this.escapeWikilinkText(bookTitle);
+    const safeLabel = this.escapeWikilinkText(label);
     try {
       await navigator.clipboard.writeText(
-        `[[${this.bookPath}${fragment}|${bookTitle}, ${safeLabel}]]`,
+        `[[${this.bookPath}${fragment}|${escapedTitle}, ${safeLabel}]]`,
       );
     } catch (error) {
       this.flashCopyFailed(btn, error);
@@ -1137,10 +1143,11 @@ export class EpubNavigationTools {
   private async copyLinkToCFIToClipboard(e: Event, bookTitle: string, cfiRange: string): Promise<void> {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLButtonElement;
+    const escapedTitle = this.escapeWikilinkText(bookTitle);
     try {
       const location = await this.locationNumber(cfiRange);
       const fragment = buildEpubCfiFragment(cfiRange);
-      await navigator.clipboard.writeText(`[[${this.bookPath}${fragment}|${bookTitle}, loc. ${location}]]`);
+      await navigator.clipboard.writeText(`[[${this.bookPath}${fragment}|${escapedTitle}, loc. ${location}]]`);
     } catch (error) {
       this.flashCopyFailed(btn, error);
       return;
@@ -1156,12 +1163,13 @@ export class EpubNavigationTools {
   ): Promise<void> {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLButtonElement;
+    const escapedTitle = this.escapeWikilinkText(bookTitle);
     try {
       const location = await this.locationNumber(cfiRange);
       const fragment = buildEpubCfiFragment(cfiRange);
       const selectedText = selection ? selection.toString().trim() : "";
       const quote = selectedText ? `> ${selectedText}\n-- ` : "";
-      const link = `[[${this.bookPath}${fragment}|${bookTitle}, loc. ${location}]]`;
+      const link = `[[${this.bookPath}${fragment}|${escapedTitle}, loc. ${location}]]`;
       await navigator.clipboard.writeText(`${quote}${link}`);
     } catch (error) {
       this.flashCopyFailed(btn, error);
@@ -1244,8 +1252,8 @@ export class EpubNavigationTools {
    * Collapse consecutive whitespace and trim. Preserves accents and non-Latin
    * scripts, so it is safe for display labels.
    */
-  private sanitize(str: string): string {
-    return str.replace(/\s+/g, " ").trim();
+  private sanitize(str: string | undefined): string {
+    return (str ?? "").replace(/\s+/g, " ").trim();
   }
 
   private setCopyHandler(className: string, handler: (e: Event) => void): void {

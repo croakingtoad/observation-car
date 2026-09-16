@@ -296,4 +296,41 @@ describe("EpubLocationTracker", () => {
     vi.advanceTimersByTime(1000);
     expect(acceptedAfterDestroy).toHaveLength(0);
   });
+
+describe("EpubLocationTracker defect 4: throwing subscriber does not starve others (LOCO-1031)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("delivers to all good subscribers even when a subscriber throws", () => {
+    vi.useFakeTimers();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const tracker = new EpubLocationTracker();
+    const seen: EpubLocation[] = [];
+    const thrott: EpubLocation[] = [];
+    const errors: EpubLocation[] = [];
+
+    // Four subscribers: throwing, good, throwing, good
+    tracker.on(() => { throw new Error("boom one"); });
+    tracker.on((loc) => seen.push(loc));
+    tracker.on(() => { throw new Error("boom two"); });
+    tracker.on((loc) => thrott.push(loc));
+
+    tracker.onRelocated(rel("/6/8!/4/2/1:0", "ch1.xhtml"));
+    vi.advanceTimersByTime(150);
+
+    // Both good subscribers received the event
+    expect(seen).toHaveLength(1);
+    expect(thrott).toHaveLength(1);
+
+    // console.warn was called twice (once per thrown subscriber)
+    expect(consoleWarn).toHaveBeenCalledTimes(2);
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[Observation Car] Location subscriber threw",
+      expect.any(Error),
+    );
+
+    tracker.destroy();
+  });
+});
 });

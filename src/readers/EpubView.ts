@@ -429,7 +429,11 @@ export class EpubView extends FileView {
         void this.persistCurrentLocation(file.path, event.fragment);
       }
       for (const listener of [...this.locationListeners]) {
-        listener(event);
+        try {
+          listener(event);
+        } catch (error) {
+          console.warn("[Observation Car] Location subscriber threw", error);
+        }
       }
     });
     return { tracker, relocatedHandler: onRelocated, forward };

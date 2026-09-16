@@ -196,7 +196,11 @@ export class EpubLocationTracker {
       return;
     }
     for (const listener of [...this.listeners]) {
-      listener(location);
+      try {
+        listener(location);
+      } catch (error) {
+        console.warn("[Observation Car] Location subscriber threw", error);
+      }
     }
   }
 }

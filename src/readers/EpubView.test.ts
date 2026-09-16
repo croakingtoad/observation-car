@@ -970,4 +970,36 @@ describe("EpubView location events (F2.5)", () => {
     expect(windowSpy).not.toHaveBeenCalled();
     expect(documentSpy).not.toHaveBeenCalled();
   });
+
+  it("a throwing listener is logged and does not starve well-behaved subscribers (defect 4)", async () => {
+    vi.useFakeTimers();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const events: EpubLocationEvent[] = [];
+
+    view.on("location", () => { throw new Error("listener fail"); });
+    view.on("location", (loc) => events.push(loc));
+
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    // Good subscriber received the event
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      fragment: "#epubcfi(/6/8!/4/2/1:0)",
+      chapter: 3,
+    });
+
+    // Throwing subscriber was logged
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[Observation Car] Location subscriber threw",
+      expect.any(Error),
+    );
+    await view.onClose();
+  });
 });

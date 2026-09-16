@@ -217,7 +217,7 @@ describe("TOC link copying", () => {
 
     expect(writeText).not.toHaveBeenCalled();
     expect(showNotice).toHaveBeenCalledWith(
-      "Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.",
+      expect.stringContaining("Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support."),
     );
   });
 
@@ -234,5 +234,64 @@ describe("TOC link copying", () => {
       "[[Books/Test Book.epub#text/chapter.xhtml|Test Book, Part ｜ 1 ］］ Notes]]",
     );
     expect(showNotice).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("EpubNavigationTools defect 3: bound catch and logged error in copyTocLink (LOCO-1031)", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    showNotice.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  async function tocCopyForHref(href: string, label: string): Promise<void> {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    new EpubNavigationTools(
+      document.body,
+      "Books/Test Book.epub",
+      epubBookWithToc(href, label),
+      inertRendition(),
+      new EpubSelectionTracker(),
+      undefined,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector(".epub-toc-copy")).not.toBeNull();
+    });
+    const copyButton = document.querySelector<HTMLButtonElement>(".epub-toc-copy");
+    if (copyButton === null) {
+      throw new Error("Test TOC copy button was not rendered");
+    }
+    copyButton.click();
+  }
+
+  it("pins the AnchorError message in the notice and logs the bound error (defect 3)", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await tocCopyForHref("text/chapter.xhtml#section-2", "Section 2");
+
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[Observation Car] Failed to copy TOC link",
+      expect.any(Error),
+    );
+    expect(showNotice).toHaveBeenCalledWith(
+      expect.stringContaining('spine href must not contain "#"'),
+    );
+  });
+
+  it("pins the whitespace/control-char error message variant in the notice (defect 3)", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await tocCopyForHref("text/ch apter.xhtml", "Chapter A");
+
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[Observation Car] Failed to copy TOC link",
+      expect.any(Error),
+    );
+    expect(showNotice).toHaveBeenCalledWith(
+      expect.stringContaining("spine href must not contain whitespace"),
+    );
   });
 });

@@ -403,9 +403,10 @@ function makeTools(
     hostDocument?: Document;
   } = {},
   onNewNote?: () => void,
+  existingBook?: ReturnType<typeof makeBook>,
 ) {
   const viewerEl = (overrides.hostDocument ?? document).createElement("div");
-  const book = makeBook(overrides);
+  const book = existingBook ?? makeBook(overrides);
   const rendition = makeRendition();
   const beforeRendition = Object.fromEntries(
     ["relocated", "resized", "rendered", "selected"].map((event) => [
@@ -1513,6 +1514,116 @@ describe("EpubNavigationTools lifecycle coverage fences", () => {
     expect(new Set(removeEventListener.mock.calls.map(([type]) => type))).toEqual(
       new Set(["keydown", "selectionchange", "mousedown", ...PAGING_EVENT_TYPES]),
     );
+    tools.destroy();
+  });
+});
+
+
+describe("EpubNavigationTools defect 1: bookTitle escaped in wikilinks (LOCO-1031)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+  });
+
+  it("escapes bookTitle in TOC link copy when title contains pipes and closing brackets", async () => {
+    const unusualBook = makeBook({
+      metadata: Promise.resolve({ title: "A|B]] Title" }),
+      navigation: Promise.resolve({
+        toc: [{ href: "chap1.xhtml", label: "Chapter 1" }],
+      }),
+    });
+    const { viewerEl, rendition } = makeTools({}, undefined, unusualBook);
+    await waitForSelectionListener(rendition);
+    // render the TOC
+    rendition.fire("rendered", {}, renderedContents(childDocument(document)));
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-toc-copy")).not.toBeNull();
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    (viewerEl.querySelector(".epub-toc-copy") as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "[[library/book.epub#chap1.xhtml|A｜B］］ Title, Chapter 1]]",
+      );
+    });
+  });
+
+  it("escapes bookTitle in popup CFI link copy", async () => {
+    const unusualBook = makeBook({
+      metadata: Promise.resolve({ title: "A|B Title" }),
+    });
+    const { viewerEl, rendition } = makeTools({}, undefined, unusualBook);
+    await waitForSelectionListener(rendition);
+    rendition.fire("selected", SELECTION_CFI, selectionContents());
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-cfi-copy")).not.toBeNull();
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const copyBtn = viewerEl.querySelector<HTMLButtonElement>(".epub-cfi-copy")!;
+    copyBtn.click();
+    await vi.waitFor(() => expect(copyBtn.textContent).toBe("✔"));
+    expect(writeText).toHaveBeenCalledWith(
+      `[[library/book.epub#${SELECTION_CFI}|A｜B Title, loc. 42]]`,
+    );
+  });
+
+  it("escapes bookTitle in popup quote + link copy", async () => {
+    const unusualBook = makeBook({
+      metadata: Promise.resolve({ title: "]]]]" }),
+    });
+    const { viewerEl, rendition } = makeTools({}, undefined, unusualBook);
+    await waitForSelectionListener(rendition);
+    rendition.fire("selected", SELECTION_CFI, selectionContents());
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-cfi-quote")).not.toBeNull();
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const quoteBtn = viewerEl.querySelector<HTMLButtonElement>(".epub-cfi-quote")!;
+    quoteBtn.click();
+    await vi.waitFor(() => expect(quoteBtn.textContent).toBe("✔"));
+    expect(writeText).toHaveBeenCalledWith(
+      `> ${SELECTION_TEXT}
+-- [[library/book.epub#${SELECTION_CFI}|］］］］, loc. 42]]`,
+    );
+  });
+});
+
+describe("EpubNavigationTools defect 2: sanitize(undefined) does not throw (LOCO-1031)", () => {
+  it("turns a page past an hrefless TOC entry without crashing", async () => {
+    const tocWithHrefless: Promise<{ toc: Array<{ href?: string; label: string }> }> = Promise.resolve({
+      toc: [
+        { href: "chap1.xhtml", label: "Chapter 1" },
+        { href: undefined, label: "Group heading" } as unknown as { href: string; label: string },
+        { href: "chap2.xhtml", label: "Chapter 2" },
+      ],
+    });
+    const book = makeBook({ navigation: tocWithHrefless as unknown as Promise<unknown> });
+    const { rendition, tools } = makeTools({}, undefined, book);
+    await waitForSelectionListener(rendition);
+    // Render a document so the key bridge attaches
+    const doc = childDocument(document);
+    rendition.fire("rendered", {}, renderedContents(doc));
+    // Now dispatch PageUp while the current location is chap1.xhtml
+    // The key bridge routes PageUp to pageKeyJump, which calls
+    // sanitize(undefined) on the hrefless entry.
+    (tools as unknown as { pageKeyJump: (key: string) => Promise<void> }).pageKeyJump("PageUp");
+    // After the jump, rendition.display should have been called with "chap2.xhtml"
+    await vi.waitFor(() => {
+      expect(rendition.display).toHaveBeenCalledWith("chap2.xhtml");
+    });
     tools.destroy();
   });
 });
