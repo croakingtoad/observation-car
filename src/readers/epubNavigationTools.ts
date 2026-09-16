@@ -57,8 +57,8 @@ type EpubNavigationBook = Omit<Book, "loaded" | "locations"> & {
   locations: EpubLocations;
 };
 
-function normalizeEpubTitle(title: EpubMetadata["title"]): string {
-  if (title !== null) {
+export function normalizeEpubTitle(title: EpubMetadata["title"]): string {
+  if (title !== null && title !== "") {
     return title;
   }
   console.warn(

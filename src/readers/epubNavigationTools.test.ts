@@ -10,6 +10,7 @@ import {
   EpubKeyBridge,
   EpubNavigationTools,
   EpubSelectionTracker,
+  normalizeEpubTitle,
   type EpubKeyBridgeRendition,
   type EpubFlowControls,
 } from "./epubNavigationTools";
@@ -450,6 +451,37 @@ async function buildNullTitleEpubFixture(): Promise<ArrayBuffer> {
         "<dc:title>Observation Car EPUB 2 Fixture</dc:title>",
         "<dc:title><nested /></dc:title>",
       );
+    } else if (fixturePath === "EPUB/toc.ncx") {
+      contents = contents.replace(
+        "<content />",
+        '<content src="chapter-1.xhtml" />',
+      );
+    }
+    zip.file(fixturePath, contents, { createFolders: false });
+  }
+
+  return zip.generateAsync({
+    compression: "STORE",
+    platform: "UNIX",
+    type: "arraybuffer",
+  });
+}
+
+async function buildEmptyTitleEpubFixture(): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures/minimal-epub-no-title");
+  const fixtureFiles = [
+    "mimetype",
+    "META-INF/container.xml",
+    "EPUB/package.opf",
+    "EPUB/toc.ncx",
+    "EPUB/chapter-1.xhtml",
+  ] as const;
+  const zip = new JSZip();
+
+  for (const fixturePath of fixtureFiles) {
+    let contents = await readFile(resolve(fixtureRoot, fixturePath), "utf8");
+    if (fixturePath === "mimetype") {
+      contents = contents.trimEnd();
     } else if (fixturePath === "EPUB/toc.ncx") {
       contents = contents.replace(
         "<content />",
@@ -1727,6 +1759,25 @@ describe("EpubNavigationTools defect 1: bookTitle escaped in wikilinks (LOCO-103
         configurable: true,
         value: liveLocations,
       });
+      book.destroy();
+    }
+  });
+
+  it("normalizes an empty title to Untitled with a warning, matching the null-title fix (LOCO-1083)", async () => {
+    const book = ePub(await buildEmptyTitleEpubFixture());
+    try {
+      await book.opened;
+      const metadata = await book.loaded.metadata;
+      expect(metadata.title).toBe("");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = normalizeEpubTitle(metadata.title);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        '[Observation Car] EPUB metadata title is null; using "Untitled".',
+      );
+      expect(result).toBe("Untitled");
+      warn.mockRestore();
+    } finally {
       book.destroy();
     }
   });
