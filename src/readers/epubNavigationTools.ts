@@ -358,6 +358,10 @@ export function flattenToc(items: readonly NavItem[], depth = 0): TocEntry[] {
   return entries;
 }
 
+function isUsableTocHref(href: string | null | undefined): href is string {
+  return typeof href === "string" && href.length > 0;
+}
+
 /**
  * F2.2 — flow-mode controls handed in by the view. The button shows the
  * reader's current mode; `onToggle` persists the other mode and re-renders
@@ -918,7 +922,9 @@ export class EpubNavigationTools {
     if (currentLocation.length === 0) {
       return;
     }
-    const tocItems = flattenToc(toc.toc).filter((item) => item.href !== null);
+    const tocItems = flattenToc(toc.toc).filter((item) =>
+      isUsableTocHref(item.href),
+    );
     const idx = tocItems.findIndex((item) => this.navigationLocation(item.href) === currentLocation);
     let targetIdx = -1;
     if (key === "PageUp" && idx !== -1 && idx < tocItems.length - 1) {
@@ -928,7 +934,10 @@ export class EpubNavigationTools {
     }
     if (targetIdx !== -1) {
       const targetEntry = tocItems[targetIdx];
-      if (targetEntry === undefined || targetEntry.href === null) {
+      if (
+        targetEntry === undefined ||
+        !isUsableTocHref(targetEntry.href)
+      ) {
         return;
       }
       await this.rendition.display(targetEntry.href);
@@ -1124,7 +1133,7 @@ export class EpubNavigationTools {
    */
   private async jumpToEntry(entry: TocEntry): Promise<void> {
     try {
-      if (entry.href === null) {
+      if (!isUsableTocHref(entry.href)) {
         return;
       }
       await this.rendition.display(entry.href);

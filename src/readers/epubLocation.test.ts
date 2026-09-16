@@ -15,6 +15,7 @@ import {
   type EpubLocation,
   type TocItem,
 } from "./epubLocation";
+import { flattenToc } from "./epubNavigationTools";
 
 const TOC: readonly TocItem[] = [
   { label: "Front Matter", href: "front-matter.xhtml" },
@@ -28,15 +29,16 @@ const TOC: readonly TocItem[] = [
 
 const rel = (cfi: string, href: string) => ({ cfi, href });
 
-async function buildEpub2EmptyNcxFixture(): Promise<ArrayBuffer> {
-  const fixtureRoot = resolve(
-    "src/model/fixtures/minimal-epub2-empty-ncx",
-  );
+async function buildNavigationFixture(
+  fixtureName: string,
+  navigationFile: "toc.ncx" | "nav.xhtml",
+): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures", fixtureName);
   const fixtureFiles = [
     "mimetype",
     "META-INF/container.xml",
     "EPUB/package.opf",
-    "EPUB/toc.ncx",
+    `EPUB/${navigationFile}`,
     "EPUB/chapter-1.xhtml",
   ] as const;
   const zip = new JSZip();
@@ -55,6 +57,15 @@ async function buildEpub2EmptyNcxFixture(): Promise<ArrayBuffer> {
     type: "arraybuffer",
   });
 }
+
+const buildEpub2MissingNcxHrefFixture = (): Promise<ArrayBuffer> =>
+  buildNavigationFixture("minimal-epub2-empty-ncx", "toc.ncx");
+
+const buildEpub2BlankNcxHrefFixture = (): Promise<ArrayBuffer> =>
+  buildNavigationFixture("minimal-epub2-blank-ncx", "toc.ncx");
+
+const buildEpub3SpanNavFixture = (): Promise<ArrayBuffer> =>
+  buildNavigationFixture("minimal-epub3-span-nav", "nav.xhtml");
 
 describe("tocLabelForHref", () => {
   it("resolves a chapter from an exact spine href match", () => {
@@ -188,7 +199,6 @@ describe("locationForRelocation", () => {
     // A non-canonical chapter component is likewise not a valid fragment.
     expect(locationForRelocation(rel("/6!x", "ch1.xhtml"), TOC)).toBeNull();
   });
-
 });
 
 describe("EpubLocationTracker", () => {
@@ -219,7 +229,7 @@ describe("EpubLocationTracker", () => {
   });
 
   it("emits events after receiving a live EPUB 2 TOC with hrefless entries", async () => {
-    const fixture = await buildEpub2EmptyNcxFixture();
+    const fixture = await buildEpub2MissingNcxHrefFixture();
     const book = ePub(fixture);
     const tracker = new EpubLocationTracker(0);
     const seen: EpubLocation[] = [];
@@ -243,6 +253,54 @@ describe("EpubLocationTracker", () => {
           },
         ]);
       });
+    } finally {
+      tracker.destroy();
+      await book.destroy();
+    }
+  });
+
+  it("resolves through an EPUB 2 NCX heading whose content src is empty", async () => {
+    const book = ePub(await buildEpub2BlankNcxHrefFixture());
+    const tracker = new EpubLocationTracker(0);
+
+    try {
+      await book.opened;
+      const navigation = await book.loaded.navigation;
+      expect(navigation.toc[0]?.href).toBe("");
+
+      tracker.setToc(navigation.toc);
+      tracker.onRelocated({
+        cfi: "/6/2!/4/2/1:0",
+        href: "chapter-1.xhtml",
+      });
+
+      expect(tracker.current()?.label).toBe("Chapter One");
+    } finally {
+      tracker.destroy();
+      await book.destroy();
+    }
+  });
+
+  it("keeps EPUB 3 span-heading tracker and drawer labels consistent", async () => {
+    const book = ePub(await buildEpub3SpanNavFixture());
+    const tracker = new EpubLocationTracker(0);
+
+    try {
+      await book.opened;
+      const navigation = await book.loaded.navigation;
+      const drawerEntry = flattenToc(navigation.toc).find(
+        (entry) => entry.href === "chapter-1.xhtml",
+      );
+      expect(navigation.toc[0]?.href).toBe("");
+      expect(drawerEntry?.label).toBe("Chapter One");
+
+      tracker.setToc(navigation.toc);
+      tracker.onRelocated({
+        cfi: "/6/2!/4/2/1:0",
+        href: "chapter-1.xhtml",
+      });
+
+      expect(tracker.current()?.label).toBe(drawerEntry?.label);
     } finally {
       tracker.destroy();
       await book.destroy();
@@ -289,12 +347,9 @@ describe("EpubLocationTracker", () => {
     tracker.destroy();
   });
 
-  it("rejects unusable TOC hrefs recursively at the setToc boundary", () => {
+  it("rejects non-string TOC hrefs recursively at the setToc boundary", () => {
     const tracker = new EpubLocationTracker();
 
-    expect(() =>
-      tracker.setToc([{ label: "Empty", href: "" }]),
-    ).toThrow(AnchorError);
     expect(() =>
       tracker.setToc([
         {

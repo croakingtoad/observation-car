@@ -23,13 +23,16 @@ function hreflessTocItem(label: string): NavItem {
   return { id: `item-${idCounter}`, href: null, label } as unknown as NavItem;
 }
 
-async function buildEpub2EmptyNcxFixture(): Promise<ArrayBuffer> {
-  const fixtureRoot = resolve("src/model/fixtures/minimal-epub2-empty-ncx");
+async function buildNavigationFixture(
+  fixtureName: string,
+  navigationFile: "toc.ncx" | "nav.xhtml",
+): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures", fixtureName);
   const fixtureFiles = [
     "mimetype",
     "META-INF/container.xml",
     "EPUB/package.opf",
-    "EPUB/toc.ncx",
+    `EPUB/${navigationFile}`,
     "EPUB/chapter-1.xhtml",
   ] as const;
   const zip = new JSZip();
@@ -48,6 +51,20 @@ async function buildEpub2EmptyNcxFixture(): Promise<ArrayBuffer> {
     type: "arraybuffer",
   });
 }
+
+const buildEpub2MissingNcxHrefFixture = (): Promise<ArrayBuffer> =>
+  buildNavigationFixture("minimal-epub2-empty-ncx", "toc.ncx");
+
+const EMPTY_HREF_FIXTURES = [
+  {
+    format: "EPUB 2 NCX",
+    build: () => buildNavigationFixture("minimal-epub2-blank-ncx", "toc.ncx"),
+  },
+  {
+    format: "EPUB 3 nav",
+    build: () => buildNavigationFixture("minimal-epub3-span-nav", "nav.xhtml"),
+  },
+] as const;
 
 interface ViewerHarness {
   viewerEl: HTMLDivElement;
@@ -522,7 +539,7 @@ describe("chapter navigation", () => {
   });
 
   it("excludes live EPUB hrefless entries without crashing a page turn", async () => {
-    const book = ePub(await buildEpub2EmptyNcxFixture());
+    const book = ePub(await buildEpub2MissingNcxHrefFixture());
 
     try {
       await book.opened;
@@ -542,6 +559,39 @@ describe("chapter navigation", () => {
       await book.destroy();
     }
   });
+
+  it.each(EMPTY_HREF_FIXTURES)(
+    "never displays an empty href from a live $format heading",
+    async ({ build }) => {
+      const book = ePub(await build());
+
+      try {
+        await book.opened;
+        const navigation = await book.loaded.navigation;
+        expect(navigation.toc[0]?.href).toBe("");
+        const { viewerEl, displayCalls, setLocation, renderContents } =
+          await buildViewer(navigation.toc);
+
+        entryLabels(viewerEl)[0].click();
+        await flush();
+
+        const contentsDocument = renderContents();
+        setLocation("chapter-1.xhtml");
+        contentsDocument.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "PageDown",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        await flush();
+
+        expect(displayCalls).toEqual([]);
+      } finally {
+        await book.destroy();
+      }
+    },
+  );
 
   it("bails without navigating when no current location exists", async () => {
     const { displayCalls, renderContents } = await buildViewer([

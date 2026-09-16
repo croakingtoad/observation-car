@@ -80,9 +80,23 @@ const epub = vi.hoisted(() => {
       navigation: Promise.resolve({
         toc: [
           {
-            id: "toc-ch1",
-            label: "The Opening Image",
-            href: "chapters/ch1.xhtml",
+            id: "toc-part-one",
+            label: "Part One",
+            href: "",
+            subitems: [
+              {
+                id: "toc-group-heading",
+                label: "Group heading",
+                href: null,
+                subitems: [
+                  {
+                    id: "toc-ch1",
+                    label: "The Opening Image",
+                    href: "chapters/ch1.xhtml",
+                  },
+                ],
+              },
+            ],
           },
         ],
       }),
@@ -499,6 +513,9 @@ describe("EpubView location events (F2.5)", () => {
 
   it("emits a debounced LocationChanged with {file, fragment, chapter, label}", async () => {
     vi.useFakeTimers();
+    const navigation = await epub.book.loaded.navigation;
+    expect(navigation.toc[0]?.href).toBe("");
+    expect(navigation.toc[0]?.subitems[0]?.href).toBeNull();
     const view = new EpubView(makeLeaf(), makeHost());
     const events: EpubLocationEvent[] = [];
     view.on("location", (loc) => events.push(loc));

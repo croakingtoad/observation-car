@@ -217,11 +217,11 @@ export class EpubLocationTracker {
 }
 
 function assertTocHref(body: unknown): string | null {
-  if (body === null) {
+  if (body === null || body === "") {
     return null;
   }
-  if (typeof body !== "string" || body.length === 0) {
-    throw new AnchorError("TOC href must be a usable string or null");
+  if (typeof body !== "string") {
+    throw new AnchorError("TOC href must be a string or null");
   }
   return body;
 }

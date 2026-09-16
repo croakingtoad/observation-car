@@ -413,9 +413,10 @@ export class EpubView extends FileView {
     void book.loaded.navigation
       .then((navigation) => tracker.setToc(navigation.toc))
       .catch((error: unknown) => {
-        // Navigation loaded; resolving its labels is not fatal.
+        // Loading or applying navigation labels can fail; locations keep
+        // their chapter-number fallback.
         console.warn(
-          "[observation-car] could not map EPUB navigation to locations",
+          "[observation-car] could not load or apply EPUB navigation labels",
           error,
         );
       });

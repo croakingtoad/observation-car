@@ -23,10 +23,16 @@ import {
  * directly instead of inferred.
  */
 const epubMock = vi.hoisted(() => {
-  const state = {
+  const state: {
+    failDisplay: boolean;
+    currentDisplayGate: Promise<void> | null;
+    navigationFailure: unknown;
+    navigationHref: unknown;
+  } = {
     failDisplay: false,
-    currentDisplayGate: null as Promise<void> | null,
-    navigationFailure: null as unknown,
+    currentDisplayGate: null,
+    navigationFailure: null,
+    navigationHref: "chapters/ch1.xhtml",
   };
 
   class FakeHook {
@@ -95,7 +101,7 @@ const epubMock = vi.hoisted(() => {
     readonly rendition: FakeRendition;
     readonly loaded = {
       get navigation(): Promise<{
-        toc: Array<{ id: string; label: string; href: string }>;
+        toc: Array<{ id: string; label: string; href: unknown }>;
       }> {
         return state.navigationFailure === null
           ? Promise.resolve({
@@ -103,7 +109,7 @@ const epubMock = vi.hoisted(() => {
                 {
                   id: "toc-ch1",
                   label: "The Opening Image",
-                  href: "chapters/ch1.xhtml",
+                  href: state.navigationHref,
                 },
               ],
             })
@@ -242,6 +248,7 @@ beforeEach(() => {
   state.failDisplay = false;
   state.currentDisplayGate = null;
   state.navigationFailure = null;
+  state.navigationHref = "chapters/ch1.xhtml";
   FakeBook.instances.length = 0;
   FakeRendition.instances.length = 0;
   FakeMutationObserver.instances.length = 0;
@@ -814,7 +821,7 @@ describe("EpubView location events (F2.5)", () => {
     await view.onClose();
   });
 
-  it("logs navigation failures and keeps chapter-label fallback", async () => {
+  it("logs navigation load failures and keeps chapter-label fallback", async () => {
     vi.useFakeTimers();
     const failure = new Error("malformed navigation document");
     state.navigationFailure = failure;
@@ -832,11 +839,37 @@ describe("EpubView location events (F2.5)", () => {
     await vi.advanceTimersByTimeAsync(150);
 
     expect(consoleWarn).toHaveBeenCalledWith(
-      "[observation-car] could not map EPUB navigation to locations",
+      "[observation-car] could not load or apply EPUB navigation labels",
       failure,
     );
     expect(events[0]?.label).toBe("Ch. 3");
     await view.onClose();
+    consoleWarn.mockRestore();
+  });
+
+  it("logs invalid loaded navigation and keeps chapter-label fallback", async () => {
+    vi.useFakeTimers();
+    state.navigationHref = 42;
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const events: EpubLocationEvent[] = [];
+    view.on("location", (location) => events.push(location));
+
+    await view.onLoadFile(file("Books/Test.epub"));
+    await vi.advanceTimersByTimeAsync(0);
+    FakeRendition.instances[0].emit(
+      "relocated",
+      relocatedAt("epubcfi(/6/8!/4/2/1:0)", "chapters/ch1.xhtml"),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[observation-car] could not load or apply EPUB navigation labels",
+      expect.any(Error),
+    );
+    expect(events[0]?.label).toBe("Ch. 3");
+    await view.onClose();
+    consoleWarn.mockRestore();
   });
 
   it("emits a debounced LocationChanged with {file, fragment, chapter, label}", async () => {
