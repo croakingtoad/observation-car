@@ -1,6 +1,13 @@
+// @vitest-environment jsdom
+
 import type { Book, Rendition } from "epubjs";
+import ePub from "epubjs";
 import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import JSZip from "jszip";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { flattenToc } from "./epubNavigationTools";
 
 const showNotice = vi.hoisted(() => vi.fn());
 
@@ -108,6 +115,32 @@ async function clickTocCopy(href: unknown, label: string): Promise<void> {
     throw new Error("Test TOC copy button was not rendered");
   }
   copyButton.click();
+}
+
+async function buildEpub2EmptyNcxFixture(): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures/minimal-epub2-empty-ncx");
+  const fixtureFiles = [
+    "mimetype",
+    "META-INF/container.xml",
+    "EPUB/package.opf",
+    "EPUB/toc.ncx",
+    "EPUB/chapter-1.xhtml",
+  ] as const;
+  const zip = new JSZip();
+
+  for (const path of fixtureFiles) {
+    let contents = await readFile(resolve(fixtureRoot, path), "utf8");
+    if (path === "mimetype") {
+      contents = contents.trimEnd();
+    }
+    zip.file(path, contents, { createFolders: false });
+  }
+
+  return zip.generateAsync({
+    compression: "STORE",
+    platform: "UNIX",
+    type: "arraybuffer",
+  });
 }
 
 describe("F2.2 paging event wiring", () => {
@@ -247,11 +280,56 @@ describe("TOC link copying", () => {
 
     expect(writeText).not.toHaveBeenCalled();
     expect(showNotice).toHaveBeenCalledWith(
-      expect.stringContaining("spine href must be a string"),
+      expect.stringContaining("spine href must be a usable string"),
     );
     expect(showNotice).not.toHaveBeenCalledWith(
       expect.stringContaining("Cannot read properties of undefined"),
     );
+  });
+
+  it("reports a null NCX href with the complete usable-string notice", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    await clickTocCopy(null, "Group heading");
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(showNotice).toHaveBeenCalledWith(
+      "Could not copy link: spine href must be a usable string.",
+    );
+  });
+
+  it("reports epub.js NCX output when a nav point has no content source", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const book = ePub(await buildEpub2EmptyNcxFixture());
+
+    try {
+      await book.opened;
+      const liveToc = await book.loaded.navigation;
+      const [groupHeading] = flattenToc(liveToc.toc).filter(
+        (entry) => entry.label === "Group heading",
+      );
+      if (groupHeading === undefined) {
+        throw new Error("Live EPUB fixture did not contain its hrefless nav point");
+      }
+      expect(groupHeading.href).toBeNull();
+
+      await clickTocCopy(groupHeading.href, groupHeading.label);
+
+      expect(writeText).not.toHaveBeenCalled();
+      expect(showNotice).toHaveBeenCalledWith(
+        "Could not copy link: spine href must be a usable string.",
+      );
+    } finally {
+      book.destroy();
+    }
   });
 
   it("does not expose unexpected non-AnchorError details", async () => {

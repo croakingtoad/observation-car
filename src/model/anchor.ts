@@ -136,7 +136,7 @@ export function spineIndexFromCfi(cfi: string): number | null {
  * Empty or missing hrefs are rejected at this boundary: `#` is not a
  * meaningful spine anchor and parseFragment deliberately rejects it too.
  */
-export function buildEpubSpineFragment(href: string | undefined): string {
+export function buildEpubSpineFragment(href: string | null | undefined): string {
   const validHref = assertSpineHref(href);
   return `#${validHref}`;
 }
@@ -291,9 +291,9 @@ function parseSelectionRect(value: string): SelectionRect {
   return [x1, y1, x2, y2] as const;
 }
 
-function assertSpineHref(body: string | undefined): string {
-  if (body === undefined) {
-    throw new AnchorError("spine href must be a string");
+function assertSpineHref(body: unknown): string {
+  if (typeof body !== "string" || body.length === 0) {
+    throw new AnchorError("spine href must be a usable string");
   }
   if (body.length === 0) {
     throw new AnchorError("spine href must not be empty");

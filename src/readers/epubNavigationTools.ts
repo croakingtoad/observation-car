@@ -332,7 +332,7 @@ export class EpubSelectionTracker {
 
 /** A single flattened TOC entry with its depth in the source tree. */
 export interface TocEntry {
-  href: string;
+  href: string | null;
   label: string;
   depth: number;
 }
@@ -1063,7 +1063,7 @@ export class EpubNavigationTools {
 
     const row = document.createElement("div");
     row.className = "epub-toc-link";
-    row.dataset.href = href;
+    row.dataset.href = href ?? "";
     row.dataset.label = label;
     row.style.setProperty("--toc-depth", String(entry.depth));
     row.onclick = () => void this.jumpToEntry(entry);
@@ -1084,7 +1084,7 @@ export class EpubNavigationTools {
     const copyBtn = document.createElement("button");
     copyBtn.className = "epub-toc-copy";
     copyBtn.title = "Copy link";
-    copyBtn.dataset.href = href;
+    copyBtn.dataset.href = href ?? "";
     copyBtn.dataset.label = label;
     copyBtn.tabIndex = -1;
     copyBtn.textContent = "🔗";
@@ -1102,6 +1102,9 @@ export class EpubNavigationTools {
    */
   private async jumpToEntry(entry: TocEntry): Promise<void> {
     try {
+      if (entry.href === null) {
+        return;
+      }
       await this.rendition.display(entry.href);
       this.toggleTocVisibility(false);
     } catch (error) {
@@ -1112,7 +1115,7 @@ export class EpubNavigationTools {
   private async copyTocLink(
     e: Event,
     bookTitle: string,
-    href: string,
+    href: string | null,
     label: string,
   ): Promise<void> {
     e.stopPropagation();
@@ -1253,7 +1256,7 @@ export class EpubNavigationTools {
    * Collapse consecutive whitespace and trim. Preserves accents and non-Latin
    * scripts, so it is safe for display labels.
    */
-  private sanitize(str: string | undefined): string {
+  private sanitize(str: string | null | undefined): string {
     return (str ?? "").replace(/\s+/g, " ").trim();
   }
 

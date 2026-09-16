@@ -167,7 +167,7 @@ describe("buildFragment", () => {
   it("rejects an empty spine href at both build and parse boundaries", () => {
     expect(() =>
       buildFragment({ kind: "epub-spine", href: "" }),
-    ).toThrowError(new AnchorError("spine href must not be empty"));
+    ).toThrowError(new AnchorError("spine href must be a usable string"));
     expect(() => parseFragment("#")).toThrowError(
       new AnchorError("fragment is empty"),
     );
@@ -175,7 +175,7 @@ describe("buildFragment", () => {
 
   it("rejects a missing spine href with AnchorError", () => {
     expect(() => buildEpubSpineFragment(undefined)).toThrowError(
-      new AnchorError("spine href must be a string"),
+      new AnchorError("spine href must be a usable string"),
     );
   });
 
