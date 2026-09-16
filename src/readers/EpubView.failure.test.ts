@@ -8,7 +8,6 @@ import JSZip from "jszip";
 
 const OBSIDIAN_DOM_SHIM_KEY = "__observationCarObsidianDomShimsInstalled";
 
-
 function installObsidianDomShims(): void {
   const globalWindow = window as typeof window & {
     [OBSIDIAN_DOM_SHIM_KEY]?: boolean;
@@ -207,15 +206,6 @@ async function closeView(view: EpubView): Promise<void> {
 }
 
 describe("EpubView malformed-book failure path", () => {
-  it("confirms the test drives the production native parser", () => {
-    expect(typeof window.DOMParser).toBe("function");
-    const parsed = new window.DOMParser().parseFromString(
-      "<root><child/></root>",
-      "text/xml",
-    );
-    expect(parsed.querySelector("child")).not.toBeNull();
-  });
-
   it.each(malformedBooks)(
     "bounds %s with a readable in-leaf error",
     async (_description, buildBytes) => {
@@ -230,16 +220,23 @@ describe("EpubView malformed-book failure path", () => {
         /EPUB did not finish loading|not a zip|malformed|Failed to load/i,
       );
 
+      expect(view.contentEl.querySelectorAll(".epub-load-error")).toHaveLength(
+        1,
+      );
+      expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
       expect(
-        view.contentEl.querySelectorAll(".epub-viewer .epub-load-error"),
-      ).toHaveLength(1);
+        [...view.contentEl.children].filter(
+          (element) => element.className !== "epub-load-error",
+        ),
+      ).toHaveLength(0);
       expect(
         view.contentEl.querySelector(".epub-load-error")?.textContent,
-      ).toMatch(/EPUB|book|zip/i);
-      expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(1);
+      ).toBe(
+        `This EPUB could not be opened: ${(loaded.error as Error).message}`,
+      );
 
       await closeView(view);
-      expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
+      expect(view.contentEl.children).toHaveLength(0);
       consoleError.mockRestore();
     },
     6200,

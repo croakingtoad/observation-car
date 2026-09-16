@@ -331,9 +331,7 @@ export class EpubView extends FileView {
         navigationTools,
         locationEvents,
       );
-      this.contentEl.empty();
-      this.contentEl.appendChild(viewerEl);
-      viewerEl.appendChild(this.buildLoadError(viewerEl, error));
+      this.renderLoadError(error);
       throw error;
     } finally {
       window.clearTimeout(displayTimeout);
@@ -392,13 +390,16 @@ export class EpubView extends FileView {
     viewerEl.remove();
   }
 
-  /** Render a readable, leaf-contained failure for an unreadable book. */
-  private buildLoadError(viewerEl: HTMLElement, error: unknown): HTMLElement {
+  /**
+   * Render a readable, leaf-contained failure after the partial reader
+   * has been discarded, using a fresh container without abandoned
+   * reader controls.
+   */
+  private renderLoadError(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    const notice = viewerEl.ownerDocument.createElement("div");
-    notice.className = "epub-load-error";
+    this.contentEl.replaceChildren();
+    const notice = this.contentEl.createDiv({ cls: "epub-load-error" });
     notice.textContent = `This EPUB could not be opened: ${message}`;
-    return notice;
   }
 
   /**
