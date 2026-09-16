@@ -1179,9 +1179,9 @@ describe("EpubNavigationTools teardown", () => {
         resolveNavigation = resolve;
       }),
     });
+    tools.destroy();
     resolveMetadata({ title: "Late Book" });
     resolveNavigation({ toc: [] });
-    tools.destroy();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(rendition.handlers.get("selected")?.length ?? 0).toBe(0);
     expect(rendition.handlers.get("rendered")?.length ?? 0).toBe(0);

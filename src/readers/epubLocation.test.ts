@@ -29,8 +29,7 @@ describe("tocLabelForHref", () => {
   });
 
   it("ignores a fragment on the TOC side (sub-chapter anchors)", () => {
-    // A TOC item anchored inside ch1 must not shadow the chapter entry
-    // that comes first in document order.
+    // A fragment-bearing TOC item still labels its containing spine item.
     const subOnly: readonly TocItem[] = [
       { label: "Prologue", href: "chapters/ch1.xhtml#prologue" },
     ];
