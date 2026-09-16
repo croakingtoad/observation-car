@@ -304,7 +304,6 @@ describe("EpubLocationTracker defect 4: throwing subscriber does not starve othe
     const tracker = new EpubLocationTracker();
     const seen: EpubLocation[] = [];
     const thrott: EpubLocation[] = [];
-    const errors: EpubLocation[] = [];
 
     // Four subscribers: throwing, good, throwing, good
     tracker.on(() => { throw new Error("boom one"); });
