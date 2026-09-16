@@ -527,3 +527,33 @@ describe("EpubLocationTracker defect 4: throwing subscriber does not starve othe
   });
 });
 });
+
+describe("W2: assertTocHref maps empty-string href to null (LOCO-1084)", () => {
+  it("falls back to Ch. N when relocating to an empty href through a real TOC", async () => {
+    const fixture = await buildEpub3SpanNavFixture();
+    const book = ePub(fixture);
+    try {
+      await book.opened;
+      const { toc } = await book.loaded.navigation;
+      vi.useFakeTimers();
+      const tracker = new EpubLocationTracker();
+      const seen: EpubLocation[] = [];
+      tracker.on((loc) => seen.push(loc));
+
+      tracker.setToc(toc);
+      tracker.onRelocated({
+        cfi: "/6/2[chapter-1-ref]!/4/2/1:0",
+        href: "",
+      });
+      vi.advanceTimersByTime(150);
+
+      // The empty href should not match the "Part One" group heading;
+      // it should fall back to the spine-index-derived "Ch. 0".
+      expect(seen).toHaveLength(1);
+      expect(seen[0].label).toBe("Ch. 0");
+      tracker.destroy();
+    } finally {
+      book.destroy();
+    }
+  });
+});

@@ -1750,7 +1750,7 @@ describe("EpubNavigationTools defect 1: bookTitle escaped in wikilinks (LOCO-103
 
       expect(warn).toHaveBeenCalledTimes(2);
       expect(warn).toHaveBeenCalledWith(
-        '[Observation Car] EPUB metadata title is null; using "Untitled".',
+        '[Observation Car] EPUB metadata title is missing; using "Untitled".',
       );
       tools.destroy();
     } finally {
@@ -1773,7 +1773,7 @@ describe("EpubNavigationTools defect 1: bookTitle escaped in wikilinks (LOCO-103
       const result = normalizeEpubTitle(metadata.title);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
-        '[Observation Car] EPUB metadata title is null; using "Untitled".',
+        '[Observation Car] EPUB metadata title is missing; using "Untitled".',
       );
       expect(result).toBe("Untitled");
       warn.mockRestore();

@@ -62,7 +62,7 @@ export function normalizeEpubTitle(title: EpubMetadata["title"]): string {
     return title;
   }
   console.warn(
-    '[Observation Car] EPUB metadata title is null; using "Untitled".',
+    '[Observation Car] EPUB metadata title is missing; using "Untitled".',
   );
   return UNTITLED_BOOK_TITLE;
 }
