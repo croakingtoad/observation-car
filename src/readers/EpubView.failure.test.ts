@@ -206,6 +206,15 @@ async function closeView(view: EpubView): Promise<void> {
 }
 
 describe("EpubView malformed-book failure path", () => {
+  it("confirms the test drives the production native parser", () => {
+    expect(typeof window.DOMParser).toBe("function");
+    const parsed = new window.DOMParser().parseFromString(
+      "<root><child/></root>",
+      "text/xml",
+    );
+    expect(parsed.querySelector("child")).not.toBeNull();
+  });
+
   it.each(malformedBooks)(
     "bounds %s with a readable in-leaf error",
     async (_description, buildBytes) => {
