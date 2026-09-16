@@ -832,7 +832,7 @@ describe("EpubView location events (F2.5)", () => {
     await vi.advanceTimersByTimeAsync(150);
 
     expect(consoleWarn).toHaveBeenCalledWith(
-      "[observation-car] could not resolve EPUB navigation",
+      "[observation-car] could not map EPUB navigation to locations",
       failure,
     );
     expect(events[0]?.label).toBe("Ch. 3");

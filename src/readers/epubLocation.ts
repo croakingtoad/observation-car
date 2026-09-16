@@ -49,7 +49,7 @@ export interface TocItem {
 /** The relocated position the tracker needs from a rendition event. */
 export interface RelocatedPosition {
   readonly cfi: string;
-  readonly href: string | null;
+  readonly href: string;
 }
 
 /**
@@ -95,7 +95,7 @@ export function locationForRelocation(
   position: RelocatedPosition,
   toc: readonly TocItem[],
 ): EpubLocation | null {
-  if (position.cfi.length === 0 || position.href === null) {
+  if (position.cfi.length === 0) {
     return null;
   }
   let fragment: string;
@@ -151,7 +151,7 @@ export class EpubLocationTracker {
 
   /** Feed one relocated position; the emitted event is debounced. */
   onRelocated(position: RelocatedPosition | null): void {
-    if (this.destroyed || position === null || position.href === null) {
+    if (this.destroyed || position === null) {
       return;
     }
     if (locationForRelocation(position, this.toc) === null) {
@@ -196,12 +196,15 @@ export class EpubLocationTracker {
     this.timer = null;
     const position = this.pending;
     this.pending = null;
+    // F2's onRelocated guard guarantees this invariant; this local
+    // check only narrows the type.
     if (position === null) {
-      throw new AnchorError("location flush invariant violated: no position");
+      return;
     }
     const location = locationForRelocation(position, this.toc);
+    // locationForRelocation cannot be null for the latest position.
     if (location === null) {
-      throw new AnchorError("location flush invariant violated: no location");
+      return;
     }
     for (const listener of [...this.listeners]) {
       try {

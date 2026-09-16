@@ -413,9 +413,9 @@ export class EpubView extends FileView {
     void book.loaded.navigation
       .then((navigation) => tracker.setToc(navigation.toc))
       .catch((error: unknown) => {
-        // An unresolvable TOC is not fatal; labels stay "Ch. N".
+        // Navigation loaded; resolving its labels is not fatal.
         console.warn(
-          "[observation-car] could not resolve EPUB navigation",
+          "[observation-car] could not map EPUB navigation to locations",
           error,
         );
       });

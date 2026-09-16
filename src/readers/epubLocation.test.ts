@@ -108,6 +108,14 @@ describe("tocLabelForHref", () => {
     expect(tocLabelForHref(toc, "chapters/ch1.xhtml")).toBe("Chapter One");
   });
 
+  it("resolves a real chapter following a hrefless entry", () => {
+    const toc: readonly TocItem[] = [
+      { label: "Part I", href: null },
+      { label: "Chapter One", href: "chapters/ch1.xhtml" },
+    ];
+    expect(tocLabelForHref(toc, "chapters/ch1.xhtml")).toBe("Chapter One");
+  });
+
   it("returns null when no TOC item points at the spine item", () => {
     expect(tocLabelForHref(TOC, "chapters/zzz.xhtml")).toBeNull();
     expect(tocLabelForHref([], "chapters/ch1.xhtml")).toBeNull();
@@ -181,14 +189,6 @@ describe("locationForRelocation", () => {
     expect(locationForRelocation(rel("/6!x", "ch1.xhtml"), TOC)).toBeNull();
   });
 
-  it("drops relocations without a spine href", () => {
-    expect(
-      locationForRelocation(
-        { cfi: "/6/8!/4/2/1:0", href: null },
-        TOC,
-      ),
-    ).toBeNull();
-  });
 });
 
 describe("EpubLocationTracker", () => {
@@ -305,18 +305,6 @@ describe("EpubLocationTracker", () => {
       ]),
     ).toThrow(AnchorError);
 
-    tracker.destroy();
-  });
-
-  it("ignores relocations without a spine href", () => {
-    vi.useFakeTimers();
-    const tracker = new EpubLocationTracker();
-    const seen = collect(tracker);
-
-    tracker.onRelocated({ cfi: "/6/8!/4/2/1:0", href: null });
-    vi.advanceTimersByTime(1000);
-    expect(seen).toHaveLength(0);
-    expect(tracker.current()).toBeNull();
     tracker.destroy();
   });
 
