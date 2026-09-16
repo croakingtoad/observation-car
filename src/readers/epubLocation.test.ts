@@ -529,6 +529,7 @@ describe("EpubLocationTracker defect 4: throwing subscriber does not starve othe
 });
 
 describe("W2: assertTocHref maps empty-string href to null (LOCO-1084)", () => {
+  afterEach(() => { vi.useRealTimers(); });
   it("falls back to Ch. N when relocating to an empty href through a real TOC", async () => {
     const fixture = await buildEpub3SpanNavFixture();
     const book = ePub(fixture);
