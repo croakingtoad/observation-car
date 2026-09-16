@@ -1122,9 +1122,10 @@ export class EpubNavigationTools {
       fragment = buildEpubSpineFragment(href);
     } catch (error) {
       console.warn("[Observation Car] Failed to copy TOC link", error);
-      new Notice(
-        `Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.\n${(error as AnchorError).message}`,
-      );
+      const message = error instanceof AnchorError
+        ? `Could not copy link: ${error.message}.`
+        : "Could not copy this table-of-contents link. Check the developer console for details.";
+      new Notice(message);
       return;
     }
     const escapedTitle = this.escapeWikilinkText(bookTitle);
