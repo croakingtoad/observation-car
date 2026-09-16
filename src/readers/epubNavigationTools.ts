@@ -585,7 +585,7 @@ export class EpubFontSizeStepper {
       ) {
         return value;
       }
-    } catch (error) {
+    } catch {
       // Storage can be unavailable in restricted webviews; keep the control functional in-memory.
     }
     return FONT_SIZE_DEFAULT;
@@ -594,7 +594,7 @@ export class EpubFontSizeStepper {
   private writeStoredValue(): void {
     try {
       localStorage.setItem(this.storageKey, String(this.currentValue));
-    } catch (error) {
+    } catch {
       // See readStoredValue: persistence is optional when the webview denies storage.
     }
   }

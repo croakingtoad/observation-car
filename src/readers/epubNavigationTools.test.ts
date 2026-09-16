@@ -1616,14 +1616,16 @@ describe("EpubNavigationTools defect 2: sanitize(undefined) does not throw (LOCO
     // Render a document so the key bridge attaches
     const doc = childDocument(document);
     rendition.fire("rendered", {}, renderedContents(doc));
-    // Now dispatch PageUp while the current location is chap1.xhtml
-    // The key bridge routes PageUp to pageKeyJump, which calls
-    // sanitize(undefined) on the hrefless entry.
-    (tools as unknown as { pageKeyJump: (key: string) => Promise<void> }).pageKeyJump("PageUp");
+    // makeRendition (same file, line 47) sets location: null, so currentHref is
+    // undefined, sanitize(currentHref ?? "") returns "", and the findIndex
+    // predicate matches the hrefless TOC entry at index 1 by "" === "" —
+    // giving targetIdx = 2 and therefore display("chap2.xhtml").
+    const jump = (tools as unknown as { pageKeyJump: (key: string) => Promise<void> }).pageKeyJump("PageUp");
     // After the jump, rendition.display should have been called with "chap2.xhtml"
     await vi.waitFor(() => {
       expect(rendition.display).toHaveBeenCalledWith("chap2.xhtml");
     });
+    await jump;
     tools.destroy();
   });
 });

@@ -1000,6 +1000,7 @@ describe("EpubView location events (F2.5)", () => {
       "[Observation Car] Location subscriber threw",
       expect.any(Error),
     );
+    consoleWarn.mockRestore();
     await view.onClose();
   });
 });

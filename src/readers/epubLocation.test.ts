@@ -298,10 +298,6 @@ describe("EpubLocationTracker", () => {
   });
 
 describe("EpubLocationTracker defect 4: throwing subscriber does not starve others (LOCO-1031)", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("delivers to all good subscribers even when a subscriber throws", () => {
     vi.useFakeTimers();
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
