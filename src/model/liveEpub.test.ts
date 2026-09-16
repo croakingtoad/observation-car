@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import ePub, { EpubCFI } from "epubjs";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { buildFragment, parseFragment } from "./anchor";
 
-const fixtureRoot = resolve("src/model/fixtures/minimal-epub");
+const fixtureRoot = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "fixtures/minimal-epub",
+);
 const fixtureFiles = [
   "mimetype",
   "META-INF/container.xml",
@@ -64,13 +68,22 @@ describe("live EPUB CFI generation", () => {
       ]);
 
       const liveLocations = await book.locations.generate(1000);
+      // Chapter 2 is archived with CRLF line endings, but :90 is the correct
+      // browser-normalized offset. With @xmldom/xmldom pinned to ^0.8.15 by
+      // the package.json overrides, both parsers normalize CR, so :90 now
+      // guards jsdom's own normalization rather than distinguishing a fallback.
+      // If that pin is relaxed, a :91 (or other CR-retaining result) means the
+      // XML parser stopped normalizing CR (LOCO-474); do not edit this
+      // expectation to match. See LOCO-556 for the regression history.
       expect(liveLocations).toEqual([
         "epubcfi(/6/2[chapter-1-ref]!/4[chapter-one-body]/2[chapter-one-start],/1:0,/1:79)",
         "epubcfi(/6/4[chapter-2-ref]!/4[chapter-two-body]/2[chapter-two-start],/1:0,/1:90)",
       ]);
 
       // xmldom elements lack the native Element.id property, so this
-      // assertion proves epub.js generated the live CFI through jsdom.
+      // assertion proves epub.js generated the live CFI through jsdom. Under
+      // the pin above, it is the xmldom-fallback detector; do not delete it as
+      // redundant with the logically subsuming toEqual assertion.
       expect(liveLocations[0]).toContain("[chapter-one-start]");
 
       for (const cfi of liveLocations) {
