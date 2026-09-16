@@ -46,10 +46,15 @@ type EpubMetadata = Omit<PackagingMetadataObject, "title"> & {
   title: string | null;
 };
 
-type EpubNavigationBook = Omit<Book, "loaded"> & {
+type EpubLocations = Omit<Locations, "locationFromCfi"> & {
+  locationFromCfi(cfi: string): unknown;
+};
+
+type EpubNavigationBook = Omit<Book, "loaded" | "locations"> & {
   loaded: Omit<Book["loaded"], "metadata"> & {
     metadata: Promise<EpubMetadata>;
   };
+  locations: EpubLocations;
 };
 
 function normalizeEpubTitle(title: EpubMetadata["title"]): string {
@@ -60,6 +65,15 @@ function normalizeEpubTitle(title: EpubMetadata["title"]): string {
     '[Observation Car] EPUB metadata title is null; using "Untitled".',
   );
   return UNTITLED_BOOK_TITLE;
+}
+
+function requireEpubLocationNumber(location: unknown): number {
+  if (typeof location !== "number") {
+    throw new AnchorError(
+      `EPUB location must be a number; received ${typeof location}`,
+    );
+  }
+  return location;
 }
 
 interface EpubRenderedView {
@@ -645,7 +659,7 @@ export class EpubNavigationTools {
     return str.replaceAll("|", "｜").replaceAll("]", "］");
   }
   private readonly copyPanel: HTMLDivElement;
-  private locations: Promise<Locations> | null = null;
+  private locations: Promise<EpubLocations> | null = null;
   private currentLocation: Location | null = null;
   private needsCorrection = false;
   private destroyed = false;
@@ -1258,10 +1272,10 @@ export class EpubNavigationTools {
     // The 0.3.93 .d.ts types this as the DOM global `Location` (the
     // symbol is never imported in that file); at runtime it returns the
     // integer location index.
-    return locations.locationFromCfi(cfi) as unknown as number;
+    return requireEpubLocationNumber(locations.locationFromCfi(cfi));
   }
 
-  private ensureLocations(): Promise<Locations> {
+  private ensureLocations(): Promise<EpubLocations> {
     if (this.locations === null) {
       this.locations = (async () => {
         await this.book.ready;

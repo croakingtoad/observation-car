@@ -393,7 +393,7 @@ function makeBook(
     ready: Promise.resolve(),
     locations: {
       generate: vi.fn(async () => undefined),
-      locationFromCfi: vi.fn(() => 42),
+      locationFromCfi: vi.fn<(cfi: string) => unknown>(() => 42),
     },
     destroy: vi.fn(),
   };
@@ -455,6 +455,33 @@ async function buildNullTitleEpubFixture(): Promise<ArrayBuffer> {
         "<content />",
         '<content src="chapter-1.xhtml" />',
       );
+    }
+    zip.file(fixturePath, contents, { createFolders: false });
+  }
+
+  return zip.generateAsync({
+    compression: "STORE",
+    platform: "UNIX",
+    type: "arraybuffer",
+  });
+}
+
+async function buildLocationsEpubFixture(): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures/minimal-epub");
+  const fixtureFiles = [
+    "mimetype",
+    "META-INF/container.xml",
+    "EPUB/package.opf",
+    "EPUB/nav.xhtml",
+    "EPUB/chapter-1.xhtml",
+    "EPUB/chapter-2.xhtml",
+  ] as const;
+  const zip = new JSZip();
+
+  for (const fixturePath of fixtureFiles) {
+    let contents = await readFile(resolve(fixtureRoot, fixturePath), "utf8");
+    if (fixturePath === "mimetype") {
+      contents = contents.trimEnd();
     }
     zip.file(fixturePath, contents, { createFolders: false });
   }
@@ -1702,6 +1729,69 @@ describe("EpubNavigationTools defect 1: bookTitle escaped in wikilinks (LOCO-103
       });
       book.destroy();
     }
+  });
+});
+
+describe("epub.js location boundary", () => {
+  it("copies a location number produced by a live epub.js locations table", async () => {
+    const book = ePub(await buildLocationsEpubFixture());
+    let tools: EpubNavigationTools | null = null;
+
+    try {
+      await book.opened;
+      const selectedCfi =
+        "epubcfi(/6/4[chapter-2-ref]!/4[chapter-two-body]/2[chapter-two-start],/1:0,/1:90)";
+
+      const harness = makeTools({}, undefined, book);
+      tools = harness.tools;
+      await waitForSelectionListener(harness.rendition);
+      harness.rendition.fire("selected", selectedCfi, selectionContents());
+      await vi.waitFor(() => {
+        expect(harness.viewerEl.querySelector(".epub-cfi-copy")).not.toBeNull();
+      });
+      const copyButton = harness.viewerEl.querySelector<HTMLButtonElement>(
+        ".epub-cfi-copy",
+      );
+      if (copyButton === null) {
+        throw new Error("Selection copy button was not rendered");
+      }
+      copyButton.click();
+
+      await vi.waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(
+          `[[library/book.epub#${selectedCfi}|Observation Car CFI Fixture, loc. 1]]`,
+        );
+      });
+      expect(book.locations.locationFromCfi(selectedCfi)).toBe(1);
+    } finally {
+      tools?.destroy();
+      book.destroy();
+    }
+  });
+
+  it("rejects a non-number location result before copying a wikilink", async () => {
+    const book = makeBook();
+    book.locations.locationFromCfi.mockReturnValue("not-a-location");
+    const { viewerEl, rendition, tools } = makeTools({}, undefined, book);
+    await waitForSelectionListener(rendition);
+    rendition.fire("selected", SELECTION_CFI, selectionContents());
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-cfi-copy")).not.toBeNull();
+    });
+    const copyButton = viewerEl.querySelector<HTMLButtonElement>(
+      ".epub-cfi-copy",
+    );
+    if (copyButton === null) {
+      throw new Error("Selection copy button was not rendered");
+    }
+    copyButton.click();
+
+    await vi.waitFor(() => expect(copyButton.textContent).toBe("✖"));
+    expect(copyButton.title).toContain(
+      "EPUB location must be a number; received string",
+    );
+    expect(writeText).not.toHaveBeenCalled();
+    tools.destroy();
   });
 });
 
