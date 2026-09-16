@@ -12,6 +12,7 @@ import type { TFile, WorkspaceLeaf } from "obsidian";
 import { DEFAULT_SETTINGS } from "../settings";
 import {
   EpubView,
+  EPUB_DISPLAY_TIMEOUT_MS,
   type EpubLocationEvent,
   type EpubViewHost,
 } from "./EpubView";
@@ -730,6 +731,31 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     expect(FakeBook.instances).toHaveLength(0);
     expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
   });
+  it("completes display inside the timeout boundary without an error", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const displayGate = deferred();
+    state.currentDisplayGate = displayGate.promise;
+
+    const open = view.onLoadFile(file("Books/Test.epub"));
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[0].display).toHaveBeenCalledOnce();
+    });
+
+    // Advance to just under the timeout
+    await vi.advanceTimersByTimeAsync(EPUB_DISPLAY_TIMEOUT_MS - 100);
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(1);
+    expect(view.contentEl.querySelectorAll(".epub-load-error")).toHaveLength(0);
+    expect(FakeBook.instances[0].destroyed).toBe(false);
+    expect(FakeRendition.instances[0].destroyed).toBe(false);
+
+    state.currentDisplayGate = null;
+    displayGate.resolve();
+    await open;
+    await view.onClose();
+    vi.useRealTimers();
+  });
+
 });
 
 function relocatedAt(cfi: string, href: string) {

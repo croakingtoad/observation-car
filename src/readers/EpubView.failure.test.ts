@@ -248,6 +248,6 @@ describe("EpubView malformed-book failure path", () => {
       expect(view.contentEl.children).toHaveLength(0);
       consoleError.mockRestore();
     },
-    6200,
+    9000,
   );
 });

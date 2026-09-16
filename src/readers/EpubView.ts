@@ -26,7 +26,7 @@ import type { EpubFlowMode, ObservationCarSettings } from "../settings";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
 
-const EPUB_DISPLAY_TIMEOUT_MS = 5000;
+export const EPUB_DISPLAY_TIMEOUT_MS = 5000;
 
 /**
  * A LocationChanged event (F2.5): PRD §8's Location plus the file the
