@@ -36,10 +36,10 @@ const host = (): EpubViewHost => {
 
 const CHAPTER_ONE = "chapter-1.xhtml";
 const CHAPTER_TWO = "chapter-2.xhtml";
-const CHAPTER_TWO_CFI = "epubcfi(/6/4!/4/2/1:0)";
+const CHAPTER_TWO_CFI = "epubcfi(/6/4!/4/2/1:5)";
 
-function location(href: string, cfi: string): Location {
-  const point = {
+function location(href: string, cfi: string, endCfi: string = cfi): Location {
+  const start = {
     index: href === CHAPTER_ONE ? 0 : 1,
     href,
     cfi,
@@ -47,7 +47,8 @@ function location(href: string, cfi: string): Location {
     percentage: 0,
     displayed: { page: 1, total: 1 },
   };
-  return { start: point, end: point, atStart: false, atEnd: false };
+  const end = { ...start, cfi: endCfi };
+  return { start, end, atStart: false, atEnd: false };
 }
 
 const FIRST_LOCATION = location(
@@ -55,10 +56,38 @@ const FIRST_LOCATION = location(
   "epubcfi(/6/2!/4/2/1:0)",
 );
 const SECOND_LOCATION = location(CHAPTER_TWO, CHAPTER_TWO_CFI);
+const FIRST_TARGET_AFTER_RANGE_LOCATION = location(
+  CHAPTER_TWO,
+  "epubcfi(/6/4!/4/2/1:6)",
+  "epubcfi(/6/4!/4/2/1:7)",
+);
+const INSIDE_RANGE_LOCATION = location(
+  CHAPTER_TWO,
+  "epubcfi(/6/4!/4/2/1:0)",
+  "epubcfi(/6/4!/4/2/1:9)",
+);
+const TARGET_BEFORE_RANGE_LOCATION = location(
+  CHAPTER_TWO,
+  "epubcfi(/6/4!/4/2/1:7)",
+  "epubcfi(/6/4!/4/2/1:3)",
+);
+const FIRST_TARGET_BEFORE_RANGE_LOCATION = location(
+  CHAPTER_TWO,
+  "epubcfi(/6/4!/4/2/1:2)",
+  "epubcfi(/6/4!/4/2/1:4)",
+);
+const TARGET_AFTER_RANGE_LOCATION = location(
+  CHAPTER_TWO,
+  "epubcfi(/6/4!/4/2/1:0)",
+  "epubcfi(/6/4!/4/2/1:3)",
+);
 
 class MockRendition {
   location = FIRST_LOCATION;
+  initialRelocationQueue: readonly Location[] = [];
+  nextCorrectiveLocation: Location | null = null;
   readonly displayedTargets: string[] = [];
+  private initialDisplayCount = 0;
   holdRelocations = false;
   suppressNoopRelocations = false;
   private readonly pendingRelocations: Location[] = [];
@@ -94,10 +123,23 @@ class MockRendition {
 
   async display(target: string): Promise<void> {
     this.displayedTargets.push(target);
+    this.initialDisplayCount += 1;
     const next = target.includes("/6/4") || target === CHAPTER_TWO
       ? SECOND_LOCATION
       : FIRST_LOCATION;
     await Promise.resolve();
+    if (
+      this.initialDisplayCount === 1 &&
+      this.initialRelocationQueue.length > 0
+    ) {
+      const [report, ...remaining] = this.initialRelocationQueue;
+      this.initialRelocationQueue = remaining;
+      this.location = report;
+      if (this.initialDisplayCount === 1) {
+        this.emit("relocated", report);
+      }
+      return;
+    }
     if (this.holdRelocations) {
       this.pendingRelocations.push(next);
       return;
@@ -105,11 +147,12 @@ class MockRendition {
     if (this.suppressNoopRelocations && this.location === next) {
       return;
     }
-    this.relocate(next);
+    this.location = next;
+    this.emit("relocated", next);
   }
 
   currentLocation(): Location {
-    return this.location;
+    return this.nextCorrectiveLocation ?? this.location;
   }
 
   releaseRelocation(): void {
@@ -158,8 +201,32 @@ describe("EpubView.openAtFragment", () => {
     vi.useRealTimers();
   });
 
+  it("times out when the initial relocation is outside the CFI range", async () => {
+    const { view, rendition } = harness();
+    vi.useFakeTimers();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    rendition.initialRelocationQueue = [FIRST_TARGET_AFTER_RANGE_LOCATION];
+
+    const pending = view.openAtFragment(`#${CHAPTER_TWO_CFI}`);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(rendition.displayedTargets).toEqual([
+      CHAPTER_TWO_CFI,
+    ]);
+    expect(notices[0]).toContain("the reader did not report the new location");
+    expect(consoleError).toHaveBeenCalledWith(
+      "Unable to open EPUB fragment",
+      `#${CHAPTER_TWO_CFI}`,
+      expect.any(Error),
+    );
+  });
+
   it("opens a CFI and waits for the stabilizing relocation", async () => {
     const { view, rendition } = harness();
+    rendition.initialRelocationQueue = [SECOND_LOCATION];
 
     await expect(
       view.openAtFragment(`#${CHAPTER_TWO_CFI}`),
@@ -172,7 +239,7 @@ describe("EpubView.openAtFragment", () => {
     expect(rendition.location).toBe(SECOND_LOCATION);
   });
 
-  it("resolves when the stabilizing display is already at the target", async () => {
+  it("accepts a stabilizing current location exactly at the CFI target", async () => {
     vi.useFakeTimers();
     const { view, rendition } = harness();
     rendition.suppressNoopRelocations = true;
@@ -188,9 +255,95 @@ describe("EpubView.openAtFragment", () => {
       CHAPTER_TWO_CFI,
       CHAPTER_TWO_CFI,
     ]);
-    expect(rendition.location).toBe(SECOND_LOCATION);
     expect(notices).toEqual([]);
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("accepts a stabilizing current location inside the CFI range", async () => {
+    const { view, rendition } = harness();
+    rendition.initialRelocationQueue = [INSIDE_RANGE_LOCATION];
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    await expect(
+      view.openAtFragment(`#${CHAPTER_TWO_CFI}`),
+    ).resolves.toBeUndefined();
+
+    expect(rendition.displayedTargets).toEqual([
+      CHAPTER_TWO_CFI,
+      CHAPTER_TWO_CFI,
+    ]);
+    expect(notices).toEqual([]);
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("does not settle when the current location starts after the CFI target", async () => {
+    vi.useFakeTimers();
+    const { view, rendition } = harness();
+    rendition.suppressNoopRelocations = true;
+    rendition.initialRelocationQueue = [SECOND_LOCATION];
+    rendition.nextCorrectiveLocation = TARGET_BEFORE_RANGE_LOCATION;
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    const pending = view.openAtFragment(`#${CHAPTER_TWO_CFI}`);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(rendition.displayedTargets).toEqual([
+      CHAPTER_TWO_CFI,
+      CHAPTER_TWO_CFI,
+    ]);
+    expect(notices[0]).toContain("the reader did not report the new location");
+    expect(consoleError).toHaveBeenCalledWith(
+      "Unable to open EPUB fragment",
+      `#${CHAPTER_TWO_CFI}`,
+      expect.any(Error),
+    );
+  });
+
+  it("does not settle when the initial relocation range excludes the CFI target", async () => {
+    vi.useFakeTimers();
+    const { view, rendition } = harness();
+    rendition.initialRelocationQueue = [TARGET_AFTER_RANGE_LOCATION];
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    const pending = view.openAtFragment(`#${CHAPTER_TWO_CFI}`);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(rendition.displayedTargets).toEqual([CHAPTER_TWO_CFI]);
+    expect(notices[0]).toContain("the reader did not report the new location");
+    expect(consoleError).toHaveBeenCalledWith(
+      "Unable to open EPUB fragment",
+      `#${CHAPTER_TWO_CFI}`,
+      expect.any(Error),
+    );
+  });
+
+  it("times out when the initial relocation ends before the CFI target", async () => {
+    vi.useFakeTimers();
+    const { view, rendition } = harness();
+    rendition.initialRelocationQueue = [FIRST_TARGET_BEFORE_RANGE_LOCATION];
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    const pending = view.openAtFragment(`#${CHAPTER_TWO_CFI}`);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(rendition.displayedTargets).toEqual([CHAPTER_TWO_CFI]);
+    expect(notices[0]).toContain("the reader did not report the new location");
+    expect(consoleError).toHaveBeenCalledWith(
+      "Unable to open EPUB fragment",
+      `#${CHAPTER_TWO_CFI}`,
+      expect.any(Error),
+    );
   });
 
   it("does not settle before the rendition reports relocation", async () => {
