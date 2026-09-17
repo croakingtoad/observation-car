@@ -96,7 +96,7 @@ function emptyNoteText(): string {
   return '---\ntype: book-note\nsource: "[[Books/Test.epub]]"\nformat: epub\n---';
 }
 
-function fakeEditor(initial: string): FakeEditor {
+function fakeEditor(initial: string, hasFocus?: boolean): FakeEditor {
   let value = initial;
   const setValue = vi.fn((next: string) => {
     value = next;
@@ -106,6 +106,7 @@ function fakeEditor(initial: string): FakeEditor {
   const focus = vi.fn();
   const editor = {
     getValue: () => value,
+    hasFocus: () => hasFocus ?? false,
     setValue,
     setCursor,
     scrollIntoView,
@@ -501,5 +502,73 @@ describe("new note here", () => {
     expect(notices).toEqual([
       "Could not add an anchored section to the paired book note.",
     ]);
+  });
+
+  it("prefers the focused editor when the note is open in two panes", async () => {
+    // Two note leaves, second one focused
+    const focusedEditor = fakeEditor(noteText(), true);
+
+    const unfocusedEditor = fakeEditor(noteText());
+
+    const bookFile = new TFileDouble(SOURCE);
+    const noteFile = new TFileDouble(NOTE_PATH);
+    const reader: Harness["reader"] = {
+      file: bookFile,
+      getViewType: () => "observation-car-epub",
+      getLocation: () => ({
+        fragment: MIDDLE,
+        chapter: 2,
+        label: "Ch. 2",
+      }),
+    };
+
+    const rootSplit = {};
+    const readerLeaf = {
+      view: reader,
+      getRoot: () => rootSplit,
+    } as unknown as WorkspaceLeaf;
+    const unfocusedLeaf = {
+      view: new MarkdownViewDouble(noteFile, unfocusedEditor.editor),
+      getRoot: () => rootSplit,
+    } as unknown as WorkspaceLeaf;
+    const focusedLeaf = {
+      view: new MarkdownViewDouble(noteFile, focusedEditor.editor),
+      getRoot: () => rootSplit,
+    } as unknown as WorkspaceLeaf;
+    const pairing: ReaderPairing = {
+      leaf: readerLeaf,
+      reader,
+      bookFile,
+      notePath: NOTE_PATH,
+      bookNote: parseBookNote(noteText(), { anchorHeadingLevel: 2 }),
+    };
+    const plugin = {
+      settings: { anchorHeadingLevel: 2 },
+      app: {
+        vault: {
+          getAbstractFileByPath: (path: string) =>
+            path === NOTE_PATH ? noteFile : null,
+        },
+        metadataCache: {
+          getFirstLinkpathDest: () => bookFile,
+        },
+        workspace: {
+          rootSplit,
+          getMostRecentLeaf: () => readerLeaf,
+          getLeavesOfType: () => [unfocusedLeaf, focusedLeaf],
+          createLeafBySplit: vi.fn(),
+        },
+      },
+      addCommand: vi.fn(),
+      getReaderPairingForLeaf: (leaf: WorkspaceLeaf) =>
+        leaf === readerLeaf ? pairing : undefined,
+      getReaderPairingForNote: () => pairing,
+    } as unknown as ObservationCarPlugin;
+
+    await newNoteHereFromReader(plugin, readerLeaf);
+
+    // The focused editor should receive the content update
+    expect(focusedEditor.setValue).toHaveBeenCalled();
+    expect(unfocusedEditor.setValue).not.toHaveBeenCalled();
   });
 });

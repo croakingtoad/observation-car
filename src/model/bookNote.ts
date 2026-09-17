@@ -119,6 +119,11 @@ export interface BookNoteDiagnostic {
 }
 
 export interface BookNote {
+  /**
+   * Markdown source normalized to LF line endings, matching CM6's
+   * document representation.
+   */
+  readonly sourceText: string;
   readonly frontmatter: BookNoteFrontmatter;
   /** Anchor sections in file order (see module docs on ordering). */
   readonly sections: readonly BookNoteSection[];
@@ -143,7 +148,7 @@ export function parseBookNote(
 ): BookNote {
   const anchorHeadingLevel = options?.anchorHeadingLevel ?? DEFAULT_ANCHOR_HEADING_LEVEL;
   const resolveLink = options?.resolveLink;
-  const lines = text.split(/\r?\n/);
+  const lines = text.split(/\r\n?|\n/);
   const data = parseFrontmatter(lines);
   const source = extractSource(data);
   const format = extractFormat(data);
@@ -192,7 +197,12 @@ export function parseBookNote(
     });
   }
 
-  return { frontmatter: { data, source, format }, sections, diagnostics };
+  return {
+    sourceText: text.split(/\r\n?|\n/).join("\n"),
+    frontmatter: { data, source, format },
+    sections,
+    diagnostics,
+  };
 }
 
 /**

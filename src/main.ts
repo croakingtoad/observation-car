@@ -1,8 +1,8 @@
 import {
-  MarkdownView,
   Notice,
   Plugin,
   TFile,
+  type Editor,
   type WorkspaceLeaf,
 } from "obsidian";
 import { registerCreateBookNoteCommand } from "./commands/createBookNote";
@@ -23,6 +23,7 @@ import {
   DEFAULT_SETTINGS,
   type ObservationCarSettings,
 } from "./settings";
+import { findOpenEditor } from "./openEditor";
 import { ObservationCarSettingTab } from "./settingsTab";
 import {
   isBookNoteCandidate,
@@ -49,10 +50,7 @@ import {
   type Reader,
   type ReaderPairing,
 } from "./sync/ReaderRegistry";
-import {
-  ScrollSync,
-  type ScrollEditor,
-} from "./sync/scrollSync";
+import { ScrollSync } from "./sync/scrollSync";
 import { currentSectionViewPlugin } from "./sync/currentSectionDecoration";
 import { focusModeViewPlugin } from "./sync/focusModeDecoration";
 import { FocusModeController } from "./sync/focusMode";
@@ -394,7 +392,12 @@ export default class ObservationCarPlugin extends Plugin {
     return this.readerRegistry.getByLeaf(leaf);
   }
 
-  /** Reader-toolbar bridge for F4.6's leaf-pinned action. */
+  /**
+   * Reader-toolbar bridge for F4.6's leaf-pinned action.
+   *
+   * `EpubViewHost` treats this as optional, so this assembly seam must
+   * remain explicit to keep the toolbar action wired.
+   */
   newNoteHereFromReader(leaf: WorkspaceLeaf): void {
     void newNoteHereFromReader(this, leaf);
   }
@@ -575,7 +578,7 @@ export default class ObservationCarPlugin extends Plugin {
     }
     this.focusMode.toggle(
       editor,
-      pairing.bookNote.sections,
+      pairing.bookNote,
       this.scrollSync.getCurrentSection(editor),
     );
   }
@@ -586,21 +589,6 @@ export default class ObservationCarPlugin extends Plugin {
     this.readerRegistry.clear();
     this.bookNoteStore.clear();
     this.layoutSnapshot.clear();
-  }
-
-  /** Find a live source-mode editor by note path without retaining its view. */
-  private findOpenEditor(notePath: string): ScrollEditor | null {
-    let fallback: ScrollEditor | null = null;
-    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      if (
-        leaf.view instanceof MarkdownView &&
-        leaf.view.file?.path === notePath
-      ) {
-        if (leaf.view.editor.hasFocus()) return leaf.view.editor;
-        fallback ??= leaf.view.editor;
-      }
-    }
-    return fallback;
   }
 
   /** Resolve a wikilink target to Obsidian's canonical vault file. */
@@ -739,6 +727,16 @@ export default class ObservationCarPlugin extends Plugin {
         ),
       );
     }
+  }
+
+  /**
+   * Shared live-editor lookup: prefer the focused editor, else the first
+   * matching leaf, else `null`. This keeps F4.6's write/focus target on
+   * the same pane as focus mode and scroll-sync when a note is open more
+   * than once, without retaining the view.
+   */
+  findOpenEditor(notePath: string): Editor | null {
+    return findOpenEditor(this, notePath);
   }
 }
 

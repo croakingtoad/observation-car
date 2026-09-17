@@ -288,9 +288,9 @@ export class ScrollSync {
     this.setCurrentSection(editor, section);
     if (this.deps.focusMode !== undefined) {
       if (focusWasActive && !isFocusModeDecorationEnabled(editor)) {
-        this.deps.focusMode.toggle(editor, pairing.bookNote.sections, section);
+        this.deps.focusMode.toggle(editor, pairing.bookNote, section);
       }
-      this.deps.focusMode.setSections(editor, pairing.bookNote.sections);
+      this.deps.focusMode.setBookNote(editor, pairing.bookNote);
       this.deps.focusMode.setCurrentSection(editor, section);
     }
     this.currentSection.set(

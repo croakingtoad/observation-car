@@ -48,6 +48,7 @@ function leaf(): WorkspaceLeaf {
 
 function note(source: string | null): BookNote {
   return {
+    sourceText: "",
     frontmatter: { data: { source }, source, format: "epub" },
     sections: [],
     diagnostics: [],

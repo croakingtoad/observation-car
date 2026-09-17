@@ -3,7 +3,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BookNoteSection } from "../model/bookNote";
+import type { BookNote, BookNoteSection } from "../model/bookNote";
 import type { ScrollEditor } from "./scrollSync";
 import { FocusModeController } from "./focusMode";
 import {
@@ -149,7 +149,7 @@ describe("focus-mode CM6 decoration", () => {
     const controller = new FocusModeController();
     controller.toggle(
       { cm: view } as unknown as ScrollEditor,
-      [section(0, 1, 0), section(2, 3, 1), section(4, 5, 2)],
+      bookNote([section(0, 1, 0), section(2, 3, 1), section(4, 5, 2)]),
       section(4, 5, 2),
     );
     view.requestMeasure();
@@ -170,10 +170,10 @@ describe("focus-mode CM6 decoration", () => {
       section(4, 5, 2),
     ];
 
-    controller.toggle(editor, sections, sections[2] ?? null);
+    controller.toggle(editor, bookNote(sections), sections[2] ?? null);
     expect(foldedWidgets(view)).toHaveLength(1);
 
-    controller.toggle(editor, sections, sections[2] ?? null);
+    controller.toggle(editor, bookNote(sections), sections[2] ?? null);
     expect(foldedWidgets(view)).toEqual([]);
   });
 
@@ -186,7 +186,7 @@ describe("focus-mode CM6 decoration", () => {
       section(2, 3, 1),
       section(4, 5, 2),
     ];
-    controller.toggle(editor, sections, sections[0] ?? null);
+    controller.toggle(editor, bookNote(sections), sections[0] ?? null);
     view.requestMeasure();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(foldedWidgets(view)).toHaveLength(1);
@@ -197,7 +197,7 @@ describe("focus-mode CM6 decoration", () => {
     expect(foldedWidgets(view)).toEqual([]);
     expect(view.state.doc.toString()).toBe(NOTE);
 
-    controller.toggle(editor, sections, sections[0] ?? null);
+    controller.toggle(editor, bookNote(sections), sections[0] ?? null);
     view.requestMeasure();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -272,7 +272,11 @@ describe("focus-mode CM6 decoration", () => {
       section(2, 3, 1),
       section(4, 5, 2),
     ];
-    controller.toggle(editor, initialSections, initialSections[2] ?? null);
+    controller.toggle(
+      editor,
+      bookNote(initialSections),
+      initialSections[2] ?? null,
+    );
 
     view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
     const shiftedSections = [
@@ -280,7 +284,10 @@ describe("focus-mode CM6 decoration", () => {
       section(2, 3, 1),
       section(5, 6, 2),
     ];
-    controller.setSections(editor, shiftedSections);
+    controller.setBookNote(
+      editor,
+      bookNote(shiftedSections, view.state.doc.toString()),
+    );
     controller.setCurrentSection(editor, shiftedSections[2] ?? null);
 
     expect(foldedWidgets(view)).toHaveLength(1);
@@ -299,7 +306,11 @@ describe("focus-mode CM6 decoration", () => {
       section(2, 3, 1),
       section(4, 5, 2),
     ];
-    controller.toggle(editor, initialSections, initialSections[2] ?? null);
+    controller.toggle(
+      editor,
+      bookNote(initialSections),
+      initialSections[2] ?? null,
+    );
 
     view.dispatch({ changes: { from: 0, to: 0, insert: "typed first\n" } });
     const edited = view.state.doc.toString();
@@ -308,7 +319,11 @@ describe("focus-mode CM6 decoration", () => {
       section(2, 3, 1),
       section(5, 6, 2),
     ];
-    controller.toggle(editor, shiftedSections, shiftedSections[2] ?? null);
+    controller.toggle(
+      editor,
+      bookNote(shiftedSections, view.state.doc.toString()),
+      shiftedSections[2] ?? null,
+    );
 
     expect(foldedWidgets(view)).toHaveLength(1);
     expect(view.state.doc.toString()).toBe(edited);
@@ -325,9 +340,9 @@ describe("focus-mode CM6 decoration", () => {
     ];
     const original = view.state.doc.toString();
 
-    controller.toggle(editor, sections, sections[2] ?? null);
-    controller.toggle(editor, sections, sections[2] ?? null);
-    controller.toggle(editor, sections, sections[2] ?? null);
+    controller.toggle(editor, bookNote(sections), sections[2] ?? null);
+    controller.toggle(editor, bookNote(sections), sections[2] ?? null);
+    controller.toggle(editor, bookNote(sections), sections[2] ?? null);
     controller.reset(editor);
 
     expect(foldedWidgets(view)).toEqual([]);
@@ -399,7 +414,7 @@ describe("focus-mode CM6 decoration", () => {
       section(4, 5, 2),
     ];
 
-    controller.toggle(editor, sections, sections[2] ?? null);
+    controller.toggle(editor, bookNote(sections), sections[2] ?? null);
     view.requestMeasure();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(foldedWidgets(view)).toHaveLength(1);
@@ -453,5 +468,17 @@ function section(
     fragment: "epubcfi(/6/8!/4/2/1:0)",
     position: { kind: "epub-cfi", cfi: "/6/8!/4/2/1:0" },
     chapter,
+  };
+}
+
+function bookNote(
+  sections: readonly BookNoteSection[],
+  sourceText = NOTE,
+): BookNote {
+  return {
+    sourceText,
+    frontmatter: { data: {}, source: null, format: null },
+    sections,
+    diagnostics: [],
   };
 }

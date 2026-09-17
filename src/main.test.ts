@@ -6,9 +6,15 @@ import {
   type App,
   type Command,
   type PluginManifest,
+  type WorkspaceLeaf,
 } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  EpubNavigationTools,
+  EpubSelectionTracker,
+} from "./readers/epubNavigationTools";
 import manifest from "../manifest.json";
+import type { Book, Rendition } from "epubjs";
 import { parseBookNote } from "./model/bookNote";
 import { DEFAULT_REPARSE_DEBOUNCE_MS } from "./model/bookNoteStore";
 import ObservationCarPlugin from "./main";
@@ -173,7 +179,9 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
   return {
     EPUB_VIEW_TYPE: "observation-car-epub",
     EpubView: class {
+    contentEl = document.createElement("div");
     file: TFile | null = null;
+    leaf: WorkspaceLeaf;
     openedFragments: string[] = [];
     stylesheetToggleCount = 0;
     private readonly listeners = new Set<
@@ -216,6 +224,9 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
         for (const listener of [...this.relocationListeners]) listener(location);
       },
     };
+    constructor(leaf: WorkspaceLeaf) {
+      this.leaf = leaf;
+    }
     getViewType(): string {
       return "observation-car-epub";
     }
@@ -926,6 +937,49 @@ describe("plugin wiring (substituted obsidian module)", () => {
       icon: "square-pen",
       hotkeys: [{ modifiers: ["Alt"], key: "N" }],
     });
+  });
+
+  it("bridges the reader toolbar through the plugin's own new-note action", async () => {
+    fake.linkDests.set("surprised by grace.epub", SOURCE);
+    const noteFile = addMdFile("Reading/A.md", NOTE_TEXT, NOTE_FRONTMATTER);
+    fire("metadata", "changed", [noteFile]);
+    await settle();
+
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    const { leaf: readerLeaf } = openEpubReader(book);
+    const viewerEl = document.createElement("div");
+    new EpubNavigationTools(
+      viewerEl as HTMLElement,
+      SOURCE,
+      {
+        loaded: {
+          metadata: Promise.resolve({ title: "Surprised by Grace" }),
+        },
+        on: () => () => undefined,
+      } as unknown as Book,
+      {
+        on: () => () => undefined,
+        off: () => undefined,
+        themes: { override: () => undefined },
+      } as unknown as Rendition,
+      new EpubSelectionTracker(),
+      undefined,
+      {
+        onNewNote: () =>
+          plugin.newNoteHereFromReader(readerLeaf as unknown as WorkspaceLeaf),
+      },
+    );
+    const bridge = vi.spyOn(plugin, "newNoteHereFromReader");
+
+    const button = viewerEl.querySelector<HTMLButtonElement>(
+      ".epub-new-note-button",
+    );
+    if (button === null) throw new Error("button not found");
+    expect(button.onclick).toBeTypeOf("function");
+    button.click();
+
+    expect(bridge).toHaveBeenCalledWith(readerLeaf);
   });
 
   it("writes a fresh snapshot when state changes during an in-flight save", async () => {
@@ -2669,7 +2723,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     cmView.destroy();
   });
 
-  it("focuses a mixed note with both CFI and spine-href sections", async () => {
+  it("focuses a mixed note with both CFI and spine-href sections — wiring", async () => {
     fake.linkDests.set("mixed.epub", "Books/Mixed.epub");
     const book = addBookFile("Books/Mixed.epub");
     const noteFile = addMdFile("Reading/Mixed.md", '---\ntype: book-note\nsource: "[[Books/Mixed.epub]]"\nformat: epub\n---\n\n## [[Books/Mixed.epub#epubcfi(/6/8!/4/2/1:0)|Cfi Ch. 1]]\ncfi body\n\n## [[Books/Mixed.epub#text/chapter2.xhtml|Href Ch. 2]]\nhref body', {
@@ -2707,7 +2761,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     cmView.destroy();
   });
 
-  it("folds other-chapter sections without editing the document", () => {
+  it("folds sections across a null-chapter boundary while preserving document bytes", () => {
     const docText = [
       "## Cfi Ch. 0",
       "cfi body 0",
@@ -2782,10 +2836,12 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([]);
     expect(toggle).toHaveBeenCalledWith(
       expect.objectContaining({ hasFocus: expect.any(Function) }),
-      expect.arrayContaining([
-        expect.objectContaining({ headingLine: 6 }),
-        expect.objectContaining({ headingLine: 9 }),
-      ]),
+      expect.objectContaining({
+        sections: expect.arrayContaining([
+          expect.objectContaining({ headingLine: 6 }),
+          expect.objectContaining({ headingLine: 9 }),
+        ]),
+      }),
       expect.objectContaining({ headingLine: 9 }),
     );
   });
@@ -2811,9 +2867,9 @@ describe("plugin wiring (substituted obsidian module)", () => {
     view.emitLocation(`#${CFI_1}`);
     await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
 
-    const setSections = vi.spyOn(
+    const setBookNote = vi.spyOn(
       (plugin as unknown as { focusMode: FocusModeController }).focusMode,
-      "setSections",
+      "setBookNote",
     );
     const setCurrentSection = vi.spyOn(
       (plugin as unknown as { focusMode: FocusModeController }).focusMode,
@@ -2823,12 +2879,14 @@ describe("plugin wiring (substituted obsidian module)", () => {
     view.emitLocation(`#${CFI_2}`);
     await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
 
-    expect(setSections).toHaveBeenCalledWith(
+    expect(setBookNote).toHaveBeenCalledWith(
       expect.objectContaining({ hasFocus: expect.any(Function) }),
-      expect.arrayContaining([
-        expect.objectContaining({ headingLine: 6 }),
-        expect.objectContaining({ headingLine: 9 }),
-      ]),
+      expect.objectContaining({
+        sections: expect.arrayContaining([
+          expect.objectContaining({ headingLine: 6 }),
+          expect.objectContaining({ headingLine: 9 }),
+        ]),
+      }),
     );
     expect(setCurrentSection).toHaveBeenCalledWith(
       expect.objectContaining({ hasFocus: expect.any(Function) }),

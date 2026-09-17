@@ -7,6 +7,7 @@ import {
   type WorkspaceLeaf,
 } from "obsidian";
 import type ObservationCarPlugin from "../main";
+import { findOpenEditor } from "../openEditor";
 import { parseBookNote, type BookNoteSection } from "../model/bookNote";
 import { sortSectionsByBookPosition } from "../model/sortBookNoteSections";
 import type {
@@ -130,14 +131,8 @@ async function findOrOpenEditor(
   plugin: ObservationCarPlugin,
   pairing: ReaderPairing,
 ): Promise<Editor> {
-  for (const leaf of plugin.app.workspace.getLeavesOfType("markdown")) {
-    if (
-      leaf.view instanceof MarkdownView &&
-      leaf.view.file?.path === pairing.notePath
-    ) {
-      return leaf.view.editor;
-    }
-  }
+  const openEditor = findOpenEditor(plugin, pairing.notePath);
+  if (openEditor !== null) return openEditor;
 
   const noteFile = plugin.app.vault.getAbstractFileByPath(pairing.notePath);
   if (noteFile instanceof TFile === false) {

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<!--
+  Fixture: login-page — a realistic HTML sign-in page body, the kind of
+  non-OPDS response a server may return (wrong URL, expired session, or
+  OPDS disabled on the instance).
+  SPEC-DERIVED: hand-authored. NOT captured from a live Booklore
+  instance: the live instance answers bad credentials with the plain-text
+  401 body captured in auth-401.txt, never an HTML sign-in page, so this
+  shape has no live equivalent.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <title>Booklore — Sign in</title>
+  </head>
+  <body>
+    <h1>Sign in to your library</h1>
+    <form method="post" action="/login">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username"/>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password"/>
+      <button type="submit">Sign in</button>
+    </form>
+  </body>
+</html>

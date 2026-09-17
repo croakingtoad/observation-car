@@ -1,4 +1,30 @@
 /**
+ * Test-time resolution target for the `obsidian` module, which ships no
+ * runtime code in the npm package (the app provides the real module; the
+ * production bundle externalizes it and never includes this file). Vite
+ * cannot resolve the bare `obsidian` specifier without an entry point, so
+ * the vitest config aliases it here.
+ *
+ * Anything performing I/O or reaching the host app — `requestUrl`, vault
+ * or adapter reads, network — throws loudly: tests must inject their own
+ * fakes (e.g. `OpdsClient`'s `transport` option) instead of relying on
+ * stub behavior. Only inert structural stand-ins may answer: classes the
+ * code constructs or extends, carrying no behaviour of their own. This
+ * keeps loud-failure intent load-bearing while letting E004's views
+ * instantiate.
+ */
+
+function notAvailable(member: string): never {
+  throw new Error(
+    `obsidian.${member} is not available in tests; inject a fake instead.`,
+  );
+}
+
+export function requestUrl(_options: unknown): never {
+  throw notAvailable("requestUrl");
+}
+
+/**
  * Runtime stand-in for the `obsidian` module in unit tests.
  *
  * The npm package is types-only (`main: ""` — the API comes from the
