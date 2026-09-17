@@ -294,7 +294,9 @@ interface FakeVault {
     activeView: unknown;
     activeLeaf: FakeLeaf | null;
     throwOnSetActiveLeaf: boolean;
+    setActiveLeafFailuresRemaining: number;
     mostRecentMainLeaf: FakeLeaf | null;
+    nextOpenFileGate: Promise<void> | null;
     splitRootOverride: object | null;
     useMarkdownLinks: boolean;
   };
@@ -347,7 +349,9 @@ function makeFakeVault(): FakeVault {
     activeView: null as unknown,
     activeLeaf: null as FakeLeaf | null,
     throwOnSetActiveLeaf: false,
+    setActiveLeafFailuresRemaining: 0,
     mostRecentMainLeaf: null as FakeLeaf | null,
+    nextOpenFileGate: null as Promise<void> | null,
     splitRootOverride: null as object | null,
     useMarkdownLinks: false,
   };
@@ -372,6 +376,9 @@ function makeFakeVault(): FakeVault {
       getRoot: () => root,
       openFile: async (file: TFile): Promise<void> => {
         openedFiles.push(file.path);
+        const gate = runtime.nextOpenFileGate;
+        runtime.nextOpenFileGate = null;
+        if (gate !== null) await gate;
         workspaceHandlers.get("file-open")?.(file);
         if (
           typeof leaf.view === "object" &&
@@ -514,7 +521,14 @@ function makeFakeVault(): FakeVault {
         return leaf;
       },
       setActiveLeaf: (leaf: FakeLeaf): void => {
-        if (runtime.throwOnSetActiveLeaf) {
+        if (
+          runtime.throwOnSetActiveLeaf ||
+          runtime.setActiveLeafFailuresRemaining > 0
+        ) {
+          runtime.setActiveLeafFailuresRemaining = Math.max(
+            0,
+            runtime.setActiveLeafFailuresRemaining - 1,
+          );
           throw new Error("setActiveLeaf refused by the test");
         }
         runtime.activeLeaf = leaf;
@@ -1552,6 +1566,9 @@ describe("plugin wiring (substituted obsidian module)", () => {
     fire("workspace", "layout-change", []);
     await settleCommand();
     expect(notePane.detached).toBe(false);
+    expect(noticeMessages).toEqual([
+      "Observation Car could not restore the reading layout. Layout reconciliation is off until Obsidian reloads.",
+    ]);
 
     // Second displacement, workspace healthy again. A reconciler that
     // kept going after a failed pass would act on it; this one must not,
@@ -1567,6 +1584,86 @@ describe("plugin wiring (substituted obsidian module)", () => {
     await settleCommand();
 
     expect(fake.createdTabLeaves.length).toBe(tabsBefore);
+  });
+
+  it("stops the current pass after the first of multiple displacements fails", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const bookC = addBookFile("Books/C.epub");
+    const bookD = addBookFile("Books/D.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+    const { leaf: leafB } = openEpubReader(bookB, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    fake.runtime.activeView = { file: bookB, leaf: leafB };
+    await invokeCreateBookNoteForTesting();
+
+    const firstNotePane = fake.createdSplitLeaves[0];
+    const secondNotePane = fake.createdTabLeaves[0]?.leaf;
+    if (firstNotePane === undefined || secondNotePane === undefined) {
+      throw new Error("two note panes were not opened");
+    }
+
+    fire("workspace", "layout-change", []);
+    firstNotePane.view = {
+      file: bookC,
+      getViewType: (): string => "observation-car-epub",
+    };
+    secondNotePane.view = {
+      file: bookD,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fake.runtime.setActiveLeafFailuresRemaining = 1;
+    const tabsBefore = fake.createdTabLeaves.length;
+
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    expect(fake.createdTabLeaves).toHaveLength(tabsBefore);
+    expect(leafPath(secondNotePane)).toBe("Books/D.epub");
+  });
+
+  it("does not resume an in-flight reconciliation after unload", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+
+    fire("workspace", "layout-change", []);
+    const layoutState = plugin as unknown as {
+      layoutSnapshot: Map<FakeLeaf, string>;
+    };
+    expect(layoutState.layoutSnapshot.size).toBeGreaterThan(0);
+
+    let releaseOpen!: () => void;
+    fake.runtime.nextOpenFileGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    const reopenDisplacedNote = vi.fn(async (): Promise<void> => {});
+    notePane.openFile = reopenDisplacedNote;
+    notePane.view = {
+      file: bookB,
+      getViewType: (): string => "observation-car-epub",
+    };
+
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+    expect(fake.createdTabLeaves).toHaveLength(1);
+
+    plugin.onunload();
+    expect(layoutState.layoutSnapshot.size).toBe(0);
+    releaseOpen();
+    await settleCommand();
+
+    expect(reopenDisplacedNote).not.toHaveBeenCalled();
+    expect(layoutState.layoutSnapshot.size).toBe(0);
   });
 
   it("resolves the most recently active deferred reader", async () => {
@@ -2228,6 +2325,10 @@ describe("plugin wiring (substituted obsidian module)", () => {
     if (book === undefined) throw new Error("book fixture is missing");
     const { leaf } = openEpubReader(book);
     expect(plugin.getReaderPairingForNote("Reading/A.md")?.leaf).toBe(leaf);
+    const layoutState = plugin as unknown as {
+      layoutSnapshot: Map<FakeLeaf, string>;
+    };
+    expect(layoutState.layoutSnapshot.size).toBeGreaterThan(0);
 
     fire("metadata", "changed", [file]);
     expect(vi.getTimerCount()).toBe(1); // the debounce window is pending
@@ -2239,6 +2340,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(plugin.getBookNotePaths()).toEqual([]);
     expect(plugin.getReaderPairingForNote("Reading/A.md")).toBeUndefined();
+    expect(layoutState.layoutSnapshot.size).toBe(0);
   });
 
   it("matches shortest-path anchor links against the source via the metadata cache", async () => {

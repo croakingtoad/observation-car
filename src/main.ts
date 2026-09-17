@@ -112,8 +112,11 @@ export default class ObservationCarPlugin extends Plugin {
   private reconcilingLayout = false;
   /** Latched on the first reconciliation failure; see `restoreDisplacedPanes`. */
   private layoutReconcilerFailed = false;
+  /** Stops an in-flight reconciliation from touching panes after unload. */
+  private unloaded = false;
 
   async onload(): Promise<void> {
+    this.unloaded = false;
     const pluginData = loadPluginData(await this.loadData());
     this.settings = pluginData.settings;
     this.epubLastLocations = pluginData.epubLastLocations;
@@ -454,7 +457,13 @@ export default class ObservationCarPlugin extends Plugin {
    * it, so this reads the reuse back off the leaf snapshot afterwards.
    */
   private reconcileReadingLayout(): void {
-    if (this.reconcilingLayout || this.layoutReconcilerFailed) return;
+    if (
+      this.unloaded ||
+      this.reconcilingLayout ||
+      this.layoutReconcilerFailed
+    ) {
+      return;
+    }
 
     const layout = this.readingLayout();
     const current = snapshotRootLeaves(layout);
@@ -472,6 +481,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.reconcilingLayout = true;
     void this.restoreDisplacedPanes(displacements).finally(() => {
       this.reconcilingLayout = false;
+      if (this.unloaded) return;
       this.layoutSnapshot = snapshotRootLeaves(this.readingLayout());
     });
   }
@@ -481,6 +491,7 @@ export default class ObservationCarPlugin extends Plugin {
   ): Promise<void> {
     const layout = this.readingLayout();
     for (const displacement of displacements) {
+      if (this.unloaded) return;
       try {
         const displaced = this.app.vault.getAbstractFileByPath(
           displacement.displacedPath,
@@ -493,6 +504,7 @@ export default class ObservationCarPlugin extends Plugin {
           // displaced book only needs a tab of its own beside it. Its
           // reading position is restored from `epubLastLocations`.
           await openBesideInGroup(layout, displacement.leaf, displaced);
+          if (this.unloaded) return;
           continue;
         }
 
@@ -503,11 +515,13 @@ export default class ObservationCarPlugin extends Plugin {
           book instanceof TFile
             ? await openBookInBookGroup(layout, book, displacement.leaf)
             : null;
+        if (this.unloaded) return;
         if (relocated === null) {
           // No book pane anywhere else, so the reused leaf becomes the
           // book pane and the note it displaced moves to a note pane
           // beside it. Nothing is detached in this branch.
           await openNoteBesideReader(layout, displacement.leaf, displaced);
+          if (this.unloaded) return;
           continue;
         }
 
@@ -517,8 +531,11 @@ export default class ObservationCarPlugin extends Plugin {
         // leaf is created or destroyed, so Obsidian is never left holding
         // a detached leaf as its active one.
         await displacement.leaf.openFile(displaced);
+        if (this.unloaded) return;
         await layout.revealLeaf(relocated);
+        if (this.unloaded) return;
       } catch (error) {
+        if (this.unloaded) return;
         // Fail closed. A reconciliation that throws has left the layout
         // in a state this pass did not finish reasoning about, and
         // repeating it on every later layout event is how one bad
@@ -528,6 +545,10 @@ export default class ObservationCarPlugin extends Plugin {
           "[observation-car] could not restore the reading layout; layout reconciliation is now off until Obsidian reloads",
           error,
         );
+        new Notice(
+          "Observation Car could not restore the reading layout. Layout reconciliation is off until Obsidian reloads.",
+        );
+        break;
       }
     }
   }
@@ -560,9 +581,11 @@ export default class ObservationCarPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.unloaded = true;
     this.scrollSync.clear();
     this.readerRegistry.clear();
     this.bookNoteStore.clear();
+    this.layoutSnapshot.clear();
   }
 
   /** Find a live source-mode editor by note path without retaining its view. */
