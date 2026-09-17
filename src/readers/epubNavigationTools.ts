@@ -514,6 +514,7 @@ const FONT_SIZE_STORAGE_PREFIX = "observation-car:epub-font-size:";
 /** Per-book font-size control that applies to current and future EPUB sections. */
 export class EpubFontSizeStepper {
   private readonly storageKey: string;
+  private readonly container: HTMLDivElement;
   private readonly decreaseButton: HTMLButtonElement;
   private readonly increaseButton: HTMLButtonElement;
   private readonly valueOutput: HTMLOutputElement;
@@ -523,10 +524,10 @@ export class EpubFontSizeStepper {
     this.storageKey = `${FONT_SIZE_STORAGE_PREFIX}${bookPath}`;
     this.currentValue = this.readStoredValue();
 
-    const container = document.createElement("div");
-    container.className = "epub-font-size-stepper";
-    container.setAttribute("role", "group");
-    container.ariaLabel = "Reader font size";
+    this.container = document.createElement("div");
+    this.container.className = "epub-font-size-stepper";
+    this.container.setAttribute("role", "group");
+    this.container.ariaLabel = "Reader font size";
 
     this.decreaseButton = this.createButton(
       "epub-font-size-decrease",
@@ -545,9 +546,16 @@ export class EpubFontSizeStepper {
       FONT_SIZE_STEP,
     );
 
-    container.append(this.decreaseButton, this.valueOutput, this.increaseButton);
-    viewerEl.appendChild(container);
+    this.container.append(this.decreaseButton, this.valueOutput, this.increaseButton);
+    viewerEl.appendChild(this.container);
     this.applyValue();
+  }
+
+  /** Remove the toolbar controls and their handlers with the reader. */
+  destroy(): void {
+    this.decreaseButton.onclick = null;
+    this.increaseButton.onclick = null;
+    this.container.remove();
   }
 
   private createButton(
@@ -618,6 +626,7 @@ export class EpubNavigationTools {
   private needsCorrection = false;
   private destroyed = false;
   private readonly keyBridge: EpubKeyBridge;
+  private readonly fontSizeStepper: EpubFontSizeStepper;
   private readonly onNewNoteClick = (event: MouseEvent): void => {
     event.stopPropagation();
     this.actions?.onNewNote();
@@ -755,7 +764,7 @@ export class EpubNavigationTools {
     private readonly actions?: EpubReaderActions,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
-    new EpubFontSizeStepper(viewerEl, bookPath, rendition);
+    this.fontSizeStepper = new EpubFontSizeStepper(viewerEl, bookPath, rendition);
     this.createNavigationButton(viewerEl, "epub-nav-prev", "❮", () => this.rendition.prev());
     this.createNavigationButton(viewerEl, "epub-nav-next", "❯", () => this.rendition.next());
     void this.createTocPanel(viewerEl).catch((error: unknown) =>
@@ -789,6 +798,7 @@ export class EpubNavigationTools {
       return;
     }
     this.destroyed = true;
+    this.fontSizeStepper.destroy();
     this.keyBridge.destroy();
     for (const { target, type, listener } of this.hostKeyListeners) {
       target.removeEventListener(type, listener);
