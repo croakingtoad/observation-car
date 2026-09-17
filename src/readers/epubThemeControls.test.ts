@@ -185,4 +185,28 @@ describe("EpubFontSizeStepper", () => {
     }
     expect(decrease?.disabled).toBe(true);
   });
+
+  it("removes its controls and handlers on teardown", () => {
+    const override = vi.fn();
+    const viewer = document.createElement("div");
+    const stepper = new EpubFontSizeStepper(
+      viewer,
+      "book.epub",
+      { themes: { override } } as unknown as Rendition,
+    );
+    const increase = viewer.querySelector<HTMLButtonElement>(".epub-font-size-increase");
+    const decrease = viewer.querySelector<HTMLButtonElement>(".epub-font-size-decrease");
+    expect(increase).toBeTruthy();
+    expect(decrease).toBeTruthy();
+
+    stepper.destroy();
+
+    expect(viewer.querySelector(".epub-font-size-stepper")).toBeNull();
+    expect(increase?.onclick).toBeNull();
+    expect(decrease?.onclick).toBeNull();
+
+    increase?.click();
+    decrease?.click();
+    expect(override).toHaveBeenCalledTimes(1);
+  });
 });

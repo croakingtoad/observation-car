@@ -512,7 +512,14 @@ function makeTools(
     overrides.flow,
     onNewNote === undefined ? undefined : { onNewNote },
   );
-  return { viewerEl, book, rendition, tools, beforeRendition };
+  return {
+    viewerEl,
+    book,
+    rendition,
+    tools,
+    beforeRendition,
+    stepperElement: viewerEl.querySelector(".epub-font-size-stepper"),
+  };
 }
 
 function pointerEvent(
@@ -576,6 +583,7 @@ describe("reader action toolbar", () => {
     expect(button?.getAttribute("aria-label")).toBe("New note here");
     button?.click();
     expect(onNewNote).toHaveBeenCalledOnce();
+    expect(viewerEl.querySelectorAll(".epub-font-size-stepper button")).toHaveLength(2);
   });
 });
 
@@ -1242,6 +1250,15 @@ describe("EpubNavigationTools teardown", () => {
       implForWrapper,
     );
     expect(countAfter).toBe(0);
+  });
+
+  it("removes the retained font-size stepper container when destroyed", () => {
+    const { tools, stepperElement, viewerEl } = makeTools();
+    expect(stepperElement).not.toBeNull();
+
+    tools.destroy();
+
+    expect(viewerEl.querySelector(".epub-font-size-stepper")).toBeNull();
   });
 
   it("resets touch-action on every rendered document when destroyed", async () => {

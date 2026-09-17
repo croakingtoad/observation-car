@@ -204,6 +204,13 @@
   border-radius: 4px;
 }
 
+.epub-load-error {
+  padding: 0.25em 0.5em;
+  color: var(--text-error, #d05060);
+  background: var(--background-secondary, #222);
+  border-radius: 4px;
+}
+
 .epub-cfi-popup {
   position: absolute;
   display: none;
