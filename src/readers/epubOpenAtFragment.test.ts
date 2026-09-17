@@ -167,12 +167,15 @@ class MockRendition {
     this.location = next;
     this.emit("relocated", next);
   }
+
+  destroy(): void {}
 }
 
 function harness(): { view: EpubView; rendition: MockRendition } {
   const rendition = new MockRendition();
   const spineHrefs = [CHAPTER_ONE, CHAPTER_TWO];
   const book = {
+    destroy: () => undefined,
     spine: {
       get: (target: string) => {
         if (target.startsWith("epubcfi(/6/4")) {
@@ -186,7 +189,9 @@ function harness(): { view: EpubView; rendition: MockRendition } {
   const internals = view as unknown as {
     book: Book | null;
     rendition: Rendition | null;
+    contentEl: { empty(): void };
   };
+  internals.contentEl = { empty: () => undefined };
   internals.book = book;
   internals.rendition = rendition as unknown as Rendition;
   return { view, rendition };
@@ -496,6 +501,28 @@ describe("EpubView.openAtFragment", () => {
 
     await expect(pending).resolves.toBeUndefined();
     expect(notices[0]).toContain("the reader did not report the new location");
+  });
+
+  it("resolves quietly when disposal supersedes the fragment open", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const { view, rendition } = harness();
+    const internals = view as unknown as {
+      disposeReader(): void;
+      renderGeneration: number;
+    };
+    rendition.holdRelocations = true;
+
+    const pending = view.openAtFragment(CHAPTER_TWO);
+    const generationBeforeDisposal = internals.renderGeneration;
+    internals.disposeReader();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(internals.renderGeneration).toBe(generationBeforeDisposal + 1);
+    expect(notices).toEqual([]);
+    expect(consoleError).not.toHaveBeenCalled();
   });
   it("does not resolve when the stabilizing re-display lands off target", async () => {
     vi.useFakeTimers();

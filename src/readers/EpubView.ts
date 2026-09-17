@@ -193,6 +193,8 @@ export class EpubView extends FileView {
         throw new Error(`the EPUB spine does not contain "${target}"`);
       }
 
+      const generation = this.renderGeneration;
+      const isSuperseded = () => generation !== this.renderGeneration;
       await new Promise<void>((resolve, reject) => {
         let matchingRelocations = 0;
         let settled = false;
@@ -232,14 +234,14 @@ export class EpubView extends FileView {
             activeRendition.epubcfi.compare(targetCfi, location.end.cfi) <= 0;
         }
 
-        function finish(error?: unknown): void {
+        function finish(error?: unknown, quiet = false): void {
           if (settled) {
             return;
           }
           settled = true;
           window.clearTimeout(timeout);
           activeRendition.off("relocated", onRelocated);
-          if (error === undefined) {
+          if (error === undefined || quiet) {
             resolve();
           } else {
             reject(error);
@@ -254,6 +256,10 @@ export class EpubView extends FileView {
             if (settled) {
               return;
             }
+            if (isSuperseded()) {
+              finish(undefined, true);
+              return;
+            }
             // epub.js can resolve a no-op display without relocating again.
             // Its type declaration describes the wrong return shape here, so
             // validate the runtime location before comparing its CFI bounds.
@@ -263,11 +269,15 @@ export class EpubView extends FileView {
               finish();
             }
           } catch (error) {
-            finish(error);
+            finish(error, isSuperseded());
           }
         }
 
         function onRelocated(location: EpubRenditionLocation): void {
+          if (isSuperseded()) {
+            finish(undefined, true);
+            return;
+          }
           if (matchesTarget(location) === false) {
             return;
           }
@@ -282,9 +292,15 @@ export class EpubView extends FileView {
 
         activeRendition.on("relocated", onRelocated);
         timeout = window.setTimeout(() => {
+          if (isSuperseded()) {
+            finish(undefined, true);
+            return;
+          }
           finish(new Error("the reader did not report the new location"));
         }, FRAGMENT_OPEN_TIMEOUT_MS);
-        void activeRendition.display(target).catch(finish);
+        void activeRendition.display(target).catch((error) => {
+          finish(error, isSuperseded());
+        });
       });
     } catch (error) {
       console.error("Unable to open EPUB fragment", fragment, error);
