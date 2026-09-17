@@ -4,7 +4,6 @@ import {
   Plugin,
   TFile,
   type WorkspaceLeaf,
-  type WorkspaceSplit,
 } from "obsidian";
 import { registerCreateBookNoteCommand } from "./commands/createBookNote";
 import {
@@ -44,7 +43,6 @@ import {
   snapshotRootLeaves,
   type Displacement,
   type LayoutWorkspace,
-  type TabGroup,
 } from "./workspace/readingLayout";
 import {
   ReaderRegistry,
@@ -112,6 +110,8 @@ export default class ObservationCarPlugin extends Plugin {
   private layoutSnapshot: Map<WorkspaceLeaf, string> = new Map();
   /** Guards the reconciler against the layout events its own opens raise. */
   private reconcilingLayout = false;
+  /** Latched on the first reconciliation failure; see `restoreDisplacedPanes`. */
+  private layoutReconcilerFailed = false;
 
   async onload(): Promise<void> {
     const pluginData = loadPluginData(await this.loadData());
@@ -427,13 +427,16 @@ export default class ObservationCarPlugin extends Plugin {
       },
       pathOf: (leaf) => leafFilePath(leaf),
       isReader: (leaf) => leaf.getViewState().type === EPUB_VIEW_TYPE,
-      tabCount: (group) => tabGroupSize(group),
-      // Obsidian types this parameter `WorkspaceSplit`, but a tab group
-      // (`WorkspaceTabs`) is what `leaf.parent` yields and what the app
-      // itself passes when adding a tab to an existing group. The cast
-      // is the type gap, not a behaviour assumption.
-      createLeafInParent: (group, index) =>
-        workspace.createLeafInParent(group as WorkspaceSplit, index),
+      // Making the anchor active and then asking for a `"tab"` is how
+      // every "open in a new tab" plugin does this, and it keeps the
+      // workspace tree construction entirely inside Obsidian. The
+      // previous `createLeafInParent(leaf.parent as WorkspaceSplit, i)`
+      // built a leaf Obsidian's own palette-close path then choked on.
+      // `focus: false` keeps the keystroke's focus where it was.
+      createTabBeside: (anchor) => {
+        workspace.setActiveLeaf(anchor, { focus: false });
+        return workspace.getLeaf("tab");
+      },
       createLeafBySplit: (leaf, direction) =>
         workspace.createLeafBySplit(leaf, direction),
       splitActiveLeaf: (direction) => workspace.getLeaf("split", direction),
@@ -451,7 +454,7 @@ export default class ObservationCarPlugin extends Plugin {
    * it, so this reads the reuse back off the leaf snapshot afterwards.
    */
   private reconcileReadingLayout(): void {
-    if (this.reconcilingLayout) return;
+    if (this.reconcilingLayout || this.layoutReconcilerFailed) return;
 
     const layout = this.readingLayout();
     const current = snapshotRootLeaves(layout);
@@ -508,15 +511,21 @@ export default class ObservationCarPlugin extends Plugin {
           continue;
         }
 
-        // The reused leaf was the note pane: give the note a tab back in
-        // that same group before detaching the leaf, so the group cannot
-        // collapse in between.
-        await openBesideInGroup(layout, displacement.leaf, displaced);
-        displacement.leaf.detach();
+        // The reused leaf was the note pane, and the book now has a tab
+        // of its own, so the note goes straight back into the leaf it
+        // was evicted from. Re-opening the file is the whole undo: no
+        // leaf is created or destroyed, so Obsidian is never left holding
+        // a detached leaf as its active one.
+        await displacement.leaf.openFile(displaced);
         await layout.revealLeaf(relocated);
       } catch (error) {
+        // Fail closed. A reconciliation that throws has left the layout
+        // in a state this pass did not finish reasoning about, and
+        // repeating it on every later layout event is how one bad
+        // decision becomes a broken workspace. Stay off until reload.
+        this.layoutReconcilerFailed = true;
         console.error(
-          "[observation-car] could not restore the reading layout",
+          "[observation-car] could not restore the reading layout; layout reconciliation is now off until Obsidian reloads",
           error,
         );
       }
@@ -741,16 +750,4 @@ function isBookPath(path: string): boolean {
   if (dot === -1) return false;
   const extension = path.slice(dot + 1).toLowerCase();
   return READER_EXTENSIONS.includes(extension);
-}
-
-/**
- * Tabs in a group. Obsidian publishes `leaf.parent` but not the group's
- * `children`, so this is the same narrow runtime seam `toggleSplitRatio`
- * uses for the split dimensions: read it if the shape holds, and return
- * null rather than guessing if a later release changes it.
- */
-function tabGroupSize(group: TabGroup): number | null {
-  if (!("children" in group)) return null;
-  const children: unknown = group.children;
-  return Array.isArray(children) ? children.length : null;
 }

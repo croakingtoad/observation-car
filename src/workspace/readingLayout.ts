@@ -52,9 +52,18 @@ export interface LayoutWorkspace<L extends LayoutLeaf = LayoutLeaf> {
   pathOf(leaf: L): string | null;
   /** True when this leaf hosts one of the plugin's reader views. */
   isReader(leaf: L): boolean;
-  /** Tabs currently in a group, or null when the runtime shape changed. */
-  tabCount(group: TabGroup): number | null;
-  createLeafInParent(group: TabGroup, index: number): L;
+  /**
+   * A new tab in the group that already holds `anchor`.
+   *
+   * Deliberately expressed as "beside this leaf" rather than "in this
+   * group at this index": Obsidian's `createLeafInParent` is typed for a
+   * `WorkspaceSplit`, and passing the `WorkspaceTabs` that `leaf.parent`
+   * yields corrupted the workspace tree badly enough to crash Obsidian's
+   * own command-palette close path (`n.instanceOf is not a function`).
+   * Adding a tab next to a known leaf is expressible with `setActiveLeaf`
+   * plus `getLeaf("tab")`, both of which have settled public semantics.
+   */
+  createTabBeside(anchor: L): L;
   createLeafBySplit(leaf: L, direction: "vertical"): L;
   /** Split off the active leaf, for when no reader leaf is in hand. */
   splitActiveLeaf(direction: "vertical"): L;
@@ -128,10 +137,12 @@ export async function openNoteBesideReader<L extends LayoutLeaf>(
   }
 
   const noteGroup = findNoteGroup(workspace, findBookGroup(workspace));
+  const noteAnchor =
+    noteGroup === null ? null : anchorIn(workspace, noteGroup);
   return openInMainArea(
     workspace,
-    noteGroup !== null
-      ? appendTab(workspace, noteGroup)
+    noteAnchor !== null
+      ? workspace.createTabBeside(noteAnchor)
       : newNoteGroup(workspace, readerLeaf),
     note,
   );
@@ -158,19 +169,19 @@ export async function openBookInBookGroup<L extends LayoutLeaf>(
   }
 
   const bookGroup = findBookGroup(workspace, exclude);
-  if (bookGroup === null) return null;
-  return openInMainArea(workspace, appendTab(workspace, bookGroup), book);
+  const bookAnchor =
+    bookGroup === null ? null : anchorIn(workspace, bookGroup);
+  if (bookAnchor === null) return null;
+  return openInMainArea(workspace, workspace.createTabBeside(bookAnchor), book);
 }
 
-/** Add a tab to the group holding `sibling` and show `file` in it. */
+/** Add a tab next to `sibling` and show `file` in it. */
 export async function openBesideInGroup<L extends LayoutLeaf>(
   workspace: LayoutWorkspace<L>,
   sibling: L,
   file: TFile,
 ): Promise<L | null> {
-  const group = sibling.parent;
-  if (group === null) return null;
-  return openInMainArea(workspace, appendTab(workspace, group), file);
+  return openInMainArea(workspace, workspace.createTabBeside(sibling), file);
 }
 
 /**
@@ -257,17 +268,15 @@ function newNoteGroup<L extends LayoutLeaf>(
     : workspace.createLeafBySplit(readerLeaf, "vertical");
 }
 
-/**
- * A group's tab count is only readable through a runtime shape Obsidian
- * does not publish, so an unreadable count falls back to index 0: the tab
- * lands at the left of the right group, which is cosmetic rather than a
- * layout defect.
- */
-function appendTab<L extends LayoutLeaf>(
+/** Any main-area leaf in a group, to add a tab next to. */
+function anchorIn<L extends LayoutLeaf>(
   workspace: LayoutWorkspace<L>,
   group: TabGroup,
-): L {
-  return workspace.createLeafInParent(group, workspace.tabCount(group) ?? 0);
+): L | null {
+  for (const leaf of workspace.rootLeaves()) {
+    if (leaf.parent === group) return leaf;
+  }
+  return null;
 }
 
 async function openInMainArea<L extends LayoutLeaf>(

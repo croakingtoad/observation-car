@@ -83,14 +83,10 @@ function makeHarness(): Harness {
     rootLeaves: () => [...leaves],
     pathOf: (leaf) => leaf.path,
     isReader: (leaf) => leaf.reader,
-    tabCount: (group) => (group as TestGroup).children.length,
-    createLeafInParent: (group, index) => {
-      const leaf = addLeaf(group as TestGroup, {
-        root: nextRoot.value ?? rootSplit,
+    createTabBeside: (anchor) => {
+      const leaf = addLeaf(anchor.parent, {
+        root: nextRoot.value ?? anchor.root,
       });
-      const target = group as TestGroup;
-      target.children.splice(target.children.indexOf(leaf), 1);
-      target.children.splice(index, 0, leaf);
       created.push({ kind: "tab", leaf });
       return leaf;
     },

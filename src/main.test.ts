@@ -292,6 +292,8 @@ interface FakeVault {
   createdTabLeaves: { leaf: FakeLeaf; group: FakeTabGroup; index: number }[];
   runtime: {
     activeView: unknown;
+    activeLeaf: FakeLeaf | null;
+    throwOnSetActiveLeaf: boolean;
     mostRecentMainLeaf: FakeLeaf | null;
     splitRootOverride: object | null;
     useMarkdownLinks: boolean;
@@ -343,6 +345,8 @@ function makeFakeVault(): FakeVault {
   }[] = [];
   const runtime = {
     activeView: null as unknown,
+    activeLeaf: null as FakeLeaf | null,
+    throwOnSetActiveLeaf: false,
     mostRecentMainLeaf: null as FakeLeaf | null,
     splitRootOverride: null as object | null,
     useMarkdownLinks: false,
@@ -489,15 +493,41 @@ function makeFakeVault(): FakeVault {
           );
         });
       },
-      getLeaf: (newLeaf?: "split"): FakeLeaf => {
-        const leaf = makeLeaf("main", rootSplit);
+      // Obsidian puts a `"tab"` leaf in the active leaf's own group and a
+      // `"split"` leaf in a new group; the reading layout depends on that
+      // difference, so the double reproduces it.
+      getLeaf: (newLeaf?: "split" | "tab"): FakeLeaf => {
+        const group =
+          newLeaf === "tab" && runtime.activeLeaf !== null
+            ? runtime.activeLeaf.parent
+            : { children: [] };
+        const leaf = makeLeaf("main", rootSplit, null, group);
         leaf.view = {
           file: null,
           getViewType: (): string => "markdown",
         };
         if (newLeaf === "split") createdSplitLeaves.push(leaf);
+        if (newLeaf === "tab") {
+          createdTabLeaves.push({ leaf, group, index: group.children.length });
+        }
         leaves.add(leaf);
         return leaf;
+      },
+      setActiveLeaf: (leaf: FakeLeaf): void => {
+        if (runtime.throwOnSetActiveLeaf) {
+          throw new Error("setActiveLeaf refused by the test");
+        }
+        runtime.activeLeaf = leaf;
+      },
+      // Obsidian types this for a `WorkspaceSplit`; passing the
+      // `WorkspaceTabs` that `leaf.parent` yields corrupted the workspace
+      // tree and crashed Obsidian's own palette-close path with
+      // `n.instanceOf is not a function`. Nothing in the plugin may call
+      // it again, so the double refuses rather than modelling it.
+      createLeafInParent: (): never => {
+        throw new Error(
+          "createLeafInParent is not safe for adding a tab to a group",
+        );
       },
       revealLeaf: async (leaf: FakeLeaf): Promise<void> => {
         runtime.mostRecentMainLeaf = leaf;
@@ -508,19 +538,6 @@ function makeFakeVault(): FakeVault {
             callback(leaf);
           }
         }
-      },
-      // A tab added to an existing group: same root, same parent, no new
-      // group — the distinction the reading layout depends on.
-      createLeafInParent: (group: FakeTabGroup, index: number): FakeLeaf => {
-        const sibling = group.children[0];
-        const root = sibling?.getRoot() ?? rootSplit;
-        const area = root === rootSplit ? "main" : "sidebar";
-        const leaf = makeLeaf(area, root, null, group);
-        group.children.splice(group.children.indexOf(leaf), 1);
-        group.children.splice(index, 0, leaf);
-        createdTabLeaves.push({ leaf, group, index });
-        leaves.add(leaf);
-        return leaf;
       },
       createLeafBySplit: (
         sourceLeaf: FakeLeaf,
@@ -1476,7 +1493,11 @@ describe("plugin wiring (substituted obsidian module)", () => {
     fire("workspace", "layout-change", []);
     await settleCommand();
 
-    expect(notePane.detached).toBe(true);
+    // The note goes back into the very leaf it was evicted from, so no
+    // leaf is detached — Obsidian is never left holding a dead leaf as
+    // its active one, which is what crashed its palette-close path.
+    expect(notePane.detached).toBe(false);
+    expect(leafPath(notePane)).toBe("Reading/A.md");
     expect(books.children.map((leaf) => leafPath(leaf))).toEqual([
       "Books/A.epub",
       "Books/B.epub",
@@ -1507,6 +1528,45 @@ describe("plugin wiring (substituted obsidian module)", () => {
       "Books/A.epub",
     ]);
     expect(tabGroups().size).toBe(1);
+  });
+
+  it("stops reconciling for the session once a restore throws", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const bookC = addBookFile("Books/C.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+
+    // First displacement, with the workspace refusing to cooperate.
+    fake.runtime.throwOnSetActiveLeaf = true;
+    fire("workspace", "layout-change", []);
+    notePane.view = {
+      file: bookB,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+    expect(notePane.detached).toBe(false);
+
+    // Second displacement, workspace healthy again. A reconciler that
+    // kept going after a failed pass would act on it; this one must not,
+    // because the pass that threw left state it did not finish reasoning
+    // about.
+    fake.runtime.throwOnSetActiveLeaf = false;
+    const tabsBefore = fake.createdTabLeaves.length;
+    notePane.view = {
+      file: bookC,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    expect(fake.createdTabLeaves.length).toBe(tabsBefore);
   });
 
   it("resolves the most recently active deferred reader", async () => {
