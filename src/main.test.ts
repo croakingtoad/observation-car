@@ -1583,6 +1583,9 @@ describe("plugin wiring (substituted obsidian module)", () => {
     fire("workspace", "layout-change", []);
     await settleCommand();
 
+    expect(noticeMessages).toEqual([
+      "Observation Car could not restore the reading layout. Layout reconciliation is off until Obsidian reloads.",
+    ]);
     expect(fake.createdTabLeaves.length).toBe(tabsBefore);
   });
 
