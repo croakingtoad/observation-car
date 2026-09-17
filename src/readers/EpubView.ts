@@ -200,6 +200,38 @@ export class EpubView extends FileView {
         const targetHref = section.href;
         const targetCfi = position.kind === "epub-cfi" ? target : null;
 
+        function matchesTarget(location: unknown): boolean {
+          if (
+            typeof location !== "object" ||
+            location === null ||
+            !("start" in location) ||
+            !("end" in location) ||
+            typeof location.start !== "object" ||
+            location.start === null ||
+            typeof location.end !== "object" ||
+            location.end === null
+          ) {
+            return false;
+          }
+          if (targetCfi === null) {
+            return "href" in location.start &&
+              location.start.href === targetHref;
+          }
+          if (
+            !("cfi" in location.start) ||
+            typeof location.start.cfi !== "string" ||
+            !("cfi" in location.end) ||
+            typeof location.end.cfi !== "string"
+          ) {
+            return false;
+          }
+          return activeRendition.epubcfi.compare(
+            location.start.cfi,
+            targetCfi,
+          ) <= 0 &&
+            activeRendition.epubcfi.compare(targetCfi, location.end.cfi) <= 0;
+        }
+
         function finish(error?: unknown): void {
           if (settled) {
             return;
@@ -214,23 +246,35 @@ export class EpubView extends FileView {
           }
         }
 
+        async function redisplayAndVerify(): Promise<void> {
+          try {
+            // This remains queued behind any resize correction scheduled by
+            // the first relocation, so the deliberate fragment jump wins.
+            await activeRendition.display(target);
+            if (settled) {
+              return;
+            }
+            // epub.js can resolve a no-op display without relocating again.
+            // Its type declaration describes the wrong return shape here, so
+            // validate the runtime location before comparing its CFI bounds.
+            const currentLocation: unknown = await activeRendition
+              .currentLocation();
+            if (matchesTarget(currentLocation)) {
+              finish();
+            }
+          } catch (error) {
+            finish(error);
+          }
+        }
+
         function onRelocated(location: EpubRenditionLocation): void {
-          const matches = targetCfi === null
-            ? location.start.href === targetHref
-            : activeRendition.epubcfi.compare(
-                location.start.cfi,
-                targetCfi,
-              ) <= 0 &&
-              activeRendition.epubcfi.compare(targetCfi, location.end.cfi) <= 0;
-          if (matches === false) {
+          if (matchesTarget(location) === false) {
             return;
           }
 
           matchingRelocations += 1;
           if (matchingRelocations === 1) {
-            // Queue one final display behind any correction that a pending
-            // resize scheduled from this relocation; the deliberate jump wins.
-            void activeRendition.display(target).catch(finish);
+            void redisplayAndVerify();
           } else {
             finish();
           }
