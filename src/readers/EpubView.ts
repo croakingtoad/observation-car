@@ -26,6 +26,8 @@ import type { EpubFlowMode, ObservationCarSettings } from "../settings";
 
 export const EPUB_VIEW_TYPE = "observation-car-epub";
 
+export const EPUB_DISPLAY_TIMEOUT_MS = 5000;
+
 /**
  * A LocationChanged event (F2.5): PRD §8's Location plus the file the
  * location belongs to, so the sync layer never needs to look it up.
@@ -275,6 +277,7 @@ export class EpubView extends FileView {
     let themes: EpubThemes | null = null;
     let navigationTools: EpubNavigationTools | null = null;
     let locationEvents: PreparedLocationEvents | null = null;
+    let displayTimeout = 0;
     const selectionTracker = new EpubSelectionTracker();
     try {
       book = ePub(bytes);
@@ -307,7 +310,14 @@ export class EpubView extends FileView {
         file,
         generation,
       );
-      await rendition.display();
+      await Promise.race([
+        rendition.display(),
+        new Promise<never>((_, reject) => {
+          displayTimeout = window.setTimeout(() => {
+            reject(new Error(`the EPUB did not finish loading within ${EPUB_DISPLAY_TIMEOUT_MS / 1000} seconds`));
+          }, EPUB_DISPLAY_TIMEOUT_MS);
+        }),
+      ]);
     } catch (error) {
       // A bad book can fail anywhere in the build; dispose what was
       // created before the failure propagates, so no partial reader
@@ -321,7 +331,10 @@ export class EpubView extends FileView {
         navigationTools,
         locationEvents,
       );
+      this.renderLoadError(error, generation);
       throw error;
+    } finally {
+      window.clearTimeout(displayTimeout);
     }
 
     if (generation !== this.renderGeneration) {
@@ -375,6 +388,23 @@ export class EpubView extends FileView {
     rendition?.destroy();
     book?.destroy();
     viewerEl.remove();
+  }
+
+  /**
+   * Render a readable, leaf-contained failure after the partial reader
+   * has been discarded, using a fresh container without abandoned
+   * reader controls.
+   * A generation guard prevents a superseded render's late rejection from
+   * overwriting a newer render's successfully mounted book.
+   */
+  private renderLoadError(error: unknown, generation: number): void {
+    if (generation !== this.renderGeneration) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    this.contentEl.replaceChildren();
+    const notice = this.contentEl.createDiv({ cls: "epub-load-error" });
+    notice.textContent = `This EPUB could not be opened: ${message}`;
   }
 
   /**

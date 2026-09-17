@@ -12,6 +12,7 @@ import type { TFile, WorkspaceLeaf } from "obsidian";
 import { DEFAULT_SETTINGS } from "../settings";
 import {
   EpubView,
+  EPUB_DISPLAY_TIMEOUT_MS,
   type EpubLocationEvent,
   type EpubViewHost,
 } from "./EpubView";
@@ -715,6 +716,40 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     expect(FakeBook.instances[0].destroyed).toBe(true);
     expect(FakeBook.instances[0].rendition.destroyed).toBe(true);
     expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
+    expect(view.contentEl.querySelector(".epub-load-error")?.textContent)
+      .toContain("display blew up");
+  });
+
+  it("keeps the newer book mounted when a superseded render's timeout rejects", async () => {
+    vi.useFakeTimers();
+    const staleDisplay = deferred();
+    state.currentDisplayGate = staleDisplay.promise;
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+
+    const openStale = view.onLoadFile(file("library/a.epub"));
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[0].display).toHaveBeenCalledOnce();
+    });
+
+    state.currentDisplayGate = null;
+    await view.onLoadFile(file("library/b.epub"));
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(1);
+
+    const rejection = openStale.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(EPUB_DISPLAY_TIMEOUT_MS);
+    expect(await rejection).toMatchObject({
+      message: `the EPUB did not finish loading within ${
+        EPUB_DISPLAY_TIMEOUT_MS / 1000
+      } seconds`,
+    });
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(1);
+    expect(view.contentEl.querySelectorAll(".epub-load-error")).toHaveLength(0);
+
+    await view.onClose();
+    vi.useRealTimers();
   });
 
   it("a failed readBinary propagates without leaving a reader", async () => {
@@ -728,6 +763,59 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     expect(FakeBook.instances).toHaveLength(0);
     expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
   });
+
+  it("reopens a good book in the same view after a failed load", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    state.failDisplay = true;
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+
+    await expect(view.onLoadFile(file("library/bad.epub"))).rejects.toThrow(
+      "display blew up",
+    );
+    expect(view.contentEl.querySelectorAll(".epub-load-error")).toHaveLength(1);
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
+    expect(FakeBook.instances[0].destroyed).toBe(true);
+
+    state.failDisplay = false;
+    await view.onLoadFile(file("library/good.epub"));
+
+    expect(view.contentEl.querySelectorAll(".epub-load-error")).toHaveLength(0);
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(1);
+    expect(FakeBook.instances).toHaveLength(2);
+    expect(FakeBook.instances[0].destroyed).toBe(true);
+    expect(FakeBook.instances[1].destroyed).toBe(false);
+
+    await view.onClose();
+    consoleError.mockRestore();
+  });
+
+  it("completes display inside the timeout boundary without an error", async () => {
+    vi.useFakeTimers();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    const displayGate = deferred();
+    state.currentDisplayGate = displayGate.promise;
+
+    const open = view.onLoadFile(file("Books/Test.epub"));
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[0].display).toHaveBeenCalledOnce();
+    });
+
+    // Advance to just under the timeout
+    await vi.advanceTimersByTimeAsync(EPUB_DISPLAY_TIMEOUT_MS - 100);
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(1);
+    expect(view.contentEl.querySelectorAll(".epub-load-error")).toHaveLength(0);
+    expect(FakeBook.instances[0].destroyed).toBe(false);
+    expect(FakeRendition.instances[0].destroyed).toBe(false);
+
+    state.currentDisplayGate = null;
+    displayGate.resolve();
+    await open;
+    await view.onClose();
+    vi.useRealTimers();
+  });
+
 });
 
 function relocatedAt(cfi: string, href: string) {
