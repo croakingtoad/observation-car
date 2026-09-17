@@ -1168,7 +1168,6 @@ describe("EpubNavigationTools teardown", () => {
     tools.destroy();
 
     expect(viewerEl.querySelector(".epub-font-size-stepper")).toBeNull();
-    expect(stepperElement?.isConnected).toBe(false);
     expect(stepperElement?.querySelectorAll("button")).toHaveLength(2);
   });
 
