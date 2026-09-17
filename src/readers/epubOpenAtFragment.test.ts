@@ -60,6 +60,7 @@ class MockRendition {
   location = FIRST_LOCATION;
   readonly displayedTargets: string[] = [];
   holdRelocations = false;
+  suppressNoopRelocations = false;
   private readonly pendingRelocations: Location[] = [];
   private readonly listeners = new Map<
     string,
@@ -101,7 +102,14 @@ class MockRendition {
       this.pendingRelocations.push(next);
       return;
     }
+    if (this.suppressNoopRelocations && this.location === next) {
+      return;
+    }
     this.relocate(next);
+  }
+
+  currentLocation(): Location {
+    return this.location;
   }
 
   releaseRelocation(): void {
@@ -162,6 +170,27 @@ describe("EpubView.openAtFragment", () => {
       CHAPTER_TWO_CFI,
     ]);
     expect(rendition.location).toBe(SECOND_LOCATION);
+  });
+
+  it("resolves when the stabilizing display is already at the target", async () => {
+    vi.useFakeTimers();
+    const { view, rendition } = harness();
+    rendition.suppressNoopRelocations = true;
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    const pending = view.openAtFragment(`#${CHAPTER_TWO_CFI}`);
+    await vi.advanceTimersByTimeAsync(5000);
+    await expect(pending).resolves.toBeUndefined();
+
+    expect(rendition.displayedTargets).toEqual([
+      CHAPTER_TWO_CFI,
+      CHAPTER_TWO_CFI,
+    ]);
+    expect(rendition.location).toBe(SECOND_LOCATION);
+    expect(notices).toEqual([]);
+    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it("does not settle before the rendition reports relocation", async () => {
