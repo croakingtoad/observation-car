@@ -422,7 +422,14 @@ function makeTools(
     overrides.flow,
     onNewNote === undefined ? undefined : { onNewNote },
   );
-  return { viewerEl, book, rendition, tools, beforeRendition };
+  return {
+    viewerEl,
+    book,
+    rendition,
+    tools,
+    beforeRendition,
+    stepperElement: viewerEl.querySelector(".epub-font-size-stepper"),
+  };
 }
 
 function pointerEvent(
@@ -1152,6 +1159,16 @@ describe("EpubNavigationTools teardown", () => {
       implForWrapper,
     );
     expect(countAfter).toBe(0);
+  });
+
+  it("removes the retained font-size stepper container when destroyed", () => {
+    const { tools, stepperElement } = makeTools();
+    expect(stepperElement).not.toBeNull();
+
+    tools.destroy();
+
+    expect(stepperElement?.isConnected).toBe(false);
+    expect(stepperElement?.querySelectorAll("button")).toHaveLength(2);
   });
 
   it("resets touch-action on every rendered document when destroyed", async () => {
