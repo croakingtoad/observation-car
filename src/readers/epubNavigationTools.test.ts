@@ -1162,11 +1162,12 @@ describe("EpubNavigationTools teardown", () => {
   });
 
   it("removes the retained font-size stepper container when destroyed", () => {
-    const { tools, stepperElement } = makeTools();
+    const { tools, stepperElement, viewerEl } = makeTools();
     expect(stepperElement).not.toBeNull();
 
     tools.destroy();
 
+    expect(viewerEl.querySelector(".epub-font-size-stepper")).toBeNull();
     expect(stepperElement?.isConnected).toBe(false);
     expect(stepperElement?.querySelectorAll("button")).toHaveLength(2);
   });
