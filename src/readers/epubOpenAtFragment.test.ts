@@ -342,4 +342,24 @@ describe("EpubView.openAtFragment", () => {
     await expect(pending).resolves.toBeUndefined();
     expect(notices[0]).toContain("the reader did not report the new location");
   });
+  it("does not resolve when the stabilizing re-display lands off target", async () => {
+    vi.useFakeTimers();
+    const { view, rendition } = harness();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    // The re-display is a no-op at the rendition level, but the reader is not
+    // actually on the target: a queued resize correction won.
+    rendition.suppressNoopRelocations = true;
+    rendition.currentLocation = (): Location => FIRST_LOCATION;
+
+    const pending = view.openAtFragment(`#${CHAPTER_TWO_CFI}`);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(notices[0]).toContain("the reader did not report the new location");
+    expect(consoleError).toHaveBeenCalled();
+  });
+
 });
