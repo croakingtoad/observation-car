@@ -392,8 +392,8 @@ describe("openBesideInGroup", () => {
       file("Notes/A.md"),
     );
 
-    expect(leaf?.parent).toBe(notes);
-    expect(leaf?.path).toBe("Notes/A.md");
+    expect(leaf.parent).toBe(notes);
+    expect(leaf.path).toBe("Notes/A.md");
   });
 });
 

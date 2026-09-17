@@ -180,7 +180,7 @@ export async function openBesideInGroup<L extends LayoutLeaf>(
   workspace: LayoutWorkspace<L>,
   sibling: L,
   file: TFile,
-): Promise<L | null> {
+): Promise<L> {
   return openInMainArea(workspace, workspace.createTabBeside(sibling), file);
 }
 
