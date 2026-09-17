@@ -196,6 +196,7 @@ describe("EpubView.openAtFragment", () => {
   beforeEach(() => {
     notices.length = 0;
     vi.restoreAllMocks();
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
