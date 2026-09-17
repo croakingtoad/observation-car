@@ -493,6 +493,7 @@ describe("reader action toolbar", () => {
     expect(button?.getAttribute("aria-label")).toBe("New note here");
     button?.click();
     expect(onNewNote).toHaveBeenCalledOnce();
+    expect(viewerEl.querySelectorAll(".epub-font-size-stepper button")).toHaveLength(2);
   });
 });
 
@@ -1168,7 +1169,6 @@ describe("EpubNavigationTools teardown", () => {
     tools.destroy();
 
     expect(viewerEl.querySelector(".epub-font-size-stepper")).toBeNull();
-    expect(stepperElement?.querySelectorAll("button")).toHaveLength(2);
   });
 
   it("resets touch-action on every rendered document when destroyed", async () => {
