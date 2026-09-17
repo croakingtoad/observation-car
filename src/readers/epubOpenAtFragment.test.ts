@@ -69,7 +69,7 @@ const INSIDE_RANGE_LOCATION = location(
 const TARGET_BEFORE_RANGE_LOCATION = location(
   CHAPTER_TWO,
   "epubcfi(/6/4!/4/2/1:7)",
-  "epubcfi(/6/4!/4/2/1:3)",
+  "epubcfi(/6/4!/4/2/1:9)",
 );
 const FIRST_TARGET_BEFORE_RANGE_LOCATION = location(
   CHAPTER_TWO,
@@ -97,6 +97,9 @@ class MockRendition {
   >();
 
   readonly epubcfi = {
+    // Lexicographic string compare (same-length, same-prefix CFIs only).
+    // Real epubcfi.compare orders by numeric character offset, so `:10`
+    // sorts after `:9`; this mock would misorder them.
     compare: (left: string, right: string): number =>
       left === right ? 0 : left < right ? -1 : 1,
   };
@@ -135,9 +138,7 @@ class MockRendition {
       const [report, ...remaining] = this.initialRelocationQueue;
       this.initialRelocationQueue = remaining;
       this.location = report;
-      if (this.initialDisplayCount === 1) {
-        this.emit("relocated", report);
-      }
+      this.emit("relocated", report);
       return;
     }
     if (this.holdRelocations) {
