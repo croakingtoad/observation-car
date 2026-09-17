@@ -110,6 +110,8 @@ export default class ObservationCarPlugin extends Plugin {
   private layoutSnapshot: Map<WorkspaceLeaf, string> = new Map();
   /** Guards the reconciler against the layout events its own opens raise. */
   private reconcilingLayout = false;
+  /** Cleared by unload; every resume point in a reconciliation checks it. */
+  private layoutReconcilerUnloaded = false;
   /** Latched on the first reconciliation failure; see `restoreDisplacedPanes`. */
   private layoutReconcilerFailed = false;
 
@@ -472,16 +474,20 @@ export default class ObservationCarPlugin extends Plugin {
     this.reconcilingLayout = true;
     void this.restoreDisplacedPanes(displacements).finally(() => {
       this.reconcilingLayout = false;
-      this.layoutSnapshot = snapshotRootLeaves(this.readingLayout());
+      if (this.layoutReconcilerUnloaded === false) {
+        this.layoutSnapshot = snapshotRootLeaves(this.readingLayout());
+      }
     });
   }
 
   private async restoreDisplacedPanes(
     displacements: readonly Displacement<WorkspaceLeaf>[],
   ): Promise<void> {
+    if (this.layoutReconcilerUnloaded) return;
     const layout = this.readingLayout();
     for (const displacement of displacements) {
       try {
+        if (this.layoutReconcilerUnloaded) return;
         const displaced = this.app.vault.getAbstractFileByPath(
           displacement.displacedPath,
         );
@@ -493,6 +499,7 @@ export default class ObservationCarPlugin extends Plugin {
           // displaced book only needs a tab of its own beside it. Its
           // reading position is restored from `epubLastLocations`.
           await openBesideInGroup(layout, displacement.leaf, displaced);
+          if (this.layoutReconcilerUnloaded) return;
           continue;
         }
 
@@ -508,6 +515,7 @@ export default class ObservationCarPlugin extends Plugin {
           // book pane and the note it displaced moves to a note pane
           // beside it. Nothing is detached in this branch.
           await openNoteBesideReader(layout, displacement.leaf, displaced);
+          if (this.layoutReconcilerUnloaded) return;
           continue;
         }
 
@@ -517,6 +525,7 @@ export default class ObservationCarPlugin extends Plugin {
         // leaf is created or destroyed, so Obsidian is never left holding
         // a detached leaf as its active one.
         await displacement.leaf.openFile(displaced);
+        if (this.layoutReconcilerUnloaded) return;
         await layout.revealLeaf(relocated);
       } catch (error) {
         // Fail closed. A reconciliation that throws has left the layout
@@ -528,6 +537,10 @@ export default class ObservationCarPlugin extends Plugin {
           "[observation-car] could not restore the reading layout; layout reconciliation is now off until Obsidian reloads",
           error,
         );
+        new Notice(
+          "Could not restore the reading layout; panes will not be adjusted until Obsidian reloads.",
+        );
+        break;
       }
     }
   }
@@ -560,9 +573,11 @@ export default class ObservationCarPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.layoutReconcilerUnloaded = true;
     this.scrollSync.clear();
     this.readerRegistry.clear();
     this.bookNoteStore.clear();
+    this.layoutSnapshot.clear();
   }
 
   /** Find a live source-mode editor by note path without retaining its view. */

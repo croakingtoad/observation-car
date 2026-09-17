@@ -251,6 +251,17 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
 
 type Handler = (...args: unknown[]) => void;
 
+type ReconcilerTestPlugin = Omit<
+  ObservationCarPlugin,
+  | "layoutReconcilerUnloaded"
+  | "layoutReconcilerFailed"
+  | "layoutSnapshot"
+> & {
+  layoutReconcilerUnloaded: boolean;
+  layoutReconcilerFailed: boolean;
+  layoutSnapshot: Map<unknown, unknown>;
+};
+
 /**
  * The `TFile` double from the substituted module, with the constructor
  * that double actually has (the real class's constructor is vault-
@@ -297,6 +308,7 @@ interface FakeVault {
     mostRecentMainLeaf: FakeLeaf | null;
     splitRootOverride: object | null;
     useMarkdownLinks: boolean;
+    gateLeafOpenFile: (leaf: FakeLeaf) => Promise<void> | undefined;
   };
 }
 
@@ -350,6 +362,7 @@ function makeFakeVault(): FakeVault {
     mostRecentMainLeaf: null as FakeLeaf | null,
     splitRootOverride: null as object | null,
     useMarkdownLinks: false,
+    gateLeafOpenFile: (_leaf: FakeLeaf): Promise<void> | undefined => undefined,
   };
 
   function makeLeaf(
@@ -371,6 +384,8 @@ function makeFakeVault(): FakeVault {
       },
       getRoot: () => root,
       openFile: async (file: TFile): Promise<void> => {
+        const gate: Promise<void> | undefined = runtime.gateLeafOpenFile(leaf);
+        if (gate !== undefined) await gate;
         openedFiles.push(file.path);
         workspaceHandlers.get("file-open")?.(file);
         if (
@@ -1569,6 +1584,86 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(fake.createdTabLeaves.length).toBe(tabsBefore);
   });
 
+  it("shows one Notice and stops the current pass when a restore throws", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+
+    const displacedNote = fake.files.get("Reading/A.md");
+    if (displacedNote === undefined) {
+      throw new Error("displaced note fixture is missing");
+    }
+    const openFile = vi.spyOn(notePane, "openFile").mockImplementation(
+      async (file: TFile): Promise<void> => {
+        if (file === displacedNote) {
+          throw new Error("openFile refused by the test");
+        }
+      },
+    );
+
+    fire("workspace", "layout-change", []);
+    notePane.view = {
+      file: bookB,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    // In this fixture the book's existing pane is the reconciliation
+    // target, so both displacements route through `openFile`; the second
+    // must remain untouched after the first throws.
+    expect(openFile).toHaveBeenCalledTimes(1);
+    expect(noticeMessages).toEqual([
+      "Could not restore the reading layout; panes will not be adjusted until Obsidian reloads.",
+    ]);
+  });
+
+  it("does not reopen a leaf after unload", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+
+    let releaseOpenFile: (() => void) | undefined;
+    const openFileGate = new Promise<void>((resolve) => {
+      releaseOpenFile = resolve;
+    });
+    const openFile = vi
+      .spyOn(notePane, "openFile")
+      .mockImplementation(async () => {
+        await openFileGate;
+        throw new Error("openFile continued after unload");
+      });
+
+    fire("workspace", "layout-change", []);
+    notePane.view = {
+      file: bookB,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fire("workspace", "layout-change", []);
+    await Promise.resolve();
+
+    const reconcilerPlugin = plugin as unknown as ReconcilerTestPlugin;
+    reconcilerPlugin.layoutReconcilerUnloaded = true;
+    releaseOpenFile?.();
+    await settleCommand();
+
+    expect(openFile).toHaveBeenCalledTimes(1);
+    expect(notePane.detached).toBe(false);
+  });
+
+
   it("resolves the most recently active deferred reader", async () => {
     const firstBook = addBookFile("Books/One.epub");
     const secondBook = addBookFile("Books/Two.epub");
@@ -2239,6 +2334,45 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(plugin.getBookNotePaths()).toEqual([]);
     expect(plugin.getReaderPairingForNote("Reading/A.md")).toBeUndefined();
+  });
+
+  it("onunload clears the layout snapshot and prevents an in-flight write", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+
+    let releaseOpenFile: (() => void) | undefined;
+    const openFileGate = new Promise<void>((resolve) => {
+      releaseOpenFile = resolve;
+    });
+    fake.runtime.gateLeafOpenFile = (leaf: FakeLeaf): Promise<void> | undefined =>
+      leaf === notePane ? openFileGate : undefined;
+
+    fire("workspace", "layout-change", []);
+    notePane.view = {
+      file: bookB,
+      getViewType(): string {
+        return "observation-car-epub";
+      },
+    };
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    const reconcilerPlugin = plugin as unknown as ReconcilerTestPlugin;
+    reconcilerPlugin.layoutSnapshot = new Map([["sentinel", "Notes/A.md"]]);
+    expect(reconcilerPlugin.layoutSnapshot.size).toBe(1);
+
+    plugin.onunload();
+    releaseOpenFile?.();
+    await settleCommand();
+
+    expect(reconcilerPlugin.layoutSnapshot.size).toBe(0);
   });
 
   it("matches shortest-path anchor links against the source via the metadata cache", async () => {
