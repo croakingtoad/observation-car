@@ -28,6 +28,7 @@ function readFixtureBody(name: string): string {
 const AUTH_401_BODY = readFixtureBody("auth-401.txt");
 
 const ATOM_BODY = readFixture("root-catalog.xml");
+const OPEN_SEARCH_BODY = readFixture("opensearch-description.xml");
 const HTML_BODY = readFixture("login-page.html");
 
 interface RecordedCall {
@@ -173,6 +174,80 @@ describe("F5.1 OpdsClient — live settings reads", () => {
   });
 });
 
+describe("F5.3 OpdsClient — OpenSearch description", () => {
+  it("retrieves and parses the advertised document through the authenticated transport", async () => {
+    const { transport, calls } = makeTransport({
+      status: 200,
+      text: OPEN_SEARCH_BODY,
+    });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: "opds-user",
+        opdsPassword: "s3cret",
+      }),
+      transport,
+    );
+
+    const description = await client.fetchOpenSearchDescription(
+      "https://booklore.example/api/v1/opds/search.opds",
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers.Accept).toBe(
+      "application/opensearchdescription+xml",
+    );
+    expect(calls[0].headers.Authorization).toBe(
+      basicAuthHeader("opds-user", "s3cret"),
+    );
+    expect(description.urls[0].template).toBe(
+      "https://booklore.example/api/v1/opds/catalog?q={searchTerms}",
+    );
+  });
+
+  it("classifies an Atom feed as not-opds instead of accepting the wrong document type", async () => {
+    const { transport } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(
+      makeSettings({ bookloreBaseUrl: "https://booklore.example" }),
+      transport,
+    );
+
+    await expectOpdsError(
+      client.fetchOpenSearchDescription(
+        "https://booklore.example/api/v1/opds/search.opds",
+      ),
+      "not-opds",
+    );
+  });
+
+  it.each([
+    ["userinfo", "https://booklore.example@evil.test/search.opds"],
+    ["scheme downgrade", "http://booklore.example/search.opds"],
+    ["host suffix confusion", "https://booklore.example.evil.test/search.opds"],
+    ["port change", "https://booklore.example:8443/search.opds"],
+  ])("omits credentials for an off-origin %s URL", async (_case, url) => {
+    const { transport, calls } = makeTransport({
+      status: 200,
+      text: OPEN_SEARCH_BODY,
+    });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "https://booklore.example",
+        opdsUsername: "opds-user",
+        opdsPassword: "s3cret",
+      }),
+      transport,
+    );
+
+    await client.fetchOpenSearchDescription(url);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({
+      Accept: "application/opensearchdescription+xml",
+    });
+  });
+});
+
 describe("F5.1 OpdsClient — credential origin boundary", () => {
   const USERNAME = "origin-user";
   const PASSWORD = "origin-pass";
@@ -262,6 +337,23 @@ describe("F5.1 OpdsClient — credential origin boundary", () => {
       url: "not a URL",
       headers: { Accept: "application/atom+xml" },
     });
+  });
+
+  it("omits credentials when two opaque URLs both serialize their origin as null", async () => {
+    const { transport, calls } = makeTransport({ status: 200, text: ATOM_BODY });
+    const client = makeClient(
+      makeSettings({
+        bookloreBaseUrl: "data:text/plain,configured",
+        opdsUsername: USERNAME,
+        opdsPassword: PASSWORD,
+      }),
+      transport,
+    );
+
+    await client.fetchFeed("data:text/plain,feed");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers).toEqual({ Accept: "application/atom+xml" });
   });
 
   it.each([

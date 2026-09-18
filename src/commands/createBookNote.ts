@@ -1,12 +1,9 @@
-import {
-  Notice,
-  normalizePath,
-  TFile,
-  TFolder,
-  type WorkspaceLeaf,
-} from "obsidian";
+import { Notice, TFile, type WorkspaceLeaf } from "obsidian";
 import type ObservationCarPlugin from "../main";
 import { EpubView, EPUB_VIEW_TYPE } from "../readers/EpubView";
+import { getOrCreateBookNote } from "./bookNoteCreation";
+
+export { getOrCreateBookNote } from "./bookNoteCreation";
 
 export const CREATE_BOOK_NOTE_COMMAND_ID =
   "create-book-note-for-current-book";
@@ -53,7 +50,11 @@ async function resolveAndCreateBookNote(
       );
       return;
     }
-    await createOrOpenBookNote(plugin, resolution.book, resolution.leaf);
+    await runCreateOrOpenBookNoteCommand(
+      plugin,
+      resolution.book,
+      resolution.leaf,
+    );
   } catch (error) {
     console.error("[observation-car] could not resolve the current book", error);
     new Notice("Could not create book note. Check the developer console for details.");
@@ -110,12 +111,11 @@ async function currentBook(
   return book === null ? { kind: "none" } : { kind: "book", book, leaf };
 }
 
-
 /**
  * The command callback's error boundary. Keeping every write below this
  * explicit invocation is the PRD §7 zero-implicit-writes guarantee.
  */
-async function createOrOpenBookNote(
+async function runCreateOrOpenBookNoteCommand(
   plugin: ObservationCarPlugin,
   book: TFile,
   readerLeaf: WorkspaceLeaf | null,
@@ -125,102 +125,8 @@ async function createOrOpenBookNote(
     await plugin.openBookNotePane(readerLeaf, note);
   } catch (error) {
     console.error("[observation-car] could not create book note", error);
-    new Notice("Could not create book note. Check the developer console for details.");
+    new Notice(
+      "Could not create book note. Check the developer console for details.",
+    );
   }
-}
-
-/** F1.5's sole note-creation path, shared by later reader commands. */
-export async function getOrCreateBookNote(
-  plugin: ObservationCarPlugin,
-  book: TFile,
-): Promise<TFile> {
-  const folderPath = normalizePath(plugin.settings.notesFolder);
-  const notePath = normalizePath(
-    folderPath === ""
-      ? `${book.basename}.md`
-      : `${folderPath}/${book.basename}.md`,
-  );
-  const existing = plugin.app.vault.getAbstractFileByPath(notePath);
-  if (existing instanceof TFile) return existing;
-  if (existing !== null) {
-    throw new Error(`A folder already exists at ${notePath}`);
-  }
-
-  await ensureFolder(plugin, folderPath);
-  // F1.2 resolves vault-path wikilinks regardless of the user's link style.
-  const source = `[[${book.path}]]`;
-  const content = renderTemplate(plugin.settings.noteTemplate, {
-    source,
-    format: book.extension.toLowerCase(),
-    title: book.basename,
-    author: "",
-  });
-
-  try {
-    return await plugin.app.vault.create(notePath, content);
-  } catch (error) {
-    // Two quick invocations may race between lookup and create. The loser
-    // returns the winner, never overwriting it.
-    const racedNote = plugin.app.vault.getAbstractFileByPath(notePath);
-    if (racedNote instanceof TFile) return racedNote;
-    throw error;
-  }
-}
-
-async function ensureFolder(
-  plugin: ObservationCarPlugin,
-  folderPath: string,
-): Promise<void> {
-  if (folderPath === "") return;
-
-  let currentPath = "";
-  for (const segment of folderPath.split("/")) {
-    currentPath = currentPath === "" ? segment : `${currentPath}/${segment}`;
-    const existing = plugin.app.vault.getAbstractFileByPath(currentPath);
-    if (existing instanceof TFolder) continue;
-    if (existing !== null) {
-      throw new Error(`A file already exists at ${currentPath}`);
-    }
-    await plugin.app.vault.createFolder(currentPath);
-  }
-}
-
-
-interface TemplateValues {
-  source: string;
-  format: string;
-  title: string;
-  author: string;
-}
-
-/** Replace every supported placeholder with a YAML-safe scalar. */
-function renderTemplate(template: string, values: TemplateValues): string {
-  return template.replace(
-    /(["']?){{(source|format|title|author)}}\1/g,
-    (placeholder, quote: string, name: string): string => {
-      if (name === "format") {
-        return quote === ""
-          ? values.format
-          : `${quote}${values.format}${quote}`;
-      }
-
-      let value: string;
-      switch (name) {
-        case "source":
-          value = values.source;
-          break;
-        case "title":
-          value = values.title;
-          break;
-        case "author":
-          value = values.author;
-          break;
-        default:
-          return placeholder;
-      }
-      return quote === "'"
-        ? `'${value.replaceAll("'", "''")}'`
-        : JSON.stringify(value);
-    },
-  );
 }

@@ -17,6 +17,247 @@
   font-size: var(--font-ui-small);
 }
 
+/* F5.2 — root/navigation/acquisition OPDS catalog browser. */
+.oc-catalog-view {
+  overflow-y: auto;
+  padding: var(--size-4-4);
+}
+
+.oc-catalog-toolbar,
+.oc-catalog-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  align-items: center;
+}
+
+.oc-catalog-search {
+  display: flex;
+  flex: 1 1 16rem;
+  gap: var(--size-4-2);
+  margin-inline-start: auto;
+}
+
+.oc-catalog-search input {
+  min-width: 8rem;
+  min-height: 44px;
+  flex: 1;
+}
+
+.oc-catalog-search button {
+  min-height: 44px;
+}
+
+.oc-catalog-search input:focus-visible,
+.oc-catalog-search button:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.oc-catalog-header {
+  margin-block: var(--size-4-4);
+}
+
+.oc-catalog-header h2,
+.oc-catalog-header p {
+  margin-block: 0;
+}
+
+.oc-catalog-count,
+.oc-catalog-entry-author {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.oc-catalog-entries {
+  display: grid;
+  gap: var(--size-4-2);
+  margin-block: var(--size-4-4);
+}
+
+.oc-catalog-navigation-entry {
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.oc-catalog-navigation-entry button {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-accent);
+  font-weight: var(--font-semibold);
+}
+
+.oc-catalog-navigation-entry p {
+  margin: var(--size-4-1) 0 0;
+  color: var(--text-muted);
+}
+
+.oc-catalog-acquisition-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--size-4-1) var(--size-4-3);
+  width: 100%;
+  padding: var(--size-4-3);
+  text-align: left;
+  white-space: normal;
+}
+
+.oc-catalog-entry-title {
+  overflow-wrap: anywhere;
+  font-weight: var(--font-semibold);
+}
+
+.oc-catalog-entry-author {
+  grid-column: 1;
+}
+
+.oc-catalog-entry-formats {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: var(--size-4-1);
+  align-items: center;
+}
+
+.oc-catalog-format-badge {
+  padding: 1px var(--size-4-1);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.oc-catalog-error {
+  display: flex;
+  gap: var(--size-4-3);
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-error);
+  border-radius: var(--radius-m);
+  background: var(--background-modifier-error-hover);
+}
+
+.oc-catalog-loading {
+  color: var(--text-muted);
+}
+
+.oc-catalog-book-detail {
+  max-width: 48rem;
+}
+
+/* F5.4 — touch-first Open from Booklore modal. */
+.oc-open-booklore {
+  display: grid;
+  gap: var(--size-4-4);
+}
+
+.oc-open-booklore-search {
+  display: flex;
+  gap: var(--size-4-2);
+}
+
+.oc-open-booklore-search input {
+  min-width: 0;
+  min-height: 44px;
+  flex: 1;
+}
+
+.oc-open-booklore-search button,
+.oc-open-booklore-download,
+.oc-open-booklore-format-option {
+  min-height: 44px;
+}
+
+.oc-open-booklore-results {
+  display: grid;
+  gap: var(--size-4-3);
+  max-height: min(65vh, 40rem);
+  overflow-y: auto;
+}
+
+.oc-open-booklore-result {
+  display: grid;
+  gap: var(--size-4-2);
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.oc-open-booklore-title,
+.oc-open-booklore-author,
+.oc-open-booklore-unsupported {
+  margin: 0;
+}
+
+.oc-open-booklore-author,
+.oc-open-booklore-status,
+.oc-open-booklore-unsupported {
+  color: var(--text-muted);
+}
+
+.oc-open-booklore-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-1);
+}
+
+.oc-open-booklore-badge {
+  padding: 1px var(--size-4-1);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.oc-open-booklore-format-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.oc-open-booklore-format-picker legend {
+  width: 100%;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.oc-open-booklore-format-option {
+  display: inline-flex;
+  gap: var(--size-4-2);
+  align-items: center;
+  padding-inline: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.oc-open-booklore-download {
+  justify-self: start;
+}
+
+.oc-open-booklore :focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.is-phone .oc-open-booklore-search,
+.is-phone .oc-open-booklore-download {
+  width: 100%;
+}
+
+.is-phone .oc-open-booklore-search {
+  flex-direction: column;
+}
+
 /*
  * F2.1 — EPUB reader view. Forked from src/styles.css in
  * vinceRV/obsidian-epub-reader (MIT), commit
@@ -268,4 +509,19 @@
 .markdown-source-view.mod-cm6 .cm-line .oc-focus-fold:hover {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
+}
+
+/* F5.8 — readable, screen-reader-announced Booklore connection status. */
+.oc-booklore-connection-status {
+  margin-top: var(--size-4-1);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.oc-booklore-connection-status.is-success {
+  color: var(--text-success);
+}
+
+.oc-booklore-connection-status.is-error {
+  color: var(--text-error);
 }

@@ -19,6 +19,10 @@ import {
 import { registerToggleFocusModeCommand } from "./commands/toggleFocusMode";
 import { registerSplitRatioToggleCommand } from "./commands/toggleSplitRatio";
 import { registerToggleBookStylesheetCommand } from "./commands/toggleBookStylesheet";
+import { registerRedownloadFromBookloreCommand } from "./commands/redownloadFromBooklore";
+import { registerBookloreDownloads } from "./booklore/bookDownloadRegistration";
+import { registerBookloreCatalog } from "./booklore/catalogRegistration";
+import { registerOpenFromBooklore } from "./booklore/openBookloreRegistration";
 import {
   DEFAULT_SETTINGS,
   type ObservationCarSettings,
@@ -156,6 +160,10 @@ export default class ObservationCarPlugin extends Plugin {
       resolveLink: (linkpath, notePath) =>
         this.resolveLink(linkpath, notePath)?.path ?? null,
     });
+    registerBookloreCatalog(this);
+    await registerBookloreDownloads(this);
+    registerOpenFromBooklore(this);
+    registerRedownloadFromBookloreCommand(this);
 
     this.readerRegistry = new ReaderRegistry({
       listBookNotes: () =>

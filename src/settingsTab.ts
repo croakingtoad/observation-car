@@ -1,5 +1,10 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { PluginSettingTab, Setting, type App } from "obsidian";
 import type ObservationCarPlugin from "./main";
+import {
+  OpdsClient,
+  type OpdsTransport,
+} from "./booklore/opdsClient";
+import { OpdsError } from "./booklore/opdsTypes";
 import {
   ANCHOR_HEADING_LEVEL_MAX,
   ANCHOR_HEADING_LEVEL_MIN,
@@ -12,7 +17,74 @@ import {
   clampInt,
   normalizeBaseUrl,
   normalizeFolderPath,
+  type ObservationCarSettings,
 } from "./settings";
+
+export interface BookloreConnectionTestResult {
+  ok: boolean;
+  message: string;
+}
+
+const FULL_URL_MESSAGE =
+  "Enter a full Booklore base URL, for example https://host:port.";
+
+function hasSupportedBaseUrl(baseUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(normalizeBaseUrl(baseUrl));
+  } catch {
+    return false;
+  }
+  return (
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    parsed.origin !== "null"
+  );
+}
+
+function connectionFailureMessage(error: unknown): string {
+  if (!(error instanceof OpdsError)) {
+    return "The Booklore connection test failed unexpectedly.";
+  }
+
+  switch (error.kind) {
+    case "no-base-url":
+      return "Enter a Booklore base URL before testing the connection.";
+    case "auth":
+      return "Authentication failed. Check the OPDS username and password.";
+    case "unreachable":
+      return "Could not reach Booklore. Check that the server is running and reachable.";
+    case "not-opds":
+      return "Booklore responded, but OPDS is unavailable or disabled.";
+    case "http":
+      return error.status === undefined
+        ? "Booklore returned an HTTP error from the OPDS endpoint."
+        : `Booklore returned HTTP ${error.status} from the OPDS endpoint.`;
+  }
+}
+
+/** Test the configured root feed without exposing its URL, body, or credentials. */
+export async function testBookloreConnection(
+  settings: () => ObservationCarSettings,
+  transport?: OpdsTransport,
+): Promise<BookloreConnectionTestResult> {
+  try {
+    const baseUrl = normalizeBaseUrl(settings().bookloreBaseUrl);
+    // Empty values remain the client's `no-base-url` classification. This
+    // settings-only validation covers malformed non-empty values so they
+    // cannot be mistaken for auth or network failures.
+    if (baseUrl !== "" && !hasSupportedBaseUrl(baseUrl)) {
+      return { ok: false, message: FULL_URL_MESSAGE };
+    }
+
+    await new OpdsClient({ settings, transport }).getRootFeed();
+    return {
+      ok: true,
+      message: "Connected to Booklore. The OPDS catalog is available.",
+    };
+  } catch (error) {
+    return { ok: false, message: connectionFailureMessage(error) };
+  }
+}
 
 /**
  * F1.4 — the Observation Car settings tab.
@@ -203,7 +275,10 @@ export class ObservationCarSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Base URL")
-      .setDesc("Base URL of your self-hosted Booklore instance.")
+      .setDesc(
+        "Use a full URL including http:// or https://. Credentials are sent only " +
+          "when OPDS links use the same origin (scheme, host, and port).",
+      )
       .addText((text) => {
         text
           .setPlaceholder("https://booklore.example")
@@ -238,5 +313,35 @@ export class ObservationCarSettingTab extends PluginSettingTab {
             await this.plugin.updateSettings({ opdsPassword: value });
           });
       });
+
+    const connectionSetting = new Setting(containerEl)
+      .setName("Connection test")
+      .setDesc(
+        "Verify that Booklore is reachable and returns an authenticated OPDS catalog.",
+      );
+    const connectionStatusEl = connectionSetting.descEl.createDiv({
+      cls: "oc-booklore-connection-status",
+      attr: {
+        role: "status",
+        "aria-live": "polite",
+        "aria-atomic": "true",
+      },
+    });
+
+    connectionSetting.addButton((button) => {
+      button.setButtonText("Test connection").onClick(async () => {
+        button.setDisabled(true).setButtonText("Testing…");
+        connectionStatusEl.removeClass("is-success", "is-error");
+        connectionStatusEl.setText("Testing connection…");
+
+        const result = await testBookloreConnection(
+          () => this.plugin.settings,
+        );
+
+        connectionStatusEl.setText(result.message);
+        connectionStatusEl.addClass(result.ok ? "is-success" : "is-error");
+        button.setDisabled(false).setButtonText("Test connection");
+      });
+    });
   }
 }

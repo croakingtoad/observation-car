@@ -24,6 +24,18 @@ export function requestUrl(_options: unknown): never {
   throw notAvailable("requestUrl");
 }
 
+export function normalizePath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/\/{2,}/g, "/")
+    .replace(/^\//, "")
+    .replace(/\/$/, "");
+}
+
+export class TFolder {
+  constructor(readonly path: string) {}
+}
+
 /**
  * Runtime stand-in for the `obsidian` module in unit tests.
  *
@@ -43,6 +55,7 @@ export class ItemView {
   leaf: unknown;
   containerEl: HTMLElement = document.createElement("div");
   contentEl: HTMLElement = document.createElement("div");
+  navigation = false;
 
   constructor(leaf: unknown) {
     this.leaf = leaf;
@@ -70,8 +83,12 @@ export class FileView extends ItemView {
 }
 
 export class Notice {
+  static readonly messages: string[] = [];
+  readonly message: string;
+
   constructor(message: string, timeout?: number) {
-    void message;
+    this.message = message;
+    Notice.messages.push(message);
     void timeout;
   }
 }
