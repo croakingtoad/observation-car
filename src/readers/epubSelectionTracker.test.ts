@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Book, Contents, Rendition } from "epubjs";
 import { buildEpubCfiFragment } from "../model/anchor";
 import { EpubNavigationTools, EpubSelectionTracker } from "./epubNavigationTools";
@@ -107,7 +107,16 @@ const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 
 async function makeTools(tracker: EpubSelectionTracker) {
   const viewerEl = document.createElement("div");
   const { rendition, emit } = makeRendition();
-  new EpubNavigationTools(viewerEl, "test.epub", makeBook(), rendition, tracker);
+  new EpubNavigationTools(
+    viewerEl,
+    "test.epub",
+    makeBook(),
+    rendition,
+    tracker,
+    undefined,
+    undefined,
+    vi.fn(),
+  );
   await flush();
   return { emit };
 }

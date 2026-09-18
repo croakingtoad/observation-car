@@ -106,6 +106,8 @@ async function clickTocCopy(href: unknown, label: string): Promise<void> {
     inertRendition(),
     new EpubSelectionTracker(),
     undefined,
+    undefined,
+    vi.fn(),
   );
   await vi.waitFor(() => {
     expect(document.querySelector(".epub-toc-copy")).not.toBeNull();
@@ -351,6 +353,8 @@ describe("TOC link copying", () => {
       inertRendition(),
       new EpubSelectionTracker(),
       undefined,
+      undefined,
+      vi.fn(),
     );
     const button = document.createElement("button");
     const event = {
@@ -399,6 +403,8 @@ describe("EpubNavigationTools defect 3: bound catch and logged error in copyTocL
       inertRendition(),
       new EpubSelectionTracker(),
       undefined,
+      undefined,
+      vi.fn(),
     );
     await vi.waitFor(() => {
       expect(document.querySelector(".epub-toc-copy")).not.toBeNull();
