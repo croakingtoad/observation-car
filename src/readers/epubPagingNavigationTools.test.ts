@@ -1,6 +1,13 @@
+// @vitest-environment jsdom
+
 import type { Book, Rendition } from "epubjs";
+import ePub from "epubjs";
 import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import JSZip from "jszip";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { flattenToc } from "./epubNavigationTools";
 
 const showNotice = vi.hoisted(() => vi.fn());
 
@@ -73,7 +80,7 @@ function renderedDocument(bodyWidth: number, documentWidth: number): Document {
   return doc;
 }
 
-function epubBookWithToc(href: string, label: string): Book {
+function epubBookWithToc(href: unknown, label: string): Book {
   return {
     loaded: {
       metadata: Promise.resolve({ title: "Test Book" }),
@@ -91,7 +98,7 @@ function inertRendition(): Rendition {
   } as unknown as Rendition;
 }
 
-async function clickTocCopy(href: string, label: string): Promise<void> {
+async function clickTocCopy(href: unknown, label: string): Promise<void> {
   new EpubNavigationTools(
     document.body,
     "Books/Test Book.epub",
@@ -108,6 +115,32 @@ async function clickTocCopy(href: string, label: string): Promise<void> {
     throw new Error("Test TOC copy button was not rendered");
   }
   copyButton.click();
+}
+
+async function buildEpub2EmptyNcxFixture(): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures/minimal-epub2-empty-ncx");
+  const fixtureFiles = [
+    "mimetype",
+    "META-INF/container.xml",
+    "EPUB/package.opf",
+    "EPUB/toc.ncx",
+    "EPUB/chapter-1.xhtml",
+  ] as const;
+  const zip = new JSZip();
+
+  for (const path of fixtureFiles) {
+    let contents = await readFile(resolve(fixtureRoot, path), "utf8");
+    if (path === "mimetype") {
+      contents = contents.trimEnd();
+    }
+    zip.file(path, contents, { createFolders: false });
+  }
+
+  return zip.generateAsync({
+    compression: "STORE",
+    platform: "UNIX",
+    type: "arraybuffer",
+  });
 }
 
 describe("F2.2 paging event wiring", () => {
@@ -217,7 +250,7 @@ describe("TOC link copying", () => {
 
     expect(writeText).not.toHaveBeenCalled();
     expect(showNotice).toHaveBeenCalledWith(
-      "Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.",
+      expect.stringContaining('Could not copy link: spine href must not contain "#"'),
     );
   });
 
@@ -234,5 +267,172 @@ describe("TOC link copying", () => {
       "[[Books/Test Book.epub#text/chapter.xhtml|Test Book, Part ｜ 1 ］］ Notes]]",
     );
     expect(showNotice).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing href without exposing an internal TypeError", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    await clickTocCopy(undefined, "Group heading");
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(showNotice).toHaveBeenCalledWith(
+      expect.stringContaining("spine href must be a usable string"),
+    );
+    expect(showNotice).not.toHaveBeenCalledWith(
+      expect.stringContaining("Cannot read properties of undefined"),
+    );
+  });
+
+  it("reports a null NCX href with the complete usable-string notice", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    await clickTocCopy(null, "Group heading");
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(showNotice).toHaveBeenCalledWith(
+      "Could not copy link: spine href must be a usable string.",
+    );
+  });
+
+  it("reports epub.js NCX output when a nav point has no content source", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const book = ePub(await buildEpub2EmptyNcxFixture());
+
+    try {
+      await book.opened;
+      const liveToc = await book.loaded.navigation;
+      const [groupHeading] = flattenToc(liveToc.toc).filter(
+        (entry) => entry.label === "Group heading",
+      );
+      if (groupHeading === undefined) {
+        throw new Error("Live EPUB fixture did not contain its hrefless nav point");
+      }
+      expect(groupHeading.href).toBeNull();
+
+      await clickTocCopy(groupHeading.href, groupHeading.label);
+
+      expect(writeText).not.toHaveBeenCalled();
+      expect(showNotice).toHaveBeenCalledWith(
+        "Could not copy link: spine href must be a usable string.",
+      );
+    } finally {
+      book.destroy();
+    }
+  });
+
+  it("does not expose unexpected non-AnchorError details", async () => {
+    const originalIncludes = String.prototype.includes;
+    vi.spyOn(String.prototype, "includes").mockImplementation(function (
+      this: string,
+      searchString,
+      position,
+    ) {
+      if (String(this) === "throw-unexpected.xhtml") {
+        throw new TypeError("internal implementation detail");
+      }
+      return originalIncludes.call(this, searchString, position);
+    });
+    const tools = new EpubNavigationTools(
+      document.body,
+      "Books/Test Book.epub",
+      epubBookWithToc("chapter.xhtml", "Chapter"),
+      inertRendition(),
+      new EpubSelectionTracker(),
+      undefined,
+    );
+    const button = document.createElement("button");
+    const event = {
+      currentTarget: button,
+      stopPropagation: vi.fn(),
+    } as unknown as Event;
+
+    await (
+      tools as unknown as {
+        copyTocLink(
+          event: Event,
+          bookTitle: string,
+          href: string,
+          label: string,
+        ): Promise<void>;
+      }
+    ).copyTocLink(event, "Test Book", "throw-unexpected.xhtml", "Chapter");
+
+    expect(showNotice).toHaveBeenCalledWith(
+      "Could not copy this table-of-contents link. Check the developer console for details.",
+    );
+    expect(showNotice).not.toHaveBeenCalledWith(
+      expect.stringContaining("internal implementation detail"),
+    );
+  });
+});
+
+
+describe("EpubNavigationTools defect 3: bound catch and logged error in copyTocLink (LOCO-1031)", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    showNotice.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  async function tocCopyForHref(href: string, label: string): Promise<void> {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    new EpubNavigationTools(
+      document.body,
+      "Books/Test Book.epub",
+      epubBookWithToc(href, label),
+      inertRendition(),
+      new EpubSelectionTracker(),
+      undefined,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector(".epub-toc-copy")).not.toBeNull();
+    });
+    const copyButton = document.querySelector<HTMLButtonElement>(".epub-toc-copy");
+    if (copyButton === null) {
+      throw new Error("Test TOC copy button was not rendered");
+    }
+    copyButton.click();
+  }
+
+  it("pins the AnchorError message in the notice and logs the bound error (defect 3)", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await tocCopyForHref("text/chapter.xhtml#section-2", "Section 2");
+
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[Observation Car] Failed to copy TOC link",
+      expect.any(Error),
+    );
+    expect(showNotice).toHaveBeenCalledWith(
+      expect.stringContaining('spine href must not contain "#"'),
+    );
+  });
+
+  it("pins the whitespace/control-char error message variant in the notice (defect 3)", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await tocCopyForHref("text/ch apter.xhtml", "Chapter A");
+
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[Observation Car] Failed to copy TOC link",
+      expect.any(Error),
+    );
+    expect(showNotice).toHaveBeenCalledWith(
+      expect.stringContaining("spine href must not contain whitespace"),
+    );
   });
 });

@@ -512,9 +512,10 @@ export class EpubView extends FileView {
     void book.loaded.navigation
       .then((navigation) => tracker.setToc(navigation.toc))
       .catch((error: unknown) => {
-        // An unresolvable TOC is not fatal; labels stay "Ch. N".
+        // Loading or applying navigation labels can fail; locations keep
+        // their chapter-number fallback.
         console.warn(
-          "[observation-car] could not resolve EPUB navigation",
+          "[observation-car] could not load or apply EPUB navigation labels",
           error,
         );
       });
@@ -528,7 +529,11 @@ export class EpubView extends FileView {
         void this.persistCurrentLocation(file.path, event.fragment);
       }
       for (const listener of [...this.locationListeners]) {
-        listener(event);
+        try {
+          listener(event);
+        } catch (error) {
+          console.warn("[Observation Car] Location subscriber threw", error);
+        }
       }
     });
     return { tracker, relocatedHandler: onRelocated, forward };
