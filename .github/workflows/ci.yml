@@ -33,6 +33,9 @@ jobs:
       - name: Verify required tips
         run: ./scripts/verify-required-tips.sh HEAD
 
+      - name: Test required-tips verifier
+        run: ./scripts/verify-required-tips.test.sh
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
