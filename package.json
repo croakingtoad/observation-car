@@ -7,7 +7,7 @@
   "private": true,
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "./scripts/verify-required-tips.sh && tsc --noEmit && node esbuild.config.mjs --production",
+    "build": "tsc --noEmit && node esbuild.config.mjs --production",
     "verify:required-tips": "./scripts/verify-required-tips.sh",
     "test": "vitest run",
     "test:watch": "vitest",

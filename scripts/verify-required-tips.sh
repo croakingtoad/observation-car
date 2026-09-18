@@ -11,6 +11,11 @@ if [[ ! -f "$REQUIRED_TIPS_FILE" ]]; then
   exit 2
 fi
 
+if ! git cat-file -e "$HEAD_REF^{commit}" 2>/dev/null; then
+  echo "cannot verify — head not present, fetch full history: $HEAD_REF" >&2
+  exit 2
+fi
+
 failed=0
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" || "$line" == \#* ]] && continue
