@@ -104,7 +104,7 @@ function bookDocument(hrefs: string[]): Document {
   for (const href of hrefs) {
     const link = bookDocument.createElement("link");
     link.rel = "stylesheet";
-    link.href = href;
+    link.setAttribute("href", href);
     bookDocument.head.append(link);
   }
   const paragraph = bookDocument.createElement("p");
@@ -318,6 +318,82 @@ describe("EpubStyles", () => {
     expect(firstDocument.querySelectorAll("style")).toHaveLength(1);
     expect(returnedDocument.querySelectorAll("style")).toHaveLength(1);
     styles.destroy();
+  });
+
+  it("rejects an empty source href instead of fetching the section itself", async () => {
+    const reader = fakeReader();
+    const styles = new EpubStyles(reader.book, reader.rendition, "book");
+    const document = bookDocument([""]);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await reader.spineContent.trigger(document, {
+        index: 0,
+        url: "/OEBPS/Text/chapter.xhtml",
+      });
+      await reader.renditionContent.trigger(new FakeContents(document));
+
+      expect(reader.archiveGetText).not.toHaveBeenCalled();
+      expect(reader.substitute).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to inline EPUB stylesheet in section /OEBPS/Text/chapter.xhtml: missing original href for untagged link",
+      );
+    } finally {
+      consoleError.mockRestore();
+      styles.destroy();
+    }
+  });
+
+  it("does not resolve an empty stylesheet index attribute to entry zero", async () => {
+    const reader = fakeReader();
+    const styles = new EpubStyles(reader.book, reader.rendition, "book");
+    const document = bookDocument(["../Styles/book.css"]);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await reader.spineContent.trigger(document, {
+        index: 0,
+        url: "/OEBPS/Text/chapter.xhtml",
+      });
+      const link = document.querySelector("link");
+      link?.setAttribute("data-observation-car-stylesheet-index", "");
+      await reader.renditionContent.trigger(new FakeContents(document));
+
+      expect(reader.archiveGetText).not.toHaveBeenCalled();
+      expect(reader.substitute).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to inline EPUB stylesheet in section /OEBPS/Text/chapter.xhtml: missing original href for ",
+      );
+    } finally {
+      consoleError.mockRestore();
+      styles.destroy();
+    }
+  });
+
+  it("rejects an untagged empty href during stylesheet inlining", async () => {
+    const reader = fakeReader();
+    const styles = new EpubStyles(reader.book, reader.rendition, "book");
+    const document = bookDocument([""]);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await reader.spineContent.trigger(document, {
+        index: 0,
+        url: "/OEBPS/Text/chapter.xhtml",
+      });
+      const link = document.querySelector("link");
+      link?.removeAttribute("data-observation-car-stylesheet-index");
+      await reader.renditionContent.trigger(new FakeContents(document));
+
+      expect(reader.archiveGetText).not.toHaveBeenCalled();
+      expect(reader.substitute).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to inline EPUB stylesheet in section /OEBPS/Text/chapter.xhtml: missing original href for untagged link",
+      );
+    } finally {
+      consoleError.mockRestore();
+      styles.destroy();
+    }
   });
 
   it("retains replaced image and font URLs while the theme remains alongside book CSS", async () => {
