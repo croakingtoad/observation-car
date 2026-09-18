@@ -30,6 +30,7 @@
  */
 import { type Book, type Contents, type Rendition } from "epubjs";
 import type Locations from "epubjs/types/locations";
+import type { PackagingMetadataObject } from "epubjs/types/packaging";
 import { type Location } from "epubjs/types/rendition";
 import { AnchorError, buildEpubCfiFragment } from "../model/anchor";
 import type { NavItem } from "epubjs/types/navigation";
@@ -41,6 +42,41 @@ import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 const EPUBCFI_WRAPPER = "epubcfi(";
 const LOCATION_CHARACTERS_PER_BREAK = 1_000;
 const COPY_FEEDBACK_DURATION_MS = 1_000;
+const UNTITLED_BOOK_TITLE = "Untitled";
+
+type EpubMetadata = Omit<PackagingMetadataObject, "title"> & {
+  title: string | null;
+};
+
+type EpubLocations = Omit<Locations, "locationFromCfi"> & {
+  locationFromCfi(cfi: string): unknown;
+};
+
+type EpubNavigationBook = Omit<Book, "loaded" | "locations"> & {
+  loaded: Omit<Book["loaded"], "metadata"> & {
+    metadata: Promise<EpubMetadata>;
+  };
+  locations: EpubLocations;
+};
+
+export function normalizeEpubTitle(title: EpubMetadata["title"]): string {
+  if (title !== null && title !== "") {
+    return title;
+  }
+  console.warn(
+    '[Observation Car] EPUB metadata title is missing; using "Untitled".',
+  );
+  return UNTITLED_BOOK_TITLE;
+}
+
+function requireEpubLocationNumber(location: unknown): number {
+  if (typeof location !== "number") {
+    throw new AnchorError(
+      `EPUB location must be a number; received ${typeof location}`,
+    );
+  }
+  return location;
+}
 
 interface EpubRenderedView {
   contents?: unknown;
@@ -142,7 +178,9 @@ export class EpubKeyBridge {
       return;
     }
     if (event.key === "PageUp" || event.key === "PageDown") {
-      void this.pageKeyJump(event.key);
+      void Promise.resolve(this.pageKeyJump(event.key)).catch((error: unknown) => {
+        console.warn("[Observation Car] Page-key navigation failed:", error);
+      });
       event.preventDefault();
       return;
     }
@@ -336,7 +374,7 @@ export class EpubSelectionTracker {
 
 /** A single flattened TOC entry with its depth in the source tree. */
 export interface TocEntry {
-  href: string;
+  href: string | null;
   label: string;
   depth: number;
 }
@@ -358,6 +396,10 @@ export function flattenToc(items: readonly NavItem[], depth = 0): TocEntry[] {
     }
   }
   return entries;
+}
+
+function isUsableTocHref(href: string | null | undefined): href is string {
+  return typeof href === "string" && href.length > 0;
 }
 
 /**
@@ -624,8 +666,12 @@ export class EpubNavigationTools {
   private tocPanel: HTMLDivElement | null = null;
   private tocButton: HTMLButtonElement | null = null;
   private isTocOpen = false;
+  /** Escape wikilink metacharacters that would break the `[[path|alias]]` grammar. */
+  private escapeWikilinkText(str: string): string {
+    return str.replaceAll("|", "｜").replaceAll("]", "］");
+  }
   private readonly copyPanel: HTMLDivElement;
-  private locations: Promise<Locations> | null = null;
+  private locations: Promise<EpubLocations> | null = null;
   private currentLocation: Location | null = null;
   private needsCorrection = false;
   private destroyed = false;
@@ -635,7 +681,7 @@ export class EpubNavigationTools {
     event.stopPropagation();
     this.actions?.onNewNote();
   };
-  private bookTitle: Promise<string> | null = null;
+  private readonly bookTitle: Promise<string>;
   private readonly documentListeners = new Map<Document, DocumentListeners>();
   private readonly hostKeyListeners = new Set<{
     target: HTMLElement;
@@ -761,7 +807,7 @@ export class EpubNavigationTools {
   constructor(
     viewerEl: HTMLElement,
     private readonly bookPath: string,
-    private readonly book: Book,
+    private readonly book: EpubNavigationBook,
     private readonly rendition: Rendition,
     private readonly selectionTracker: EpubSelectionTracker,
     private readonly flow?: EpubFlowControls,
@@ -784,8 +830,8 @@ export class EpubNavigationTools {
       activateView,
     );
     this.bookTitle = this.book.loaded.metadata
-      .then((metadata) => metadata.title)
-      .catch(() => "Untitled");
+      .then((metadata) => normalizeEpubTitle(metadata.title))
+      .catch(() => UNTITLED_BOOK_TITLE);
     void this.addSelectionListener().catch((error: unknown) =>
       this.reportSetupFailure(viewerEl, "Selection copying", error),
     );
@@ -924,16 +970,41 @@ export class EpubNavigationTools {
   private async pageKeyJump(key: string): Promise<void> {
     const toc = await this.book.loaded.navigation;
     const currentHref = this.rendition.location?.start?.href;
-    const tocItems = toc.toc;
-    const idx = tocItems.findIndex((item) => this.sanitize(item.href) === this.sanitize(currentHref ?? ""));
+    const currentLocation = this.navigationLocation(currentHref);
+    if (currentLocation.length === 0) {
+      return;
+    }
+    const tocItems = flattenToc(toc.toc).filter((item) =>
+      isUsableTocHref(item.href),
+    );
+    const idx = tocItems.findIndex((item) => this.navigationLocation(item.href) === currentLocation);
     let targetIdx = -1;
-    if (key === "PageUp" && idx < tocItems.length - 1) {
+    if (key === "PageUp" && idx !== -1 && idx < tocItems.length - 1) {
       targetIdx = idx + 1;
     } else if (key === "PageDown" && idx > 0) {
       targetIdx = idx - 1;
     }
     if (targetIdx !== -1) {
-      await this.rendition.display(tocItems[targetIdx].href);
+      const targetEntry = tocItems[targetIdx];
+      if (
+        targetEntry === undefined ||
+        !isUsableTocHref(targetEntry.href)
+      ) {
+        return;
+      }
+      await this.rendition.display(targetEntry.href);
+    }
+  }
+
+  private navigationLocation(href: string | null | undefined): string {
+    if (typeof href !== "string" || href.length === 0) {
+      return "";
+    }
+    const withoutFragment = href.split("#", 1)[0];
+    try {
+      return decodeURI(withoutFragment);
+    } catch {
+      return withoutFragment;
     }
   }
 
@@ -949,7 +1020,7 @@ export class EpubNavigationTools {
     if (this.destroyed) {
       return;
     }
-    const title = (await this.bookTitle) ?? "Untitled";
+    const title = await this.bookTitle;
     if (this.destroyed) {
       return;
     }
@@ -1024,7 +1095,7 @@ export class EpubNavigationTools {
     if (this.destroyed) {
       return;
     }
-    const bookTitle = metadata.title;
+    const bookTitle = normalizeEpubTitle(metadata.title);
 
     const tocButton = document.createElement("button");
     tocButton.className = "epub-button epub-toc-button";
@@ -1075,7 +1146,7 @@ export class EpubNavigationTools {
 
     const row = document.createElement("div");
     row.className = "epub-toc-link";
-    row.dataset.href = href;
+    row.dataset.href = href ?? "";
     row.dataset.label = label;
     row.style.setProperty("--toc-depth", String(entry.depth));
     row.onclick = () => void this.jumpToEntry(entry);
@@ -1096,7 +1167,7 @@ export class EpubNavigationTools {
     const copyBtn = document.createElement("button");
     copyBtn.className = "epub-toc-copy";
     copyBtn.title = "Copy link";
-    copyBtn.dataset.href = href;
+    copyBtn.dataset.href = href ?? "";
     copyBtn.dataset.label = label;
     copyBtn.tabIndex = -1;
     copyBtn.textContent = "🔗";
@@ -1114,6 +1185,9 @@ export class EpubNavigationTools {
    */
   private async jumpToEntry(entry: TocEntry): Promise<void> {
     try {
+      if (!isUsableTocHref(entry.href)) {
+        return;
+      }
       await this.rendition.display(entry.href);
       this.toggleTocVisibility(false);
     } catch (error) {
@@ -1124,7 +1198,7 @@ export class EpubNavigationTools {
   private async copyTocLink(
     e: Event,
     bookTitle: string,
-    href: string,
+    href: string | null,
     label: string,
   ): Promise<void> {
     e.stopPropagation();
@@ -1132,16 +1206,19 @@ export class EpubNavigationTools {
     let fragment: string;
     try {
       fragment = buildEpubSpineFragment(href);
-    } catch {
-      new Notice(
-        "Could not copy link: this table-of-contents entry uses a subchapter fragment that reading-note links do not support.",
-      );
+    } catch (error) {
+      console.warn("[Observation Car] Failed to copy TOC link", error);
+      const message = error instanceof AnchorError
+        ? `Could not copy link: ${error.message}.`
+        : "Could not copy this table-of-contents link. Check the developer console for details.";
+      new Notice(message);
       return;
     }
-    const safeLabel = label.replaceAll("|", "｜").replaceAll("]", "］");
+    const escapedTitle = this.escapeWikilinkText(bookTitle);
+    const safeLabel = this.escapeWikilinkText(label);
     try {
       await navigator.clipboard.writeText(
-        `[[${this.bookPath}${fragment}|${bookTitle}, ${safeLabel}]]`,
+        `[[${this.bookPath}${fragment}|${escapedTitle}, ${safeLabel}]]`,
       );
     } catch (error) {
       this.flashCopyFailed(btn, error);
@@ -1153,10 +1230,11 @@ export class EpubNavigationTools {
   private async copyLinkToCFIToClipboard(e: Event, bookTitle: string, cfiRange: string): Promise<void> {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLButtonElement;
+    const escapedTitle = this.escapeWikilinkText(bookTitle);
     try {
       const location = await this.locationNumber(cfiRange);
       const fragment = buildEpubCfiFragment(cfiRange);
-      await navigator.clipboard.writeText(`[[${this.bookPath}${fragment}|${bookTitle}, loc. ${location}]]`);
+      await navigator.clipboard.writeText(`[[${this.bookPath}${fragment}|${escapedTitle}, loc. ${location}]]`);
     } catch (error) {
       this.flashCopyFailed(btn, error);
       return;
@@ -1172,12 +1250,13 @@ export class EpubNavigationTools {
   ): Promise<void> {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLButtonElement;
+    const escapedTitle = this.escapeWikilinkText(bookTitle);
     try {
       const location = await this.locationNumber(cfiRange);
       const fragment = buildEpubCfiFragment(cfiRange);
       const selectedText = selection ? selection.toString().trim() : "";
       const quote = selectedText ? `> ${selectedText}\n-- ` : "";
-      const link = `[[${this.bookPath}${fragment}|${bookTitle}, loc. ${location}]]`;
+      const link = `[[${this.bookPath}${fragment}|${escapedTitle}, loc. ${location}]]`;
       await navigator.clipboard.writeText(`${quote}${link}`);
     } catch (error) {
       this.flashCopyFailed(btn, error);
@@ -1209,10 +1288,10 @@ export class EpubNavigationTools {
     // The 0.3.93 .d.ts types this as the DOM global `Location` (the
     // symbol is never imported in that file); at runtime it returns the
     // integer location index.
-    return locations.locationFromCfi(cfi) as unknown as number;
+    return requireEpubLocationNumber(locations.locationFromCfi(cfi));
   }
 
-  private ensureLocations(): Promise<Locations> {
+  private ensureLocations(): Promise<EpubLocations> {
     if (this.locations === null) {
       this.locations = (async () => {
         await this.book.ready;
@@ -1260,8 +1339,8 @@ export class EpubNavigationTools {
    * Collapse consecutive whitespace and trim. Preserves accents and non-Latin
    * scripts, so it is safe for display labels.
    */
-  private sanitize(str: string): string {
-    return str.replace(/\s+/g, " ").trim();
+  private sanitize(str: string | null | undefined): string {
+    return (str ?? "").replace(/\s+/g, " ").trim();
   }
 
   private setCopyHandler(className: string, handler: (e: Event) => void): void {

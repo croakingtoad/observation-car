@@ -42,7 +42,7 @@ export interface EpubLocation {
 /** Structural subset of an epub.js TOC item (`Navigation.toc`). */
 export interface TocItem {
   readonly label: string;
-  readonly href: string;
+  readonly href: string | null;
   readonly subitems?: readonly TocItem[];
 }
 
@@ -66,7 +66,7 @@ export function tocLabelForHref(
   const target = normalizeHref(spineHref);
   const find = (items: readonly TocItem[]): string | null => {
     for (const item of items) {
-      if (normalizeHref(item.href) === target) {
+      if (item.href !== null && normalizeHref(item.href) === target) {
         return item.label;
       }
       if (item.subitems !== undefined) {
@@ -138,15 +138,23 @@ export class EpubLocationTracker {
 
   /**
    * The book's TOC, for label resolution. Relocations before this
-   * resolves (or for a book with no TOC) fall back to "Ch. N".
+   * resolves (or for a book with no TOC) fall back to "Ch. N". Once a
+   * position is held, a late TOC replays it so push consumers see the
+   * same label that `current()` derives.
    */
   setToc(toc: readonly TocItem[]): void {
-    this.toc = toc;
+    this.toc = assertTocItems(toc);
+    if (this.latest !== null) {
+      this.onRelocated(this.latest);
+    }
   }
 
   /** Feed one relocated position; the emitted event is debounced. */
   onRelocated(position: RelocatedPosition | null): void {
     if (this.destroyed || position === null) {
+      return;
+    }
+    if (locationForRelocation(position, this.toc) === null) {
       return;
     }
     this.latest = position;
@@ -188,17 +196,46 @@ export class EpubLocationTracker {
     this.timer = null;
     const position = this.pending;
     this.pending = null;
+    // F2's onRelocated guard guarantees this invariant; this local
+    // check only narrows the type.
     if (position === null) {
       return;
     }
     const location = locationForRelocation(position, this.toc);
+    // locationForRelocation cannot be null for the latest position.
     if (location === null) {
       return;
     }
     for (const listener of [...this.listeners]) {
-      listener(location);
+      try {
+        listener(location);
+      } catch (error) {
+        console.warn("[Observation Car] Location subscriber threw", error);
+      }
     }
   }
+}
+
+function assertTocHref(body: unknown): string | null {
+  if (body === null || body === "") {
+    return null;
+  }
+  if (typeof body !== "string") {
+    throw new AnchorError("TOC href must be a string or null");
+  }
+  return body;
+}
+
+function assertTocItems(
+  toc: readonly TocItem[],
+): readonly TocItem[] {
+  return toc.map((item) => {
+    const href = assertTocHref(item.href);
+    if (item.subitems === undefined) {
+      return { ...item, href };
+    }
+    return { ...item, href, subitems: assertTocItems(item.subitems) };
+  });
 }
 
 /**

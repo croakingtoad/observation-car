@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
+import ePub from "epubjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Book, Rendition } from "epubjs";
 import type { Contents } from "epubjs";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import JSZip from "jszip";
 import {
   EpubKeyBridge,
   EpubNavigationTools,
   EpubSelectionTracker,
+  normalizeEpubTitle,
   type EpubKeyBridgeRendition,
   type EpubFlowControls,
 } from "./epubNavigationTools";
@@ -479,7 +484,7 @@ function makeBook(
     ready: Promise.resolve(),
     locations: {
       generate: vi.fn(async () => undefined),
-      locationFromCfi: vi.fn(() => 42),
+      locationFromCfi: vi.fn<(cfi: string) => unknown>(() => 42),
     },
     destroy: vi.fn(),
   };
@@ -493,9 +498,10 @@ function makeTools(
     hostDocument?: Document;
   } = {},
   onNewNote?: () => void,
+  existingBook?: Book | ReturnType<typeof makeBook>,
 ) {
   const viewerEl = (overrides.hostDocument ?? document).createElement("div");
-  const book = makeBook(overrides);
+  const book = existingBook ?? makeBook(overrides);
   const rendition = makeRendition();
   const beforeRendition = Object.fromEntries(
     ["relocated", "resized", "rendered", "selected"].map((event) => [
@@ -520,6 +526,100 @@ function makeTools(
     beforeRendition,
     stepperElement: viewerEl.querySelector(".epub-font-size-stepper"),
   };
+}
+
+async function buildNullTitleEpubFixture(): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures/minimal-epub2-empty-ncx");
+  const fixtureFiles = [
+    "mimetype",
+    "META-INF/container.xml",
+    "EPUB/package.opf",
+    "EPUB/toc.ncx",
+    "EPUB/chapter-1.xhtml",
+  ] as const;
+  const zip = new JSZip();
+
+  for (const fixturePath of fixtureFiles) {
+    let contents = await readFile(resolve(fixtureRoot, fixturePath), "utf8");
+    if (fixturePath === "mimetype") {
+      contents = contents.trimEnd();
+    } else if (fixturePath === "EPUB/package.opf") {
+      contents = contents.replace(
+        "<dc:title>Observation Car EPUB 2 Fixture</dc:title>",
+        "<dc:title><nested /></dc:title>",
+      );
+    } else if (fixturePath === "EPUB/toc.ncx") {
+      contents = contents.replace(
+        "<content />",
+        '<content src="chapter-1.xhtml" />',
+      );
+    }
+    zip.file(fixturePath, contents, { createFolders: false });
+  }
+
+  return zip.generateAsync({
+    compression: "STORE",
+    platform: "UNIX",
+    type: "arraybuffer",
+  });
+}
+
+async function buildEmptyTitleEpubFixture(): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures/minimal-epub-no-title");
+  const fixtureFiles = [
+    "mimetype",
+    "META-INF/container.xml",
+    "EPUB/package.opf",
+    "EPUB/toc.ncx",
+    "EPUB/chapter-1.xhtml",
+  ] as const;
+  const zip = new JSZip();
+
+  for (const fixturePath of fixtureFiles) {
+    let contents = await readFile(resolve(fixtureRoot, fixturePath), "utf8");
+    if (fixturePath === "mimetype") {
+      contents = contents.trimEnd();
+    } else if (fixturePath === "EPUB/toc.ncx") {
+      contents = contents.replace(
+        "<content />",
+        '<content src="chapter-1.xhtml" />',
+      );
+    }
+    zip.file(fixturePath, contents, { createFolders: false });
+  }
+
+  return zip.generateAsync({
+    compression: "STORE",
+    platform: "UNIX",
+    type: "arraybuffer",
+  });
+}
+
+async function buildLocationsEpubFixture(): Promise<ArrayBuffer> {
+  const fixtureRoot = resolve("src/model/fixtures/minimal-epub");
+  const fixtureFiles = [
+    "mimetype",
+    "META-INF/container.xml",
+    "EPUB/package.opf",
+    "EPUB/nav.xhtml",
+    "EPUB/chapter-1.xhtml",
+    "EPUB/chapter-2.xhtml",
+  ] as const;
+  const zip = new JSZip();
+
+  for (const fixturePath of fixtureFiles) {
+    let contents = await readFile(resolve(fixtureRoot, fixturePath), "utf8");
+    if (fixturePath === "mimetype") {
+      contents = contents.trimEnd();
+    }
+    zip.file(fixturePath, contents, { createFolders: false });
+  }
+
+  return zip.generateAsync({
+    compression: "STORE",
+    platform: "UNIX",
+    type: "arraybuffer",
+  });
 }
 
 function pointerEvent(
@@ -1620,6 +1720,256 @@ describe("EpubNavigationTools lifecycle coverage fences", () => {
     expect(new Set(removeEventListener.mock.calls.map(([type]) => type))).toEqual(
       new Set(["keydown", "selectionchange", "mousedown", ...PAGING_EVENT_TYPES]),
     );
+    tools.destroy();
+  });
+});
+
+
+describe("EpubNavigationTools defect 1: bookTitle escaped in wikilinks (LOCO-1031)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+  });
+
+  it("escapes bookTitle in TOC link copy when title contains pipes and closing brackets", async () => {
+    const unusualBook = makeBook({
+      metadata: Promise.resolve({ title: "A|B]] Title" }),
+      navigation: Promise.resolve({
+        toc: [{ href: "chap1.xhtml", label: "Chapter 1" }],
+      }),
+    });
+    const { viewerEl, rendition } = makeTools({}, undefined, unusualBook);
+    await waitForSelectionListener(rendition);
+    // render the TOC
+    rendition.fire("rendered", {}, renderedContents(childDocument(document)));
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-toc-copy")).not.toBeNull();
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    (viewerEl.querySelector(".epub-toc-copy") as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "[[library/book.epub#chap1.xhtml|A｜B］］ Title, Chapter 1]]",
+      );
+    });
+  });
+
+  it("escapes bookTitle in popup CFI link copy", async () => {
+    const unusualBook = makeBook({
+      metadata: Promise.resolve({ title: "A|B Title" }),
+    });
+    const { viewerEl, rendition } = makeTools({}, undefined, unusualBook);
+    await waitForSelectionListener(rendition);
+    rendition.fire("selected", SELECTION_CFI, selectionContents());
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-cfi-copy")).not.toBeNull();
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const copyBtn = viewerEl.querySelector<HTMLButtonElement>(".epub-cfi-copy")!;
+    copyBtn.click();
+    await vi.waitFor(() => expect(copyBtn.textContent).toBe("✔"));
+    expect(writeText).toHaveBeenCalledWith(
+      `[[library/book.epub#${SELECTION_CFI}|A｜B Title, loc. 42]]`,
+    );
+  });
+
+  it("escapes bookTitle in popup quote + link copy", async () => {
+    const unusualBook = makeBook({
+      metadata: Promise.resolve({ title: "]]]]" }),
+    });
+    const { viewerEl, rendition } = makeTools({}, undefined, unusualBook);
+    await waitForSelectionListener(rendition);
+    rendition.fire("selected", SELECTION_CFI, selectionContents());
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-cfi-quote")).not.toBeNull();
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const quoteBtn = viewerEl.querySelector<HTMLButtonElement>(".epub-cfi-quote")!;
+    quoteBtn.click();
+    await vi.waitFor(() => expect(quoteBtn.textContent).toBe("✔"));
+    expect(writeText).toHaveBeenCalledWith(
+      `> ${SELECTION_TEXT}
+-- [[library/book.epub#${SELECTION_CFI}|］］］］, loc. 42]]`,
+    );
+  });
+
+  it("uses a logged Untitled fallback for both consumers when live epub.js emits a null title", async () => {
+    const book = ePub(await buildNullTitleEpubFixture());
+    const liveLocations = book.locations;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      await book.opened;
+      const metadata = await book.loaded.metadata;
+      expect(metadata.title).toBeNull();
+      Object.defineProperty(book, "locations", {
+        configurable: true,
+        value: {
+          generate: vi.fn(async () => undefined),
+          locationFromCfi: vi.fn(() => 42),
+        },
+      });
+      const { viewerEl, rendition, tools } = makeTools({}, undefined, book);
+      await waitForSelectionListener(rendition);
+
+      const tocCopy = await waitForTocCopyButton(viewerEl);
+      tocCopy.click();
+      await vi.waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(
+          "[[library/book.epub#chapter-1.xhtml|Untitled, Chapter One]]",
+        );
+      });
+
+      writeText.mockClear();
+      rendition.fire("selected", SELECTION_CFI, selectionContents());
+      await vi.waitFor(() => {
+        expect(viewerEl.querySelector(".epub-cfi-popup.open")).not.toBeNull();
+      });
+      const selectionCopy = viewerEl.querySelector<HTMLButtonElement>(
+        ".epub-cfi-copy",
+      );
+      if (selectionCopy === null) {
+        throw new Error("Selection copy button was not rendered");
+      }
+      selectionCopy.click();
+      await vi.waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(
+          `[[library/book.epub#${SELECTION_CFI}|Untitled, loc. 42]]`,
+        );
+      });
+
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledWith(
+        '[Observation Car] EPUB metadata title is missing; using "Untitled".',
+      );
+      tools.destroy();
+    } finally {
+      warn.mockRestore();
+      Object.defineProperty(book, "locations", {
+        configurable: true,
+        value: liveLocations,
+      });
+      book.destroy();
+    }
+  });
+
+  it("normalizes an empty title to Untitled with a warning, matching the null-title fix (LOCO-1083)", async () => {
+    const book = ePub(await buildEmptyTitleEpubFixture());
+    try {
+      await book.opened;
+      const metadata = await book.loaded.metadata;
+      expect(metadata.title).toBe("");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = normalizeEpubTitle(metadata.title);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        '[Observation Car] EPUB metadata title is missing; using "Untitled".',
+      );
+      expect(result).toBe("Untitled");
+      warn.mockRestore();
+    } finally {
+      book.destroy();
+    }
+  });
+});
+
+describe("epub.js location boundary", () => {
+  it("copies a location number produced by a live epub.js locations table", async () => {
+    const book = ePub(await buildLocationsEpubFixture());
+    let tools: EpubNavigationTools | null = null;
+
+    try {
+      await book.opened;
+      const selectedCfi =
+        "epubcfi(/6/4[chapter-2-ref]!/4[chapter-two-body]/2[chapter-two-start],/1:0,/1:90)";
+
+      const harness = makeTools({}, undefined, book);
+      tools = harness.tools;
+      await waitForSelectionListener(harness.rendition);
+      harness.rendition.fire("selected", selectedCfi, selectionContents());
+      await vi.waitFor(() => {
+        expect(harness.viewerEl.querySelector(".epub-cfi-copy")).not.toBeNull();
+      });
+      const copyButton = harness.viewerEl.querySelector<HTMLButtonElement>(
+        ".epub-cfi-copy",
+      );
+      if (copyButton === null) {
+        throw new Error("Selection copy button was not rendered");
+      }
+      copyButton.click();
+
+      await vi.waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(
+          `[[library/book.epub#${selectedCfi}|Observation Car CFI Fixture, loc. 1]]`,
+        );
+      });
+      expect(book.locations.locationFromCfi(selectedCfi)).toBe(1);
+    } finally {
+      tools?.destroy();
+      book.destroy();
+    }
+  });
+
+  it("rejects a non-number location result before copying a wikilink", async () => {
+    const book = makeBook();
+    book.locations.locationFromCfi.mockReturnValue("not-a-location");
+    const { viewerEl, rendition, tools } = makeTools({}, undefined, book);
+    await waitForSelectionListener(rendition);
+    rendition.fire("selected", SELECTION_CFI, selectionContents());
+    await vi.waitFor(() => {
+      expect(viewerEl.querySelector(".epub-cfi-copy")).not.toBeNull();
+    });
+    const copyButton = viewerEl.querySelector<HTMLButtonElement>(
+      ".epub-cfi-copy",
+    );
+    if (copyButton === null) {
+      throw new Error("Selection copy button was not rendered");
+    }
+    copyButton.click();
+
+    await vi.waitFor(() => expect(copyButton.textContent).toBe("✖"));
+    expect(copyButton.title).toContain(
+      "EPUB location must be a number; received string",
+    );
+    expect(writeText).not.toHaveBeenCalled();
+    tools.destroy();
+  });
+});
+
+describe("EpubNavigationTools defect 2: sanitize(undefined) does not throw (LOCO-1031)", () => {
+  it("resolves a page turn on a TOC containing a hrefless entry", async () => {
+    const tocWithHrefless: Promise<{ toc: Array<{ href?: string | null | undefined; label: string }> }> = Promise.resolve({
+      toc: [
+        { href: "chap1.xhtml", label: "Chapter 1" },
+        { href: null, label: "Group heading" } as unknown as { href: string | null; label: string },
+        { href: "chap2.xhtml", label: "Chapter 2" },
+      ],
+    });
+    const book = makeBook({ navigation: tocWithHrefless as unknown as Promise<unknown> });
+    const { rendition, tools } = makeTools({}, undefined, book);
+    await waitForSelectionListener(rendition);
+    // Render a document so the key bridge attaches
+    const doc = childDocument(document);
+    rendition.fire("rendered", {}, renderedContents(doc));
+    const jump = (tools as unknown as { pageKeyJump: (key: string) => Promise<void> }).pageKeyJump("PageUp");
+    await expect(jump).resolves.toBeUndefined();
     tools.destroy();
   });
 });
