@@ -260,6 +260,30 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
   };
 });
 
+const registrationMocks = vi.hoisted(() => ({
+  registerBookloreCatalog: vi.fn(),
+  registerBookloreDownloads: vi.fn(async () => {}),
+  registerRedownloadFromBookloreCommand: vi.fn(),
+  registerOpenFromBooklore: vi.fn(),
+}));
+
+vi.mock("./booklore/catalogRegistration", () => ({
+  registerBookloreCatalog: registrationMocks.registerBookloreCatalog,
+}));
+
+vi.mock("./booklore/bookDownloadRegistration", () => ({
+  registerBookloreDownloads: registrationMocks.registerBookloreDownloads,
+}));
+
+vi.mock("./commands/redownloadFromBooklore", () => ({
+  registerRedownloadFromBookloreCommand:
+    registrationMocks.registerRedownloadFromBookloreCommand,
+}));
+
+vi.mock("./booklore/openBookloreRegistration", () => ({
+  registerOpenFromBooklore: registrationMocks.registerOpenFromBooklore,
+}));
+
 type Handler = (...args: unknown[]) => void;
 
 /**
@@ -733,6 +757,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
       getComputedStyle: window.getComputedStyle,
     });
     noticeMessages.length = 0;
+    vi.clearAllMocks();
     fake = makeFakeVault();
     addBookFile(SOURCE);
     plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
@@ -1184,6 +1209,21 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(JSON.stringify(saves[0])).not.toContain(
       JSON.stringify(noteContent).slice(1, -1),
     );
+  });
+
+  it("registers the Booklore catalog, downloads, and open modal on plugin load", () => {
+    expect(registrationMocks.registerBookloreCatalog).toHaveBeenCalledTimes(1);
+    expect(
+      registrationMocks.registerBookloreCatalog,
+    ).toHaveBeenCalledWith(plugin);
+    expect(registrationMocks.registerBookloreDownloads).toHaveBeenCalledTimes(1);
+    expect(
+      registrationMocks.registerBookloreDownloads,
+    ).toHaveBeenCalledWith(plugin);
+    expect(registrationMocks.registerOpenFromBooklore).toHaveBeenCalledTimes(1);
+    expect(
+      registrationMocks.registerOpenFromBooklore,
+    ).toHaveBeenCalledWith(plugin);
   });
 
   it("registers the mobile-capable command without writing on plugin load", async () => {
@@ -2942,5 +2982,86 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     expect(clear).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("registers the Booklore re-download command on plugin load", () => {
+    expect(
+      registrationMocks.registerRedownloadFromBookloreCommand,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      registrationMocks.registerRedownloadFromBookloreCommand,
+    ).toHaveBeenCalledWith(plugin);
+  });
+});
+
+describe("Booklore registrations from plugin onload", () => {
+  const MANIFEST: PluginManifest = {
+    id: "observation-car",
+    name: "Observation Car",
+    version: "0.1.0",
+    minAppVersion: "1.7.2",
+    description: "test manifest",
+    author: "test",
+    isDesktopOnly: false,
+  };
+
+  function makePlugin(storedData: unknown = {}): ObservationCarPlugin {
+    const fake = makeFakeVault();
+    const plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
+    Object.assign(plugin, {
+      loadData: async (): Promise<unknown> => storedData,
+    });
+    return plugin;
+  }
+
+  it("preserves the download index through an ordinary settings update", async () => {
+    const { DEFAULT_SETTINGS } = await import("./settings");
+    const downloadIndex = {
+      "urn:booklore:book:92": {
+        vaultPath: "Books/Surprised by Grace.epub",
+        updated: "2026-09-11T12:00:00Z",
+      },
+    };
+    const plugin = makePlugin(DEFAULT_SETTINGS);
+
+    await plugin.onload();
+    Object.assign(plugin.settings, { downloadIndex });
+    await plugin.updateSettings({ booksFolder: "Library" });
+
+    const savedData = (plugin as unknown as { savedData: unknown[] }).savedData;
+    expect(savedData.at(-1)).toMatchObject({
+      booksFolder: "Library",
+      downloadIndex,
+    });
+  });
+});
+
+describe("Booklore download registration ordering", () => {
+  const MANIFEST: PluginManifest = {
+    id: "observation-car",
+    name: "Observation Car",
+    version: "0.1.0",
+    minAppVersion: "1.7.2",
+    description: "test manifest",
+    author: "test",
+    isDesktopOnly: false,
+  };
+
+  it("constructs the book-note store before registering download services", async () => {
+    vi.clearAllMocks();
+    const fake = makeFakeVault();
+    const plugin = new ObservationCarPlugin(fake.app as App, MANIFEST);
+    registrationMocks.registerBookloreDownloads.mockImplementationOnce(
+      async () => {
+        const store = (
+          plugin as unknown as { bookNoteStore?: { get(path: string): unknown } }
+        ).bookNoteStore;
+        expect(store?.get).toBeTypeOf("function");
+      },
+    );
+
+    await plugin.onload();
+
+    expect(registrationMocks.registerBookloreDownloads).toHaveBeenCalledOnce();
   });
 });

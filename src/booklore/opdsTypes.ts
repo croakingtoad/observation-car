@@ -82,7 +82,7 @@ export interface OpdsEntry {
   categories: string[];
   /**
    * `<dc:publisher>` (Dublin Core, `http://purl.org/dc/terms/`); "" when
-   * absent. F5.6 seeds note frontmatter from it.
+   * absent. The catalog browser displays it in the entry details.
    */
   publisher: string;
   /**
