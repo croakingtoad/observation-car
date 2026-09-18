@@ -228,7 +228,7 @@ describe("EpubView malformed-book failure path", () => {
       const view = loaded.view;
       expect(loaded.error).toBeInstanceOf(Error);
       expect((loaded.error as Error).message).toMatch(
-        /EPUB did not finish loading/i,
+        /EPUB did not finish loading within 5 seconds/i,
       );
 
       expect(view.contentEl.querySelectorAll(".epub-load-error")).toHaveLength(
@@ -242,7 +242,10 @@ describe("EpubView malformed-book failure path", () => {
       ).toHaveLength(0);
       expect(
         view.contentEl.querySelector(".epub-load-error")?.textContent,
-      ).toBe(
+      ).toMatch(
+        /^This EPUB could not be opened: the EPUB did not finish loading within 5 seconds$/,
+      );
+      expect(view.contentEl.querySelector(".epub-load-error")?.textContent).toBe(
         `This EPUB could not be opened: ${(loaded.error as Error).message}`,
       );
 
