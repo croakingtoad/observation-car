@@ -29,7 +29,7 @@ const FRAGMENT_OPEN_TIMEOUT_MS = 5_000;
 
 export const EPUB_DISPLAY_TIMEOUT_MS = 5000;
 
-function usableCfi(cfi: string | null | undefined): string | null {
+export function usableCfi(cfi: string | null | undefined): string | null {
   return typeof cfi === "string" && cfi.length > 0 ? cfi : null;
 }
 
