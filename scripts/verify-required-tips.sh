@@ -21,6 +21,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     failed=1
     continue
   fi
+  if ! git cat-file -e "$sha^{commit}"; then
+    echo "cannot verify — object not present, fetch full history: $sha" >&2
+    (( failed == 1 )) || failed=2
+    continue
+  fi
   if ! git merge-base --is-ancestor "$sha" "$HEAD_REF" 2>/dev/null; then
     echo "error: required tip is missing from $HEAD_REF: $sha" >&2
     failed=1
@@ -28,7 +33,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "$REQUIRED_TIPS_FILE"
 
 if (( failed )); then
-  exit 1
+  exit "$failed"
 fi
 
 echo "All required tips are ancestors of $HEAD_REF."
