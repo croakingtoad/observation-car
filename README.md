@@ -84,7 +84,7 @@ Text before the first anchor heading is free note preamble; it belongs to no sec
 
 ### Anchors
 
-An **anchor** pins a section of the note to a location in the book. It is an ATX heading (the `##` style — setext `Title ===` headings are not recognized) at the anchor heading level, **H2 by default**, configurable from 1 to 6 in the plugin settings, whose text contains a wikilink to the note's `source` file **with a non-empty fragment**. The match against `source` is case-insensitive.
+An **anchor** pins a section of the note to a location in the book. It is an ATX heading (the `##` style — setext `Title ===` headings are not recognized) at the anchor heading level, **H2 by default**, configurable from 1 to 6 in the plugin settings, whose text contains a wikilink to the note's `source` file **with a non-empty fragment**. The plugin matches anchors by the file each link resolves to, not just the spelling of its path; the case-insensitive path-text comparison is the parser's fallback when no vault resolver is available.
 
 The link may sit anywhere in the heading, and the text around it (including the `|alias`) is the section's display title. If a heading carries several links to the source, the first is used.
 
