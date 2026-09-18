@@ -1,0 +1,5 @@
+# Required commit tips: one full 40-hex SHA per non-comment line.
+# `# <tip> — <what it carries> — <owner>` is the supported comment form.
+# Append-only: a tip may be removed only after proving it is an ancestor of origin/main.
+0ecae4bca2bc70692356cacac9770c25945f3762 # E002 audited head: timer restore — LOCO-1165
+c535ce975e82aba9481a85bb714f65eab2c2a603 # E002 reconciled into merged M1 main — LOCO-1165
