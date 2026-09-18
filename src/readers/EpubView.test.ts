@@ -1000,7 +1000,6 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     await view.onClose();
     vi.useRealTimers();
   });
-
 });
 
 describe("EpubView forwarded-keystroke leaf attribution", () => {
