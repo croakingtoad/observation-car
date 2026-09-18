@@ -134,7 +134,7 @@ The focus-mode behaviour itself (folding sections outside the current chapter) i
 ### No hidden state
 
 - There is no separate compact view, sidecar file, or render cache: the book note *is* the compact/reading view (PRD §5.3). Close the book and the file reads top to bottom with no gaps.
-- The plugin's `data.json` (`.obsidian/plugins/observation-car/data.json`) holds **settings only** — including the Booklore OPDS credentials, which are stored there in plaintext (the settings tab shows a warning) — and, once Booklore support ships, a small download index mapping `booklore_id` to vault path with etag/updated. Note content never lives there (PRD §5.4).
+- The plugin's `data.json` (`.obsidian/plugins/observation-car/data.json`) holds **settings only** — including the Booklore OPDS credentials, which are stored there in plaintext (the settings tab shows a warning) — plus reader bookkeeping: each EPUB's last canonical CFI and its explicit book-CSS opt-in, keyed by vault path. If Booklore support ships, a small download index mapping `booklore_id` to vault path with etag/updated will also live there. Note content never lives there (PRD §5.4).
 
 ### If you uninstall the plugin
 
