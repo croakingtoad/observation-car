@@ -39,6 +39,8 @@ import type { EpubFlowMode } from "../settings";
 import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 
 const EPUBCFI_WRAPPER = "epubcfi(";
+const LOCATION_CHARACTERS_PER_BREAK = 1_000;
+const COPY_FEEDBACK_DURATION_MS = 1_000;
 
 interface EpubRenderedView {
   contents?: unknown;
@@ -164,6 +166,7 @@ export class EpubKeyBridge {
     if (isCopy || isInteractiveTarget || event.defaultPrevented) {
       return;
     }
+    this.beforeForward();
     this.forwardToHost(event);
   };
 
@@ -173,6 +176,7 @@ export class EpubKeyBridge {
     private readonly pageKeyJump: (
       key: "PageUp" | "PageDown",
     ) => void | Promise<void>,
+    private readonly beforeForward: () => void = () => undefined,
   ) {
     this.rendition.on("rendered", this.onRendered);
   }
@@ -762,6 +766,7 @@ export class EpubNavigationTools {
     private readonly selectionTracker: EpubSelectionTracker,
     private readonly flow?: EpubFlowControls,
     private readonly actions?: EpubReaderActions,
+    activateView: () => void = () => undefined,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
     this.fontSizeStepper = new EpubFontSizeStepper(viewerEl, bookPath, rendition);
@@ -776,6 +781,7 @@ export class EpubNavigationTools {
       rendition,
       viewerEl.ownerDocument,
       (key) => this.pageKeyJump(key),
+      activateView,
     );
     this.bookTitle = this.book.loaded.metadata
       .then((metadata) => metadata.title)
@@ -1210,7 +1216,7 @@ export class EpubNavigationTools {
     if (this.locations === null) {
       this.locations = (async () => {
         await this.book.ready;
-        await this.book.locations.generate(1000);
+        await this.book.locations.generate(LOCATION_CHARACTERS_PER_BREAK);
         return this.book.locations;
       })();
     }
@@ -1230,7 +1236,7 @@ export class EpubNavigationTools {
     btn.textContent = "✔";
     setTimeout(() => {
       btn.textContent = original;
-    }, 1000);
+    }, COPY_FEEDBACK_DURATION_MS);
   }
 
   /**
@@ -1247,7 +1253,7 @@ export class EpubNavigationTools {
     setTimeout(() => {
       btn.textContent = originalText;
       btn.title = originalTitle;
-    }, 1000);
+    }, COPY_FEEDBACK_DURATION_MS);
   }
 
   /**

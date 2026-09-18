@@ -15,6 +15,9 @@ describe("F2.4 plugin data", () => {
         "Library/Not-A-Cfi.epub": "chapter.xhtml",
         "Library/Not-A-String.epub": 42,
       },
+      epubStylesheetModes: {
+        "Library/Styled.epub": "book",
+      },
     });
 
     expect(loaded.settings.booksFolder).toBe("Library/Books");
@@ -22,27 +25,50 @@ describe("F2.4 plugin data", () => {
       "Library/One.epub": FIRST_CFI,
       "Library/Two.epub": SECOND_CFI,
     });
+    expect(loaded.epubStylesheetModes).toEqual({
+      "Library/Styled.epub": "book",
+    });
   });
 
   it("falls back safely when stored plugin data is absent or malformed", () => {
     expect(loadPluginData(undefined)).toEqual({
       settings: DEFAULT_SETTINGS,
       epubLastLocations: {},
+      epubStylesheetModes: {},
     });
     expect(loadPluginData({ epubLastLocations: [] }).epubLastLocations).toEqual({});
+    expect(
+      loadPluginData({
+        epubStylesheetModes: {
+          "Books/Book.epub": "book",
+          "Books/Default.epub": "theme",
+          "Books/Invalid.epub": "sepia",
+          "": "book",
+        },
+      }).epubStylesheetModes,
+    ).toEqual({
+      "Books/Book.epub": "book",
+    });
   });
 
-  it("serializes only settings and the per-book location map", () => {
-    const serialized = serializePluginData(DEFAULT_SETTINGS, {
-      "Books/One.epub": FIRST_CFI,
-    });
+  it("serializes settings, locations, and per-book stylesheet modes", () => {
+    const serialized = serializePluginData(
+      DEFAULT_SETTINGS,
+      { "Books/One.epub": FIRST_CFI },
+      { "Books/Styled.epub": "book" },
+    );
 
     expect(serialized).toEqual({
       ...DEFAULT_SETTINGS,
       epubLastLocations: { "Books/One.epub": FIRST_CFI },
+      epubStylesheetModes: { "Books/Styled.epub": "book" },
     });
     expect(Object.keys(serialized).sort()).toEqual(
-      [...Object.keys(DEFAULT_SETTINGS), "epubLastLocations"].sort(),
+      [
+        ...Object.keys(DEFAULT_SETTINGS),
+        "epubLastLocations",
+        "epubStylesheetModes",
+      ].sort(),
     );
   });
 });

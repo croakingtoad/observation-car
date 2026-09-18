@@ -169,6 +169,8 @@ function makeHost(): EpubViewHost {
     },
     getLastEpubLocation: () => null,
     rememberEpubLocation: async () => undefined,
+    getEpubStylesheetMode: () => "theme",
+    setEpubStylesheetMode: async () => undefined,
   };
   return host;
 }

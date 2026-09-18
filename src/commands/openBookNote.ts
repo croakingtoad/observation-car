@@ -66,15 +66,10 @@ async function openBookNoteBesideReader(
         ? pairedFile
         : await getOrCreateBookNote(plugin, reader.file);
 
-    const noteLeaf = plugin.app.workspace.createLeafBySplit(
-      readerLeaf,
-      "vertical",
-    );
-    if (noteLeaf.getRoot() !== plugin.app.workspace.rootSplit) {
-      noteLeaf.detach();
-      throw new Error("The book-note split was created outside the main area");
-    }
-    await noteLeaf.openFile(note);
+    // The note pane is resolved once, centrally: revealed where it is
+    // already open, else a tab in the note group, and only split off the
+    // reader when no note pane exists yet (LOCO-430).
+    await plugin.openBookNotePane(readerLeaf, note);
   } catch (error) {
     console.error("[observation-car] could not open book note", error);
     new Notice("Could not open book note. Check the developer console for details.");

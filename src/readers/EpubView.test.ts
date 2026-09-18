@@ -208,6 +208,7 @@ function file(path: string): TFile {
 }
 
 function makeHost(): EpubViewHost {
+  const stylesheetModes: Record<string, "theme" | "book"> = {};
   const host: EpubViewHost = {
     settings: { ...DEFAULT_SETTINGS },
     updateSettings: async (patch) => {
@@ -215,6 +216,14 @@ function makeHost(): EpubViewHost {
     },
     getLastEpubLocation: () => null,
     rememberEpubLocation: async () => undefined,
+    getEpubStylesheetMode: (path) => stylesheetModes[path] ?? "theme",
+    setEpubStylesheetMode: async (path, mode) => {
+      if (mode === "theme") {
+        delete stylesheetModes[path];
+      } else {
+        stylesheetModes[path] = mode;
+      }
+    },
   };
   return host;
 }
@@ -253,25 +262,169 @@ afterEach(() => {
 });
 
 describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
+  it("re-renders a stylesheet toggle at the current CFI", async () => {
+    const host = makeHost();
+    const view = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+      host,
+    );
+    const openedFile = file("Books/Styled.epub");
+    const cfi = "epubcfi(/6/14!/4/2/12:0)";
+    await view.onLoadFile(openedFile);
+    FakeRendition.instances[0].location = { start: { cfi } };
+
+    await view.toggleBookStylesheet();
+
+    expect(host.getEpubStylesheetMode(openedFile.path)).toBe("book");
+    expect(FakeRendition.instances).toHaveLength(2);
+    expect(FakeRendition.instances[1].display).toHaveBeenNthCalledWith(1);
+    expect(FakeRendition.instances[1].display).toHaveBeenNthCalledWith(2, cfi);
+    expect(
+      (view as unknown as { renderedStylesheetMode: string }).renderedStylesheetMode,
+    ).toBe("book");
+    await view.onClose();
+  });
+
+  it("lets two open books render with independent stylesheet modes", async () => {
+    const modes: Record<string, "theme" | "book"> = {
+      "Books/Book-Css.epub": "book",
+    };
+    const host: EpubViewHost = {
+      ...makeHost(),
+      getEpubStylesheetMode: (path) => modes[path] ?? "theme",
+      setEpubStylesheetMode: async (path, mode) => {
+        if (mode === "theme") delete modes[path];
+        else modes[path] = mode;
+      },
+    };
+    const themedView = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])), host);
+    const bookView = makeView(vi.fn().mockResolvedValue(new Uint8Array([2])), host);
+
+    await themedView.onLoadFile(file("Books/Themed.epub"));
+    await bookView.onLoadFile(file("Books/Book-Css.epub"));
+
+    expect(
+      (themedView as unknown as { renderedStylesheetMode: string }).renderedStylesheetMode,
+    ).toBe("theme");
+    expect(
+      (bookView as unknown as { renderedStylesheetMode: string }).renderedStylesheetMode,
+    ).toBe("book");
+    expect(
+      FakeBook.instances[1].rendition.hooks.content.register.mock.calls.length,
+    ).toBe(
+      FakeBook.instances[0].rendition.hooks.content.register.mock.calls.length + 1,
+    );
+    await themedView.onClose();
+    await bookView.onClose();
+  });
+
+  it("deregisters stylesheet hooks before destroying their book", async () => {
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    await view.onLoadFile(file("Books/Teardown.epub"));
+    const book = FakeBook.instances[0];
+
+    await view.onClose();
+
+    const deregisterOrders = book.spine.hooks.content.deregister.mock
+      .invocationCallOrder;
+    expect(deregisterOrders.length).toBeGreaterThan(0);
+    expect(Math.max(...deregisterOrders)).toBeLessThan(
+      book.destroy.mock.invocationCallOrder[0],
+    );
+  });
+
+  // LOCO-490 W3: serialises two back-to-back toggles (lost-update guard).
+  // Without readerChange, both toggles read the same previousMode and both flip to
+  // "book" — the second press does not return the book to theme mode.  Replacement-
+  // book safety on this path is owned by renderGeneration (not readerChange) and is
+  // already pinned by the "does not redisplay book A's CFI" and "keeps book B's saved
+  // CFI when a superseded flow toggle settles" tests above.
+  it("serialises two back-to-back stylesheet toggles so the second sees the first's mode", async () => {
+    const host = makeHost();
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])), host);
+    await view.onLoadFile(file("Books/Styled.epub"));
+
+    const first = view.toggleBookStylesheet();
+    const second = view.toggleBookStylesheet();
+
+    await first;
+    await second;
+
+    // With the guard the second toggle serialises behind the first,
+    // sees "book", and flips back to "theme" — the correct result of
+    // two back-to-back toggles.  Without the guard both see "theme"
+    // and both flip to "book", leaving the net mode wrongly "book".
+    expect(
+      (view as unknown as { renderedStylesheetMode: string }).renderedStylesheetMode,
+    ).toBe("theme");
+    // Three renditions: initial load, first toggle's render, second toggle's render.
+    expect(FakeRendition.instances).toHaveLength(3);
+  });
+
+  it("serializes stylesheet and flow changes behind an in-flight change", async () => {
+    const host = makeHost();
+    const setStylesheetMode = vi.spyOn(host, "setEpubStylesheetMode");
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])), host);
+    await view.onLoadFile(file("Books/Queued.epub"));
+
+    const firstDisplay = deferred();
+    state.currentDisplayGate = firstDisplay.promise;
+    const firstFlowChange = view.setFlowMode("scrolled");
+    await vi.waitFor(() => {
+      expect(FakeRendition.instances[1].display).toHaveBeenCalledOnce();
+    });
+
+    const firstStylesheetChange = view.toggleBookStylesheet();
+    const secondStylesheetChange = view.toggleBookStylesheet();
+    const secondFlowChange = view.setFlowMode("paginated");
+    state.currentDisplayGate = null;
+    firstDisplay.resolve();
+    await Promise.all([
+      firstFlowChange,
+      firstStylesheetChange,
+      secondStylesheetChange,
+      secondFlowChange,
+    ]);
+
+    expect(setStylesheetMode.mock.calls.map(([, mode]) => mode)).toStrictEqual([
+      "book",
+      "theme",
+    ]);
+    const { renderedFlowMode } = view as unknown as {
+      renderedFlowMode: "paginated" | "scrolled";
+    };
+    expect(host.settings.epubFlowMode).toBe(renderedFlowMode);
+    expect(renderedFlowMode).toBe("paginated");
+    await view.onClose();
+  });
+
   it("routes the reader toolbar action through the exact reader leaf", async () => {
-    const leaf = {} as WorkspaceLeaf;
+    const leafA = { probe: "A" } as unknown as WorkspaceLeaf;
+    const leafB = { probe: "B" } as unknown as WorkspaceLeaf;
     const newNoteHereFromReader = vi.fn();
     const host: EpubViewHost = {
       ...makeHost(),
       newNoteHereFromReader,
     };
-    const view = new EpubView(leaf, host);
-    Object.assign(view, {
+    const viewA = new EpubView(leafA, host);
+    Object.assign(viewA, {
       app: { vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([1])) } },
     });
-    await view.onLoadFile(file("library/a.epub"));
+    const viewB = new EpubView(leafB, host);
+    Object.assign(viewB, {
+      app: { vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([2])) } },
+    });
+    await viewA.onLoadFile(file("library/a.epub"));
+    await viewB.onLoadFile(file("library/b.epub"));
 
-    view.contentEl
+    viewA.contentEl
       .querySelector<HTMLButtonElement>(".epub-new-note-button")
       ?.click();
 
-    expect(newNoteHereFromReader).toHaveBeenCalledWith(leaf);
-    await view.onClose();
+    expect(newNoteHereFromReader).toHaveBeenCalledTimes(1);
+    expect(newNoteHereFromReader).toHaveBeenCalledWith(leafA);
+    await viewA.onClose();
+    await viewB.onClose();
   });
 
   it("reopens a book at its recorded CFI through openAtFragment", async () => {
@@ -752,6 +905,31 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     vi.useRealTimers();
   });
 
+  it("a render whose display never settles times out, disposes, and rethrows", async () => {
+    vi.useFakeTimers();
+    const displayGate = deferred();
+    state.currentDisplayGate = displayGate.promise;
+    const view = makeView(vi.fn().mockResolvedValue(new Uint8Array([1])));
+    let rejection: unknown;
+
+    void view.onLoadFile(file("library/corrupt.epub")).catch((error: unknown) => {
+      rejection = error;
+    });
+    await vi.advanceTimersByTimeAsync(EPUB_DISPLAY_TIMEOUT_MS);
+
+    expect(rejection).toEqual(
+      new Error(
+        `the EPUB did not finish loading within ${
+          EPUB_DISPLAY_TIMEOUT_MS / 1000
+        } seconds`,
+      ),
+    );
+    expect(FakeBook.instances).toHaveLength(1);
+    expect(FakeBook.instances[0].destroyed).toBe(true);
+    expect(FakeBook.instances[0].rendition.destroyed).toBe(true);
+    expect(view.contentEl.querySelectorAll(".epub-viewer")).toHaveLength(0);
+  });
+
   it("a failed readBinary propagates without leaving a reader", async () => {
     const readBinary = vi.fn().mockRejectedValue(new Error("io failure"));
     const view = makeView(readBinary);
@@ -816,6 +994,77 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     vi.useRealTimers();
   });
 
+});
+
+describe("EpubView forwarded-keystroke leaf attribution", () => {
+  it("activates the leaf that owns a chord forwarded from its iframe", async () => {
+    const bookA = file("Books/A.epub");
+    const bookB = file("Books/B.epub");
+    const leafA = { probe: "A" } as unknown as WorkspaceLeaf;
+    const leafB = { probe: "B" } as unknown as WorkspaceLeaf;
+    const setActiveLeaf = vi.fn();
+    const viewA = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([1])),
+    );
+    Object.assign(viewA, {
+      app: {
+        vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([1])) },
+        workspace: { setActiveLeaf },
+      },
+    });
+    Object.defineProperty(viewA, "leaf", {
+      configurable: true,
+      get: () => leafA,
+    });
+    const viewB = makeView(
+      vi.fn().mockResolvedValue(new Uint8Array([2])),
+    );
+    Object.assign(viewB, {
+      app: {
+        vault: { readBinary: vi.fn().mockResolvedValue(new Uint8Array([2])) },
+        workspace: { setActiveLeaf },
+      },
+    });
+    Object.defineProperty(viewB, "leaf", {
+      configurable: true,
+      get: () => leafB,
+    });
+
+    await viewA.onLoadFile(bookA);
+    await viewB.onLoadFile(bookB);
+    expect(viewA.file).toBe(bookA);
+    expect(viewB.file).toBe(bookB);
+
+    const hostFrame = document.createElement("iframe");
+    document.body.append(hostFrame);
+    const hostDocument = hostFrame.contentDocument;
+    if (hostDocument === null) throw new Error("test host frame has no document");
+    const readerFrame = hostDocument.createElement("iframe");
+    hostDocument.body.append(readerFrame);
+    const bookADocument = readerFrame.contentDocument;
+    if (bookADocument === null) throw new Error("test book frame has no document");
+    const renderedA = FakeRendition.instances[0];
+    const contentsA = {
+      contents: {},
+      document: bookADocument,
+      iframe: readerFrame,
+      window: readerFrame.contentWindow,
+    };
+    renderedA.emit("rendered", {}, contentsA);
+    const event = new KeyboardEvent("keydown", {
+      key: "j",
+      code: "KeyJ",
+      bubbles: true,
+      cancelable: true,
+    });
+    bookADocument.dispatchEvent(event);
+
+    expect(setActiveLeaf).toHaveBeenCalledTimes(1);
+    expect(setActiveLeaf).toHaveBeenCalledWith(leafA, { focus: false });
+
+    await viewA.onClose();
+    await viewB.onClose();
+  });
 });
 
 function relocatedAt(cfi: string, href: string) {

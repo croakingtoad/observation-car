@@ -21,6 +21,7 @@ import ObservationCarPlugin from "./main";
 import { DEFAULT_SETTINGS } from "./settings";
 import { ReaderRegistry } from "./sync/ReaderRegistry";
 import { FocusModeController } from "./sync/focusMode";
+import { isFocusModeDecorationEnabled } from "./sync/focusModeDecoration";
 import { currentSectionViewPlugin } from "./sync/currentSectionDecoration";
 import {
   DEFAULT_SCROLL_DEBOUNCE_MS,
@@ -182,6 +183,7 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
     file: TFile | null = null;
     leaf: WorkspaceLeaf;
     openedFragments: string[] = [];
+    stylesheetToggleCount = 0;
     private readonly listeners = new Set<
       (location: LocationChanged) => void
     >();
@@ -251,6 +253,9 @@ vi.mock("./readers/EpubView", async (importOriginal) => {
       void this.rendition;
       await actual.EpubView.prototype.openAtFragment.call(this, fragment);
     }
+    async toggleBookStylesheet(): Promise<void> {
+      this.stylesheetToggleCount += 1;
+    }
     },
   };
 });
@@ -295,22 +300,35 @@ interface FakeVault {
   rootSplit: object;
   sidebarRoot: object;
   createdSplitLeaves: FakeLeaf[];
+  createdTabLeaves: { leaf: FakeLeaf; group: FakeTabGroup; index: number }[];
   runtime: {
     activeView: unknown;
+    activeLeaf: FakeLeaf | null;
+    throwOnSetActiveLeaf: boolean;
+    setActiveLeafFailuresRemaining: number;
     mostRecentMainLeaf: FakeLeaf | null;
+    nextOpenFileGate: Promise<void> | null;
     splitRootOverride: object | null;
     useMarkdownLinks: boolean;
   };
 }
 
+/** A tab group, matching Obsidian's `leaf.parent` with its `children`. */
+interface FakeTabGroup {
+  children: FakeLeaf[];
+}
+
 interface FakeLeaf {
   view: unknown;
   area: "main" | "sidebar";
+  parent: FakeTabGroup;
   splitDirection?: "vertical" | "horizontal";
   splitFrom?: FakeLeaf;
   detached: boolean;
   detach(): void;
   getRoot(): object;
+  getViewState(): { type: string };
+  loadIfDeferred(): Promise<void>;
   openFile(file: TFile): Promise<void>;
 }
 
@@ -333,9 +351,18 @@ function makeFakeVault(): FakeVault {
   const rootSplit = {};
   const sidebarRoot = {};
   const createdSplitLeaves: FakeLeaf[] = [];
+  const createdTabLeaves: {
+    leaf: FakeLeaf;
+    group: FakeTabGroup;
+    index: number;
+  }[] = [];
   const runtime = {
     activeView: null as unknown,
+    activeLeaf: null as FakeLeaf | null,
+    throwOnSetActiveLeaf: false,
+    setActiveLeafFailuresRemaining: 0,
     mostRecentMainLeaf: null as FakeLeaf | null,
+    nextOpenFileGate: null as Promise<void> | null,
     splitRootOverride: null as object | null,
     useMarkdownLinks: false,
   };
@@ -344,20 +371,49 @@ function makeFakeVault(): FakeVault {
     area: "main" | "sidebar",
     root: object,
     view: unknown = null,
+    group: FakeTabGroup = { children: [] },
   ): FakeLeaf {
     const leaf: FakeLeaf = {
       view,
       area,
+      parent: group,
       detached: false,
       detach: () => {
         leaf.detached = true;
+        const index = leaf.parent.children.indexOf(leaf);
+        if (index !== -1) leaf.parent.children.splice(index, 1);
+        leaves.delete(leaf);
       },
       getRoot: () => root,
       openFile: async (file: TFile): Promise<void> => {
         openedFiles.push(file.path);
+        const gate = runtime.nextOpenFileGate;
+        runtime.nextOpenFileGate = null;
+        if (gate !== null) await gate;
         workspaceHandlers.get("file-open")?.(file);
+        if (
+          typeof leaf.view === "object" &&
+          leaf.view !== null &&
+          "file" in leaf.view
+        ) {
+          (leaf.view as { file: TFile | null }).file = file;
+        } else {
+          // Obsidian gives an opened leaf a view for the file's type, so
+          // the double does too — otherwise a leaf that has opened a note
+          // would report no file at all and the reading layout could not
+          // recognise the note pane.
+          leaf.view = { file, getViewType: (): string => "markdown" };
+        }
       },
+      // Obsidian derives the state's type from the leaf's view, so the
+      // double does too: the reading layout asks a leaf whether it is a
+      // reader this way, and `createBookNote` filters on it.
+      getViewState: (): { type: string } => ({
+        type: fakeViewType(leaf.view) ?? "markdown",
+      }),
+      loadIfDeferred: async (): Promise<void> => {},
     };
+    group.children.push(leaf);
     return leaf;
   }
 
@@ -424,9 +480,15 @@ function makeFakeVault(): FakeVault {
       openLinkText: vi.fn(),
       getActiveViewOfType: (): unknown => runtime.activeView,
       getMostRecentLeaf: (root?: object): FakeLeaf | null =>
-        root === rootSplit ? runtime.mostRecentMainLeaf : null,
+        root === undefined || root === rootSplit
+          ? runtime.mostRecentMainLeaf
+          : null,
       on: (name: string, callback: Handler): { name: string } => {
-        workspaceHandlers.set(name, callback);
+        const previous = workspaceHandlers.get(name);
+        workspaceHandlers.set(name, (...args: unknown[]) => {
+          previous?.(...args);
+          callback(...args);
+        });
         return { name };
       },
       getLeavesOfType: (viewType: string): unknown[] => {
@@ -449,11 +511,59 @@ function makeFakeVault(): FakeVault {
           );
         });
       },
-      getLeaf: (): { openFile: (file: TFile) => Promise<void> } => ({
-        openFile: async (file: TFile): Promise<void> => {
-          openedFiles.push(file.path);
-        },
-      }),
+      // Obsidian puts a `"tab"` leaf in the active leaf's own group and a
+      // `"split"` leaf in a new group; the reading layout depends on that
+      // difference, so the double reproduces it.
+      getLeaf: (newLeaf?: "split" | "tab"): FakeLeaf => {
+        const group =
+          newLeaf === "tab" && runtime.activeLeaf !== null
+            ? runtime.activeLeaf.parent
+            : { children: [] };
+        const leaf = makeLeaf("main", rootSplit, null, group);
+        leaf.view = {
+          file: null,
+          getViewType: (): string => "markdown",
+        };
+        if (newLeaf === "split") createdSplitLeaves.push(leaf);
+        if (newLeaf === "tab") {
+          createdTabLeaves.push({ leaf, group, index: group.children.length });
+        }
+        leaves.add(leaf);
+        return leaf;
+      },
+      setActiveLeaf: (leaf: FakeLeaf): void => {
+        if (
+          runtime.throwOnSetActiveLeaf ||
+          runtime.setActiveLeafFailuresRemaining > 0
+        ) {
+          runtime.setActiveLeafFailuresRemaining = Math.max(
+            0,
+            runtime.setActiveLeafFailuresRemaining - 1,
+          );
+          throw new Error("setActiveLeaf refused by the test");
+        }
+        runtime.activeLeaf = leaf;
+      },
+      // Obsidian types this for a `WorkspaceSplit`; passing the
+      // `WorkspaceTabs` that `leaf.parent` yields corrupted the workspace
+      // tree and crashed Obsidian's own palette-close path with
+      // `n.instanceOf is not a function`. Nothing in the plugin may call
+      // it again, so the double refuses rather than modelling it.
+      createLeafInParent: (): never => {
+        throw new Error(
+          "createLeafInParent is not safe for adding a tab to a group",
+        );
+      },
+      revealLeaf: async (leaf: FakeLeaf): Promise<void> => {
+        runtime.mostRecentMainLeaf = leaf;
+      },
+      iterateRootLeaves: (callback: (leaf: FakeLeaf) => void): void => {
+        for (const leaf of [...leaves]) {
+          if (isFakeLeaf(leaf) && leaf.area === "main" && !leaf.detached) {
+            callback(leaf);
+          }
+        }
+      },
       createLeafBySplit: (
         sourceLeaf: FakeLeaf,
         direction: "vertical" | "horizontal",
@@ -466,6 +576,7 @@ function makeFakeVault(): FakeVault {
         leaf.splitDirection = direction;
         leaf.splitFrom = sourceLeaf;
         createdSplitLeaves.push(leaf);
+        leaves.add(leaf);
         return leaf;
       },
     },
@@ -493,8 +604,44 @@ function makeFakeVault(): FakeVault {
     rootSplit,
     sidebarRoot,
     createdSplitLeaves,
+    createdTabLeaves,
     runtime,
   };
+}
+
+/** Vault path a fake leaf shows, mirroring `main.ts`'s own read. */
+function leafPath(leaf: FakeLeaf): string | null {
+  const view: unknown = leaf.view;
+  if (typeof view === "object" && view !== null && "file" in view) {
+    const file: unknown = view.file;
+    if (typeof file === "object" && file !== null && "path" in file) {
+      if (typeof file.path === "string") return file.path;
+    }
+  }
+  return null;
+}
+
+function isFakeLeaf(value: unknown): value is FakeLeaf {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "area" in value &&
+    "parent" in value
+  );
+}
+
+/** The view type a fake view reports, matching Obsidian's `getViewType`. */
+function fakeViewType(view: unknown): string | null {
+  if (
+    typeof view === "object" &&
+    view !== null &&
+    "getViewType" in view &&
+    typeof view.getViewType === "function"
+  ) {
+    const type: unknown = view.getViewType();
+    return typeof type === "string" ? type : null;
+  }
+  return null;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -560,11 +707,30 @@ describe("plugin wiring (substituted obsidian module)", () => {
   let fake: FakeVault;
   let plugin: ObservationCarPlugin;
 
+  function makeMarkdownLeaf(noteFile: TFile, editor: unknown): FakeLeaf {
+    const markdownLeaf: FakeLeaf = {
+      view: new MarkdownViewDouble(noteFile, editor),
+      area: "main",
+      parent: { children: [] },
+      detached: false,
+      detach: () => {
+        markdownLeaf.detached = true;
+      },
+      getRoot: () => fake.rootSplit,
+      openFile: async (): Promise<void> => {},
+      getViewState: (): { type: string } => ({ type: "markdown" }),
+      loadIfDeferred: async (): Promise<void> => {},
+    };
+    markdownLeaf.parent.children.push(markdownLeaf);
+    return markdownLeaf;
+  }
+
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.stubGlobal("window", {
       setTimeout: globalThis.setTimeout,
       clearTimeout: globalThis.clearTimeout,
+      getComputedStyle: window.getComputedStyle,
     });
     noticeMessages.length = 0;
     fake = makeFakeVault();
@@ -636,6 +802,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
   function openEpubReader(
     book: TFile,
     area: "main" | "sidebar" = "main",
+    options: { deferredView?: boolean; group?: FakeTabGroup } = {},
   ): {
     leaf: FakeLeaf;
     view: {
@@ -644,6 +811,8 @@ describe("plugin wiring (substituted obsidian module)", () => {
       emitLocation(fragment: string): void;
       openAtFragment(fragment: string): Promise<void>;
       openedFragments: string[];
+      toggleBookStylesheet(): Promise<void>;
+      stylesheetToggleCount: number;
     };
   } {
     const factory = fake.registeredViews.get("observation-car-epub");
@@ -652,6 +821,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const leaf: FakeLeaf = {
       view: null,
       area,
+      parent: options.group ?? { children: [] },
       detached: false,
       detach: () => {
         leaf.detached = true;
@@ -660,19 +830,35 @@ describe("plugin wiring (substituted obsidian module)", () => {
       openFile: async (file: TFile): Promise<void> => {
         fake.openedFiles.push(file.path);
       },
+      getViewState: (): { type: string } => ({
+        type: "observation-car-epub",
+      }),
+      loadIfDeferred: async (): Promise<void> => {},
     };
+    leaf.parent.children.push(leaf);
     const view = factory(leaf) as {
       file: TFile | null;
       getViewType(): string;
       emitLocation(fragment: string): void;
       openAtFragment(fragment: string): Promise<void>;
       openedFragments: string[];
+      toggleBookStylesheet(): Promise<void>;
+      stylesheetToggleCount: number;
     };
     leaf.view = view;
-    view.file = book;
-    fake.leaves.add(leaf);
-    fake.runtime.mostRecentMainLeaf = leaf;
-    fire("workspace", "file-open", [book]);
+    if (options.deferredView === true) {
+      view.file = null;
+      leaf.loadIfDeferred = async (): Promise<void> => {
+        view.file = book;
+      };
+    } else {
+      view.file = book;
+    }
+    if (options.deferredView !== true) {
+      fake.leaves.add(leaf);
+      fake.runtime.mostRecentMainLeaf = leaf;
+      fire("workspace", "file-open", [book]);
+    }
     return { leaf, view };
   }
 
@@ -698,6 +884,15 @@ describe("plugin wiring (substituted obsidian module)", () => {
     for (let index = 0; index < 20; index += 1) {
       await Promise.resolve();
     }
+  }
+
+  async function invokeCreateBookNoteForTesting(): Promise<void> {
+    const command = getCreateBookNoteCommand();
+    if (command === undefined) {
+      throw new Error("Create book note command was not registered");
+    }
+    command.callback?.();
+    await settleCommand();
   }
 
   function makePersistencePlugin(stored: unknown = undefined): {
@@ -844,6 +1039,105 @@ describe("plugin wiring (substituted obsidian module)", () => {
     );
   });
 
+  it("round-trips a per-book stylesheet mode through plugin data", async () => {
+    const firstLoad = makePersistencePlugin();
+    await firstLoad.persistencePlugin.onload();
+    expect(firstLoad.persistencePlugin.getEpubStylesheetMode("Books/One.epub")).toBe(
+      "theme",
+    );
+
+    await firstLoad.persistencePlugin.setEpubStylesheetMode(
+      "Books/One.epub",
+      "book",
+    );
+    expect(firstLoad.saves.at(-1)).toMatchObject({
+      epubStylesheetModes: { "Books/One.epub": "book" },
+    });
+
+    const reload = makePersistencePlugin(firstLoad.saves.at(-1));
+    await reload.persistencePlugin.onload();
+    expect(reload.persistencePlugin.getEpubStylesheetMode("Books/One.epub")).toBe(
+      "book",
+    );
+
+    await reload.persistencePlugin.setEpubStylesheetMode(
+      "Books/One.epub",
+      "theme",
+    );
+    expect(reload.saves.at(-1)).toMatchObject({ epubStylesheetModes: {} });
+  });
+
+  it("moves a book stylesheet mode on rename and drops it on delete", async () => {
+    await plugin.setEpubStylesheetMode(SOURCE, "book");
+    const renamedPath = "Books/Renamed.epub";
+    const renamed = new TFileDouble(renamedPath, "epub");
+    fake.files.delete(SOURCE);
+    fake.files.set(renamedPath, renamed);
+
+    fire("vault", "rename", [renamed, SOURCE]);
+
+    expect(plugin.getEpubStylesheetMode(SOURCE)).toBe("theme");
+    expect(plugin.getEpubStylesheetMode(renamedPath)).toBe("book");
+
+    fake.files.delete(renamedPath);
+    fire("metadata", "deleted", [renamed]);
+
+    expect(plugin.getEpubStylesheetMode(renamedPath)).toBe("theme");
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({ epubStylesheetModes: {} });
+  });
+
+  it("moves a remembered EPUB location on rename", async () => {
+    await plugin.rememberEpubLocation(SOURCE, FIRST_SAVED_CFI);
+    const renamedPath = "Books/Renamed.epub";
+    const renamed = new TFileDouble(renamedPath, "epub");
+    fake.files.delete(SOURCE);
+    fake.files.set(renamedPath, renamed);
+
+    fire("vault", "rename", [renamed, SOURCE]);
+
+    expect(plugin.getLastEpubLocation(SOURCE)).toBeNull();
+    expect(plugin.getLastEpubLocation(renamedPath)).toBe(FIRST_SAVED_CFI);
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({
+      epubLastLocations: { [renamedPath]: FIRST_SAVED_CFI },
+    });
+  });
+
+  it("drops a remembered EPUB location on delete", async () => {
+    await plugin.rememberEpubLocation(SOURCE, FIRST_SAVED_CFI);
+    const deleted = fake.files.get(SOURCE);
+    expect(deleted).toBeDefined();
+    if (deleted === undefined) return;
+    fake.files.delete(SOURCE);
+
+    fire("metadata", "deleted", [deleted]);
+
+    expect(plugin.getLastEpubLocation(SOURCE)).toBeNull();
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({ epubLastLocations: {} });
+  });
+
+  it("does not attach stale destination state to a renamed default-mode book", async () => {
+    const renamedPath = "Books/Reused.epub";
+    await plugin.setEpubStylesheetMode(renamedPath, "book");
+    const renamed = new TFileDouble(renamedPath, "epub");
+
+    fire("vault", "rename", [renamed, SOURCE]);
+
+    expect(plugin.getEpubStylesheetMode(renamedPath)).toBe("theme");
+    await settleCommand();
+    expect(
+      (plugin as unknown as { savedData: unknown[] }).savedData.at(-1),
+    ).toMatchObject({ epubStylesheetModes: {} });
+  });
+
   it("suppresses only an identical location rewrite", async () => {
     const { persistencePlugin, saves } = makePersistencePlugin();
     await persistencePlugin.onload();
@@ -884,6 +1178,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
           "Library/Other.epub": FIRST_SAVED_CFI,
           "Library/New.epub": SECOND_SAVED_CFI,
         },
+        epubStylesheetModes: {},
       },
     ]);
     expect(JSON.stringify(saves[0])).not.toContain(
@@ -899,16 +1194,82 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(command.name).toBe("Create book note for current book");
     expect(command.icon).toBe("book-open");
     expect(command.hotkeys).toBeUndefined();
-    expect(command.checkCallback?.(true)).toBe(false);
+    expect(command.checkCallback).toBeUndefined();
+    expect(command.callback).toBeTypeOf("function");
     await settleCommand();
     expect(fake.createdFiles).toEqual([]);
+  });
 
-    const book = fake.files.get(SOURCE);
-    expect(book).toBeDefined();
-    fake.runtime.activeView = { file: book };
-    expect(command.checkCallback?.(true)).toBe(true);
+  it("always lists the book-stylesheet toggle and notices when no book is open", async () => {
+    const command = fake.registeredCommands.get("toggle-book-stylesheet");
+
+    expect(command).toMatchObject({
+      name: "Toggle book stylesheet for this book",
+      callback: expect.any(Function),
+    });
+    expect(command?.checkCallback).toBeUndefined();
+
+    command?.callback?.();
     await settleCommand();
-    expect(fake.createdFiles).toEqual([]);
+    expect(noticeMessages).toContain("Open a book in Observation Car first");
+  });
+
+  it("toggles the active reader first, then the most recently active open reader", async () => {
+    const command = fake.registeredCommands.get("toggle-book-stylesheet");
+    const firstBook = addBookFile("Books/One.epub");
+    const secondBook = addBookFile("Books/Two.epub");
+    const first = openEpubReader(firstBook);
+    const second = openEpubReader(secondBook);
+
+    fake.runtime.activeView = null;
+    fire("workspace", "active-leaf-change", [first.leaf]);
+    fire("workspace", "active-leaf-change", [second.leaf]);
+    command?.callback?.();
+    await settleCommand();
+    expect(second.view.stylesheetToggleCount).toBe(1);
+    expect(first.view.stylesheetToggleCount).toBe(0);
+
+    fake.runtime.activeView = first.view;
+    command?.callback?.();
+    await settleCommand();
+    expect(first.view.stylesheetToggleCount).toBe(1);
+    expect(second.view.stylesheetToggleCount).toBe(1);
+  });
+
+  // LOCO-490 W1: MRU rung guard must survive leaf close.
+  it("favours the surviving MRU reader when the top MRU view's leaf is closed", async () => {
+    const command = fake.registeredCommands.get("toggle-book-stylesheet");
+    const firstBook = addBookFile("Books/One.epub");
+    const secondBook = addBookFile("Books/Two.epub");
+    const first = openEpubReader(firstBook);
+    const second = openEpubReader(secondBook);
+
+    fake.runtime.activeView = null;
+    fire("workspace", "active-leaf-change", [first.leaf]);
+    fire("workspace", "active-leaf-change", [second.leaf]);
+
+    // Close the MRU reader's leaf.
+    fake.leaves.delete(second.leaf);
+
+    command?.callback?.();
+    await settleCommand();
+    expect(first.view.stylesheetToggleCount).toBe(1);
+    expect(second.view.stylesheetToggleCount).toBe(0);
+  });
+
+  // LOCO-490 W2: rung 3 (first valid leaf) must resolve with no active view
+  // and no MRU entry.
+  it("reaches an open EPUB that was never activated via the first-leaf fallback", async () => {
+    const command = fake.registeredCommands.get("toggle-book-stylesheet");
+    const book = addBookFile("Books/Fallback.epub");
+
+    fake.runtime.activeView = { file: null };
+    const { view } = openEpubReader(book);
+
+    command?.callback?.();
+    await settleCommand();
+    expect(view.stylesheetToggleCount).toBe(1);
+    expect(noticeMessages).not.toContain("Open a book in Observation Car first");
   });
 
   it("registers the current-section CM6 view plugin", () => {
@@ -956,7 +1317,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     const notePath = "Notes/Reading/Surprised by Grace.md";
@@ -992,7 +1353,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
       const command = getCreateBookNoteCommand();
       expect(command).toBeDefined();
       if (command === undefined) return;
-      expect(command.checkCallback?.(false)).toBe(true);
+      command.callback?.();
       await settleCommand();
 
       const notePath = "Reading/Surprised by Grace.md";
@@ -1002,7 +1363,12 @@ describe("plugin wiring (substituted obsidian module)", () => {
       const source = parseBookNote(content).frontmatter.source;
       expect(source).toBe(SOURCE);
       expect(
-        source === null ? null : fake.linkDests.get(source.toLowerCase()),
+        source === null
+          ? null
+          : (fake.app as unknown as App).metadataCache.getFirstLinkpathDest(
+              source,
+              notePath,
+            )?.path,
       ).toBe(SOURCE);
     },
   );
@@ -1028,7 +1394,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     const notePath = "Reading/Foo {{author}} O'Brien.md";
@@ -1054,7 +1420,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     const notePath = "Reading/Foo {{author}} Bar.md";
@@ -1080,7 +1446,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     const notePath = "Reading/Foo {{format}} Bar.md";
@@ -1108,13 +1474,391 @@ describe("plugin wiring (substituted obsidian module)", () => {
     const command = getCreateBookNoteCommand();
     expect(command).toBeDefined();
     if (command === undefined) return;
-    expect(command.checkCallback?.(false)).toBe(true);
+    command.callback?.();
     await settleCommand();
 
     expect(fake.createdFiles).toEqual([]);
     expect(fake.contents.get(notePath)).toBe("sentinel — keep me");
     expect(fake.openedFiles).toEqual([notePath]);
     expect(fake.generatedLinks).toEqual([]);
+  });
+
+  it("reopens book A's note while book B is also open", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const { leaf: firstLeaf } = openEpubReader(bookA);
+    openEpubReader(bookB);
+
+    fake.runtime.activeView = { file: bookA };
+    await invokeCreateBookNoteForTesting();
+    expect(fake.createdFiles).toEqual(["Reading/A.md"]);
+
+    fake.runtime.activeView = { file: null };
+    fake.runtime.mostRecentMainLeaf = firstLeaf;
+    await invokeCreateBookNoteForTesting();
+
+    expect(fake.createdFiles).toEqual(["Reading/A.md"]);
+    expect(fake.openedFiles).toEqual(["Reading/A.md"]);
+    expect(fake.runtime.mostRecentMainLeaf).toBe(fake.createdSplitLeaves[0]);
+    expect(noticeMessages).toEqual([]);
+  });
+
+  /** Tab groups every live main-area leaf currently belongs to. */
+  function tabGroups(): Set<FakeTabGroup> {
+    const groups = new Set<FakeTabGroup>();
+    for (const leaf of fake.leaves) {
+      if (isFakeLeaf(leaf) && leaf.area === "main" && !leaf.detached) {
+        groups.add(leaf.parent);
+      }
+    }
+    return groups;
+  }
+
+  it("keeps two books and their two notes in two tab groups", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+    const { leaf: leafB } = openEpubReader(bookB, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    fake.runtime.activeView = { file: bookB, leaf: leafB };
+    await invokeCreateBookNoteForTesting();
+
+    expect(fake.createdFiles).toEqual(["Reading/A.md", "Reading/B.md"]);
+    // The second note is a tab beside the first, not a third tab group
+    // (LOCO-430: two books used to produce three or four groups).
+    expect(fake.createdSplitLeaves).toHaveLength(1);
+    expect(fake.createdTabLeaves).toHaveLength(1);
+    expect(fake.createdTabLeaves[0]?.group).toBe(
+      fake.createdSplitLeaves[0]?.parent,
+    );
+    expect(tabGroups().size).toBe(2);
+    expect(noticeMessages).toEqual([]);
+  });
+
+  it("returns a note pane a second book took over, and moves the book to the book pane", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+    const notes = notePane.parent;
+
+    // Seed the snapshot, then reproduce what Obsidian does on a
+    // file-explorer click while the note pane is active: `getLeaf(false)`
+    // hands back that pane and the book loads into it.
+    fire("workspace", "layout-change", []);
+    notePane.view = {
+      file: bookB,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    // The note goes back into the very leaf it was evicted from, so no
+    // leaf is detached — Obsidian is never left holding a dead leaf as
+    // its active one, which is what crashed its palette-close path.
+    expect(notePane.detached).toBe(false);
+    expect(leafPath(notePane)).toBe("Reading/A.md");
+    expect(books.children.map((leaf) => leafPath(leaf))).toEqual([
+      "Books/A.epub",
+      "Books/B.epub",
+    ]);
+    expect(notes.children.map((leaf) => leafPath(leaf))).toEqual([
+      "Reading/A.md",
+    ]);
+    expect(tabGroups().size).toBe(2);
+  });
+
+  it("gives a book that displaced another book its own tab rather than replacing it", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA, view } = openEpubReader(bookA, "main", {
+      group: books,
+    });
+
+    fire("workspace", "layout-change", []);
+    // Obsidian reused book A's own leaf for book B.
+    view.file = bookB;
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    expect(leafA.detached).toBe(false);
+    expect(books.children.map((leaf) => leafPath(leaf))).toEqual([
+      "Books/B.epub",
+      "Books/A.epub",
+    ]);
+    expect(tabGroups().size).toBe(1);
+  });
+
+  it("stops reconciling for the session once a restore throws", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const bookC = addBookFile("Books/C.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+
+    // First displacement, with the workspace refusing to cooperate.
+    fake.runtime.throwOnSetActiveLeaf = true;
+    fire("workspace", "layout-change", []);
+    notePane.view = {
+      file: bookB,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+    expect(notePane.detached).toBe(false);
+    expect(noticeMessages).toEqual([
+      "Observation Car could not restore the reading layout. Layout reconciliation is off until Obsidian reloads.",
+    ]);
+
+    // Second displacement, workspace healthy again. A reconciler that
+    // kept going after a failed pass would act on it; this one must not,
+    // because the pass that threw left state it did not finish reasoning
+    // about.
+    fake.runtime.throwOnSetActiveLeaf = false;
+    const tabsBefore = fake.createdTabLeaves.length;
+    notePane.view = {
+      file: bookC,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    expect(noticeMessages).toEqual([
+      "Observation Car could not restore the reading layout. Layout reconciliation is off until Obsidian reloads.",
+    ]);
+    expect(fake.createdTabLeaves.length).toBe(tabsBefore);
+  });
+
+  it("stops the current pass after the first of multiple displacements fails", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const bookC = addBookFile("Books/C.epub");
+    const bookD = addBookFile("Books/D.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+    const { leaf: leafB } = openEpubReader(bookB, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    fake.runtime.activeView = { file: bookB, leaf: leafB };
+    await invokeCreateBookNoteForTesting();
+
+    const firstNotePane = fake.createdSplitLeaves[0];
+    const secondNotePane = fake.createdTabLeaves[0]?.leaf;
+    if (firstNotePane === undefined || secondNotePane === undefined) {
+      throw new Error("two note panes were not opened");
+    }
+
+    fire("workspace", "layout-change", []);
+    firstNotePane.view = {
+      file: bookC,
+      getViewType: (): string => "observation-car-epub",
+    };
+    secondNotePane.view = {
+      file: bookD,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fake.runtime.setActiveLeafFailuresRemaining = 1;
+    const tabsBefore = fake.createdTabLeaves.length;
+
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+
+    expect(fake.createdTabLeaves).toHaveLength(tabsBefore);
+    expect(leafPath(secondNotePane)).toBe("Books/D.epub");
+  });
+
+  it("does not resume an in-flight reconciliation after unload", async () => {
+    const bookA = addBookFile("Books/A.epub");
+    const bookB = addBookFile("Books/B.epub");
+    const books: FakeTabGroup = { children: [] };
+    const { leaf: leafA } = openEpubReader(bookA, "main", { group: books });
+
+    fake.runtime.activeView = { file: bookA, leaf: leafA };
+    await invokeCreateBookNoteForTesting();
+    const notePane = fake.createdSplitLeaves[0];
+    if (notePane === undefined) throw new Error("no note pane was opened");
+
+    fire("workspace", "layout-change", []);
+    const layoutState = plugin as unknown as {
+      layoutSnapshot: Map<FakeLeaf, string>;
+    };
+    expect(layoutState.layoutSnapshot.size).toBeGreaterThan(0);
+
+    let releaseOpen!: () => void;
+    fake.runtime.nextOpenFileGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    const reopenDisplacedNote = vi.fn(async (): Promise<void> => {});
+    notePane.openFile = reopenDisplacedNote;
+    notePane.view = {
+      file: bookB,
+      getViewType: (): string => "observation-car-epub",
+    };
+
+    fire("workspace", "layout-change", []);
+    await settleCommand();
+    expect(fake.createdTabLeaves).toHaveLength(1);
+
+    plugin.onunload();
+    expect(layoutState.layoutSnapshot.size).toBe(0);
+    releaseOpen();
+    await settleCommand();
+
+    expect(reopenDisplacedNote).not.toHaveBeenCalled();
+    expect(layoutState.layoutSnapshot.size).toBe(0);
+  });
+
+  it("resolves the most recently active deferred reader", async () => {
+    const firstBook = addBookFile("Books/One.epub");
+    const secondBook = addBookFile("Books/Two.epub");
+    openEpubReader(firstBook);
+    const second = openEpubReader(secondBook, "main", {
+      deferredView: true,
+    });
+    fake.leaves.add(second.leaf);
+    fake.runtime.activeView = { file: null };
+    fake.runtime.mostRecentMainLeaf = second.leaf;
+
+    await invokeCreateBookNoteForTesting();
+
+    expect(fake.createdFiles).toEqual(["Reading/Two.md"]);
+    expect(fake.openedFiles).toEqual(["Reading/Two.md"]);
+    fake.leaves.delete(second.leaf);
+  });
+
+  it("does not mistake an active markdown leaf for its open book", async () => {
+    const book = addBookFile("Books/Novel.epub");
+    const noteFile = addMdFile("Books/Other.md", "not a book", null);
+    const markdownLeaf = makeMarkdownLeaf(noteFile, {
+      hasFocus: () => true,
+      getViewType: () => "markdown",
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    });
+    openEpubReader(book);
+    fake.leaves.add(markdownLeaf);
+    fake.runtime.activeView = { file: null };
+    fake.runtime.mostRecentMainLeaf = markdownLeaf;
+
+    await invokeCreateBookNoteForTesting();
+
+    expect(fake.createdFiles).toEqual(["Reading/Novel.md"]);
+  });
+
+  it("resolves a single open reader when no MRU leaf is available", async () => {
+    const book = addBookFile("Books/A.epub");
+    const { leaf } = openEpubReader(book);
+    fake.runtime.activeView = { file: null };
+    fake.runtime.mostRecentMainLeaf = null;
+
+    await invokeCreateBookNoteForTesting();
+
+    expect(fake.createdFiles).toEqual(["Reading/A.md"]);
+    expect(fake.openedFiles).toEqual(["Reading/A.md"]);
+    expect(noticeMessages).toEqual([]);
+    void leaf;
+  });
+
+  it("resolves the only loaded book among one loaded and one deferred reader", async () => {
+    const firstBook = addBookFile("Books/A.epub");
+    const secondBook = addBookFile("Books/B.epub");
+    const first = openEpubReader(firstBook);
+    first.leaf.view = {
+      file: null,
+      getViewType: (): string => "observation-car-epub",
+    };
+    fake.runtime.mostRecentMainLeaf = null;
+    const deferred = openEpubReader(secondBook, "main", {
+      deferredView: true,
+    });
+    fake.leaves.add(deferred.leaf);
+    fake.runtime.activeView = { file: null };
+    fake.runtime.mostRecentMainLeaf = null;
+
+    await invokeCreateBookNoteForTesting();
+
+    expect(noticeMessages).toEqual([]);
+    expect(fake.createdFiles).toEqual(["Reading/B.md"]);
+    expect(fake.openedFiles).toEqual(["Reading/B.md"]);
+    expect(noticeMessages).not.toContain(
+      "Multiple books are open: A, B. Click the book you want, then run Create book note again.",
+    );
+    fake.leaves.delete(deferred.leaf);
+  });
+
+  it("requires view state to agree with the reader view type", async () => {
+    const book = addBookFile("Books/A.epub");
+    const { leaf } = openEpubReader(book);
+    const mismatchedLeaf = leaf;
+    mismatchedLeaf.getViewState = (): { type: string } => ({
+      type: "markdown",
+    });
+    fake.leaves.add(mismatchedLeaf);
+    fake.runtime.activeView = { file: null };
+    fake.runtime.mostRecentMainLeaf = null;
+
+    await invokeCreateBookNoteForTesting();
+
+    expect(noticeMessages).toEqual(["Open a book in Observation Car first"]);
+    expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("names both books when neither open reader can be disambiguated", async () => {
+    addBookFile("Books/A.epub");
+    addBookFile("Books/B.epub");
+    openEpubReader(fake.files.get("Books/A.epub") as TFile);
+    openEpubReader(fake.files.get("Books/B.epub") as TFile);
+    fake.runtime.activeView = { file: null };
+    fake.runtime.mostRecentMainLeaf = null;
+
+    await invokeCreateBookNoteForTesting();
+
+    expect(noticeMessages).toEqual([
+      "Multiple books are open: A, B. Click the book you want, then run Create book note again.",
+    ]);
+    expect(fake.createdFiles).toEqual([]);
+  });
+
+  it("reveals an already open book note instead of splitting another pane", async () => {
+    const book = fake.files.get(SOURCE);
+    if (book === undefined) throw new Error("book fixture is missing");
+    fake.runtime.activeView = { file: book };
+
+    for (let index = 0; index < 5; index += 1) {
+      await invokeCreateBookNoteForTesting();
+    }
+
+    const notePath = "Reading/Surprised by Grace.md";
+    expect(fake.createdFiles).toEqual([notePath]);
+    expect(fake.createdSplitLeaves).toHaveLength(1);
+    expect(fake.openedFiles).toEqual([notePath]);
+    expect(fake.runtime.mostRecentMainLeaf).toBe(fake.createdSplitLeaves[0]);
+  });
+
+  it("notices when no reader is available instead of splitting a note", async () => {
+    fake.runtime.activeView = { file: null };
+    fake.runtime.mostRecentMainLeaf = null;
+
+    await invokeCreateBookNoteForTesting();
+
+    expect(noticeMessages).toContain("Open a book in Observation Car first");
+    expect(fake.createdFiles).toEqual([]);
+    expect(fake.createdSplitLeaves).toEqual([]);
   });
 
   it("opens a paired note beside its registered reader in the main area", async () => {
@@ -1274,7 +2018,21 @@ describe("plugin wiring (substituted obsidian module)", () => {
         scrollIntoView: vi.fn(),
       },
     );
-    fake.leaves.add({ view: markdownView });
+    const markdownLeaf: FakeLeaf = {
+      view: markdownView,
+      area: "main",
+      parent: { children: [] },
+      detached: false,
+      detach: () => {
+        markdownLeaf.detached = true;
+      },
+      getRoot: () => fake.rootSplit,
+      openFile: async (): Promise<void> => {},
+      getViewState: (): { type: string } => ({ type: "markdown" }),
+      loadIfDeferred: async (): Promise<void> => {},
+    };
+    markdownLeaf.parent.children.push(markdownLeaf);
+    fake.leaves.add(markdownLeaf);
     const { view } = openEpubReader(book);
     const retargetedSource = "Books/Retargeted.epub";
     addBookFile(retargetedSource);
@@ -1624,6 +2382,10 @@ describe("plugin wiring (substituted obsidian module)", () => {
     if (book === undefined) throw new Error("book fixture is missing");
     const { leaf } = openEpubReader(book);
     expect(plugin.getReaderPairingForNote("Reading/A.md")?.leaf).toBe(leaf);
+    const layoutState = plugin as unknown as {
+      layoutSnapshot: Map<FakeLeaf, string>;
+    };
+    expect(layoutState.layoutSnapshot.size).toBeGreaterThan(0);
 
     fire("metadata", "changed", [file]);
     expect(vi.getTimerCount()).toBe(1); // the debounce window is pending
@@ -1635,6 +2397,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(plugin.getBookNotePaths()).toEqual([]);
     expect(plugin.getReaderPairingForNote("Reading/A.md")).toBeUndefined();
+    expect(layoutState.layoutSnapshot.size).toBe(0);
   });
 
   it("matches shortest-path anchor links against the source via the metadata cache", async () => {
@@ -1780,7 +2543,21 @@ describe("plugin wiring (substituted obsidian module)", () => {
       hasFocus: () => true,
     };
     const markdownView = new MarkdownViewDouble(noteFile, editor);
-    fake.leaves.add({ view: markdownView });
+    const markdownLeaf: FakeLeaf = {
+      view: markdownView,
+      area: "main",
+      parent: { children: [] },
+      detached: false,
+      detach: () => {
+        markdownLeaf.detached = true;
+      },
+      getRoot: () => fake.rootSplit,
+      openFile: async (): Promise<void> => {},
+      getViewState: (): { type: string } => ({ type: "markdown" }),
+      loadIfDeferred: async (): Promise<void> => {},
+    };
+    markdownLeaf.parent.children.push(markdownLeaf);
+    fake.leaves.add(markdownLeaf);
 
     const book = fake.files.get(SOURCE);
     if (book === undefined) throw new Error("book fixture is missing");
@@ -1844,16 +2621,24 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     const book = fake.files.get("Books/Surprised by Grace.epub");
     if (book === undefined) throw new Error("book fixture is missing");
-    const markdownView = new MarkdownViewDouble(
-      noteFile,
-      {
-        hasFocus: () => true,
-        getViewType: () => "markdown",
-        lineCount: () => 20,
-        scrollIntoView: vi.fn(),
-      },
-    );
-    fake.leaves.add({ view: markdownView });
+    const cmView = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: "body one\nbody two",
+        extensions: [
+          EditorView.theme({}),
+          focusModeViewPlugin,
+        ],
+      }),
+    });
+    const editor = {
+      cm: cmView,
+      hasFocus: () => true,
+      getViewType: () => "markdown",
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    };
+    fake.leaves.add(makeMarkdownLeaf(noteFile, editor));
     openEpubReader(book);
     noticeMessages.length = 0;
     plugin.toggleFocusMode();
@@ -1861,6 +2646,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
     expect(noticeMessages).toEqual([
       "Focus mode needs CFI anchors; this note\'s anchors are chapter hrefs.",
     ]);
+    expect(isFocusModeDecorationEnabled(editor)).toBe(false);
   });
 
   it("focuses a CFI-anchor note with no spine-href Notice", async () => {
@@ -1871,16 +2657,21 @@ describe("plugin wiring (substituted obsidian module)", () => {
 
     const book = fake.files.get(SOURCE);
     if (book === undefined) throw new Error("book fixture is missing");
-    const markdownView = new MarkdownViewDouble(
-      noteFile,
-      {
-        hasFocus: () => true,
-        getViewType: () => "markdown",
-        lineCount: () => 20,
-        scrollIntoView: vi.fn(),
-      },
-    );
-    fake.leaves.add({ view: markdownView });
+    const cmView = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: "Just prose.",
+        extensions: [focusModeViewPlugin],
+      }),
+    });
+    const editor = {
+      cm: cmView,
+      hasFocus: () => true,
+      getViewType: () => "markdown",
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    };
+    fake.leaves.add(makeMarkdownLeaf(noteFile, editor));
     const { view } = openEpubReader(book);
     view.emitLocation("#" + CFI_2);
     await vi.advanceTimersByTimeAsync(DEFAULT_SCROLL_DEBOUNCE_MS);
@@ -1889,6 +2680,13 @@ describe("plugin wiring (substituted obsidian module)", () => {
     plugin.toggleFocusMode();
 
     expect(noticeMessages).toEqual([]);
+    expect(isFocusModeDecorationEnabled(editor)).toBe(true);
+    expect(cmView.dom.querySelectorAll(".oc-focus-fold")).toHaveLength(0);
+    (plugin as unknown as { focusMode: FocusModeController }).focusMode.toggle(
+      editor as never,
+    );
+    expect(isFocusModeDecorationEnabled(editor)).toBe(false);
+    cmView.destroy();
   });
 
   it("does not emit spine-href Notice for a zero-section paired note", async () => {
@@ -1900,21 +2698,29 @@ describe("plugin wiring (substituted obsidian module)", () => {
     fire("metadata", "changed", [noteFile]);
     await settle();
 
-    const markdownView = new MarkdownViewDouble(
-      noteFile,
-      {
-        hasFocus: () => true,
-        getViewType: () => "markdown",
-        lineCount: () => 20,
-        scrollIntoView: vi.fn(),
-      },
-    );
-    fake.leaves.add({ view: markdownView });
+    const cmView = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: "Just prose.",
+        extensions: [focusModeViewPlugin],
+      }),
+    });
+    const editor = {
+      cm: cmView,
+      hasFocus: () => true,
+      getViewType: () => "markdown",
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    };
+    fake.leaves.add(makeMarkdownLeaf(noteFile, editor));
     openEpubReader(book);
     noticeMessages.length = 0;
     plugin.toggleFocusMode();
 
     expect(noticeMessages).toEqual([]);
+    expect(isFocusModeDecorationEnabled(editor)).toBe(true);
+    expect(cmView.dom.querySelectorAll(".oc-focus-fold")).toHaveLength(0);
+    cmView.destroy();
   });
 
   it("focuses a mixed note with both CFI and spine-href sections — wiring", async () => {
@@ -1928,21 +2734,31 @@ describe("plugin wiring (substituted obsidian module)", () => {
     fire("metadata", "changed", [noteFile]);
     await settle();
 
-    const markdownView = new MarkdownViewDouble(
-      noteFile,
-      {
-        hasFocus: () => true,
-        getViewType: () => "markdown",
-        lineCount: () => 20,
-        scrollIntoView: vi.fn(),
-      },
-    );
-    fake.leaves.add({ view: markdownView });
+    const cmView = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: "Mixed.",
+        extensions: [focusModeViewPlugin],
+      }),
+    });
+    const editor = {
+      cm: cmView,
+      hasFocus: () => true,
+      getViewType: () => "markdown",
+      lineCount: () => 20,
+      scrollIntoView: vi.fn(),
+    };
+    fake.leaves.add(makeMarkdownLeaf(noteFile, editor));
     openEpubReader(book);
     noticeMessages.length = 0;
     plugin.toggleFocusMode();
 
     expect(noticeMessages).toEqual([]);
+    expect(isFocusModeDecorationEnabled(editor)).toBe(true);
+    expect(
+      (plugin as unknown as { focusMode: FocusModeController }).focusMode,
+    ).toBeDefined();
+    cmView.destroy();
   });
 
   it("folds sections across a null-chapter boundary while preserving document bytes", () => {

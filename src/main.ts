@@ -18,6 +18,7 @@ import {
 } from "./commands/newNoteHere";
 import { registerToggleFocusModeCommand } from "./commands/toggleFocusMode";
 import { registerSplitRatioToggleCommand } from "./commands/toggleSplitRatio";
+import { registerToggleBookStylesheetCommand } from "./commands/toggleBookStylesheet";
 import {
   DEFAULT_SETTINGS,
   type ObservationCarSettings,
@@ -32,8 +33,18 @@ import {
 import { BookNoteStore } from "./model/bookNoteStore";
 import { sortSectionsByBookPosition } from "./model/sortBookNoteSections";
 import { EpubView, EPUB_VIEW_TYPE } from "./readers/EpubView";
+import type { EpubStylesheetMode } from "./readers/epubStyles";
 import { loadPluginData, serializePluginData } from "./pluginData";
 import { installEpubLinkHandler } from "./epubLinkHandler";
+import {
+  findDisplacements,
+  openBesideInGroup,
+  openBookInBookGroup,
+  openNoteBesideReader,
+  snapshotRootLeaves,
+  type Displacement,
+  type LayoutWorkspace,
+} from "./workspace/readingLayout";
 import {
   ReaderRegistry,
   type Reader,
@@ -43,6 +54,13 @@ import { ScrollSync } from "./sync/scrollSync";
 import { currentSectionViewPlugin } from "./sync/currentSectionDecoration";
 import { focusModeViewPlugin } from "./sync/focusModeDecoration";
 import { FocusModeController } from "./sync/focusMode";
+
+/**
+ * File extensions routed to the in-plugin reader. One list, so the
+ * reading layout's "is this a book?" test cannot drift from what
+ * `registerExtensions` actually claims. PDF joins it in E003.
+ */
+const READER_EXTENSIONS: readonly string[] = ["epub"];
 
 /**
  * Observation Car — plugin entry point.
@@ -65,6 +83,8 @@ export default class ObservationCarPlugin extends Plugin {
 
   /** F2.4: last canonical EPUB CFI, keyed by the book's vault path. */
   private epubLastLocations: Record<string, string> = {};
+  /** Explicit per-book CSS choices; absent paths use the Obsidian theme. */
+  private epubStylesheetModes: Record<string, EpubStylesheetMode> = {};
   private dataRevision = 0;
   private dataSave: Promise<void> | null = null;
 
@@ -80,10 +100,25 @@ export default class ObservationCarPlugin extends Plugin {
   /** Read-only CM6 focus decoration state (PRD F4.5). */
   private focusMode!: FocusModeController;
 
+  /**
+   * Main-area leaf → vault path as of the last reconciliation, the only
+   * way to tell that Obsidian reused a pane rather than opening one
+   * (`readingLayout.findDisplacements`).
+   */
+  private layoutSnapshot: Map<WorkspaceLeaf, string> = new Map();
+  /** Guards the reconciler against the layout events its own opens raise. */
+  private reconcilingLayout = false;
+  /** Latched on the first reconciliation failure; see `restoreDisplacedPanes`. */
+  private layoutReconcilerFailed = false;
+  /** Stops an in-flight reconciliation from touching panes after unload. */
+  private unloaded = false;
+
   async onload(): Promise<void> {
+    this.unloaded = false;
     const pluginData = loadPluginData(await this.loadData());
     this.settings = pluginData.settings;
     this.epubLastLocations = pluginData.epubLastLocations;
+    this.epubStylesheetModes = pluginData.epubStylesheetModes;
     this.addSettingTab(new ObservationCarSettingTab(this.app, this));
     this.focusMode = new FocusModeController();
 
@@ -158,7 +193,7 @@ export default class ObservationCarPlugin extends Plugin {
       this.scrollSync.register(leaf, reader);
       return reader;
     });
-    this.registerExtensions(["epub"], EPUB_VIEW_TYPE);
+    this.registerExtensions([...READER_EXTENSIONS], EPUB_VIEW_TYPE);
     this.register(installEpubLinkHandler(this.app));
     this.registerEditorExtension(currentSectionViewPlugin);
     this.registerEditorExtension(focusModeViewPlugin);
@@ -168,6 +203,7 @@ export default class ObservationCarPlugin extends Plugin {
     registerNewNoteHereCommand(this);
     registerToggleFocusModeCommand(this);
     registerSplitRatioToggleCommand(this);
+    registerToggleBookStylesheetCommand(this);
 
     // Obsidian has no leaf-close event. `layout-change` covers closes and
     // moves; the other events make a newly loaded reader visible quickly.
@@ -177,11 +213,19 @@ export default class ObservationCarPlugin extends Plugin {
       this.app.workspace.on("layout-change", () => {
         this.readerRegistry.refresh();
         this.scrollSync.refresh();
+        this.reconcileReadingLayout();
       }),
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         this.readerRegistry.refresh();
+        // Both events are hooked on purpose: `layout-change` can land
+        // while the repurposed leaf still reports its old file, and
+        // `file-open` is the one event guaranteed to fire after the new
+        // file is in place. The snapshot diff is idempotent, so whichever
+        // arrives with the settled path does the work and the other is a
+        // no-op.
+        this.reconcileReadingLayout();
         if (this.settings.autoOpenBookNote && file !== null) {
           void openBookNoteBesideRecentReader(this, file);
         }
@@ -212,6 +256,7 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerEvent(
       this.app.metadataCache.on("deleted", (file) => {
         this.bookNoteStore.remove(file.path);
+        this.dropEpubState(file.path);
       }),
     );
     this.registerEvent(
@@ -235,7 +280,10 @@ export default class ObservationCarPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         this.bookNoteStore.remove(oldPath);
-        if (file instanceof TFile) this.scheduleReparse(file);
+        if (file instanceof TFile) {
+          this.moveEpubState(file, oldPath);
+          this.scheduleReparse(file);
+        }
       }),
     );
 
@@ -298,6 +346,27 @@ export default class ObservationCarPlugin extends Plugin {
     await this.persistData();
   }
 
+  /** Per-book stylesheet mode; the default is deliberately not persisted. */
+  getEpubStylesheetMode(path: string): EpubStylesheetMode {
+    return this.epubStylesheetModes[path] ?? "theme";
+  }
+
+  /** Remember a book CSS opt-in, or remove it when returning to the default. */
+  async setEpubStylesheetMode(
+    path: string,
+    mode: EpubStylesheetMode,
+  ): Promise<void> {
+    if (this.getEpubStylesheetMode(path) === mode) {
+      return;
+    }
+    if (mode === "theme") {
+      delete this.epubStylesheetModes[path];
+    } else {
+      this.epubStylesheetModes[path] = mode;
+    }
+    await this.persistData();
+  }
+
   /** The cached parse of a book note, or undefined if the store holds none. */
   getBookNote(path: string): BookNote | undefined {
     return this.bookNoteStore.get(path);
@@ -333,6 +402,160 @@ export default class ObservationCarPlugin extends Plugin {
     void newNoteHereFromReader(this, leaf);
   }
 
+  /**
+   * The single way a book note reaches the screen: revealed where it is
+   * already open, else a new tab in the note pane. Every command that
+   * used to call `getLeaf("split", …)` or `createLeafBySplit` itself now
+   * comes through here, which is what stops the second book's note from
+   * building a third tab group.
+   */
+  async openBookNotePane(
+    readerLeaf: WorkspaceLeaf | null,
+    note: TFile,
+  ): Promise<WorkspaceLeaf> {
+    return openNoteBesideReader(this.readingLayout(), readerLeaf, note);
+  }
+
+  /**
+   * Adapt Obsidian's workspace to the layout module's seam. This is the
+   * only place that knows both APIs.
+   */
+  private readingLayout(): LayoutWorkspace<WorkspaceLeaf> {
+    const { workspace } = this.app;
+    return {
+      rootSplit: workspace.rootSplit,
+      rootLeaves: () => {
+        const leaves: WorkspaceLeaf[] = [];
+        workspace.iterateRootLeaves((leaf) => {
+          leaves.push(leaf);
+        });
+        return leaves;
+      },
+      pathOf: (leaf) => leafFilePath(leaf),
+      isReader: (leaf) => leaf.getViewState().type === EPUB_VIEW_TYPE,
+      // Making the anchor active and then asking for a `"tab"` is how
+      // every "open in a new tab" plugin does this, and it keeps the
+      // workspace tree construction entirely inside Obsidian. The
+      // previous `createLeafInParent(leaf.parent as WorkspaceSplit, i)`
+      // built a leaf Obsidian's own palette-close path then choked on.
+      // `focus: false` keeps the keystroke's focus where it was.
+      createTabBeside: (anchor) => {
+        workspace.setActiveLeaf(anchor, { focus: false });
+        return workspace.getLeaf("tab");
+      },
+      createLeafBySplit: (leaf, direction) =>
+        workspace.createLeafBySplit(leaf, direction),
+      splitActiveLeaf: (direction) => workspace.getLeaf("split", direction),
+      revealLeaf: (leaf) => workspace.revealLeaf(leaf),
+    };
+  }
+
+  /**
+   * Put a book that took over the wrong pane, and whatever it pushed out
+   * of that pane, back where the reading layout says they belong.
+   *
+   * Obsidian decides which leaf a file-explorer click lands in, and
+   * `getLeaf(false)` hands back an existing navigable leaf — the note
+   * pane, when that is what was last active. There is no hook to refuse
+   * it, so this reads the reuse back off the leaf snapshot afterwards.
+   */
+  private reconcileReadingLayout(): void {
+    if (
+      this.unloaded ||
+      this.reconcilingLayout ||
+      this.layoutReconcilerFailed
+    ) {
+      return;
+    }
+
+    const layout = this.readingLayout();
+    const current = snapshotRootLeaves(layout);
+    const displacements = findDisplacements(
+      this.layoutSnapshot,
+      current,
+      isBookPath,
+    );
+    // Adopt the new snapshot before acting: the opens below raise more
+    // layout events, and their leaves must read as new rather than as
+    // further displacements.
+    this.layoutSnapshot = current;
+    if (displacements.length === 0) return;
+
+    this.reconcilingLayout = true;
+    void this.restoreDisplacedPanes(displacements).finally(() => {
+      this.reconcilingLayout = false;
+      if (this.unloaded) return;
+      this.layoutSnapshot = snapshotRootLeaves(this.readingLayout());
+    });
+  }
+
+  private async restoreDisplacedPanes(
+    displacements: readonly Displacement<WorkspaceLeaf>[],
+  ): Promise<void> {
+    const layout = this.readingLayout();
+    for (const displacement of displacements) {
+      if (this.unloaded) return;
+      try {
+        const displaced = this.app.vault.getAbstractFileByPath(
+          displacement.displacedPath,
+        );
+        if (displaced instanceof TFile === false) continue;
+
+        if (isBookPath(displacement.displacedPath)) {
+          // A book took another book's pane. Both belong in the book
+          // group, which is where the reused leaf already sits, so the
+          // displaced book only needs a tab of its own beside it. Its
+          // reading position is restored from `epubLastLocations`.
+          await openBesideInGroup(layout, displacement.leaf, displaced);
+          if (this.unloaded) return;
+          continue;
+        }
+
+        const book = this.app.vault.getAbstractFileByPath(
+          displacement.bookPath,
+        );
+        const relocated =
+          book instanceof TFile
+            ? await openBookInBookGroup(layout, book, displacement.leaf)
+            : null;
+        if (this.unloaded) return;
+        if (relocated === null) {
+          // No book pane anywhere else, so the reused leaf becomes the
+          // book pane and the note it displaced moves to a note pane
+          // beside it. Nothing is detached in this branch.
+          await openNoteBesideReader(layout, displacement.leaf, displaced);
+          if (this.unloaded) return;
+          continue;
+        }
+
+        // The reused leaf was the note pane, and the book now has a tab
+        // of its own, so the note goes straight back into the leaf it
+        // was evicted from. Re-opening the file is the whole undo: no
+        // leaf is created or destroyed, so Obsidian is never left holding
+        // a detached leaf as its active one.
+        await displacement.leaf.openFile(displaced);
+        if (this.unloaded) return;
+        await layout.revealLeaf(relocated);
+        if (this.unloaded) return;
+      } catch (error) {
+        if (this.unloaded) return;
+        // Fail closed. A reconciliation that throws has left the layout
+        // in a state this pass did not finish reasoning about, and
+        // repeating it on every later layout event is how one bad
+        // decision becomes a broken workspace. Stay off until reload.
+        this.layoutReconcilerFailed = true;
+        console.error(
+          "[observation-car] could not restore the reading layout; layout reconciliation is now off until Obsidian reloads",
+          error,
+        );
+        new Notice(
+          "Observation Car could not restore the reading layout. Layout reconciliation is off until Obsidian reloads.",
+        );
+        break;
+      }
+    }
+  }
+
   /** Toggle read-only focus decoration for the active paired note. */
   toggleFocusMode(): void {
     const pairing = activePairing(this);
@@ -361,9 +584,11 @@ export default class ObservationCarPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.unloaded = true;
     this.scrollSync.clear();
     this.readerRegistry.clear();
     this.bookNoteStore.clear();
+    this.layoutSnapshot.clear();
   }
 
   /** Resolve a wikilink target to Obsidian's canonical vault file. */
@@ -418,6 +643,57 @@ export default class ObservationCarPlugin extends Plugin {
     await this.bookNoteStore.flush();
   }
 
+  /** Carry the saved EPUB state with a vault rename. */
+  private moveEpubState(file: TFile, oldPath: string): void {
+    const previousLocation = this.epubLastLocations[oldPath];
+    const destinationLocation = this.epubLastLocations[file.path];
+    const previousMode = this.epubStylesheetModes[oldPath];
+    const destinationMode = this.epubStylesheetModes[file.path];
+    if (
+      previousLocation === undefined &&
+      destinationLocation === undefined &&
+      previousMode === undefined &&
+      destinationMode === undefined
+    ) {
+      return;
+    }
+    delete this.epubLastLocations[oldPath];
+    delete this.epubLastLocations[file.path];
+    delete this.epubStylesheetModes[oldPath];
+    delete this.epubStylesheetModes[file.path];
+    if (file.extension.toLowerCase() === "epub") {
+      if (previousLocation !== undefined) {
+        this.epubLastLocations[file.path] = previousLocation;
+      }
+      if (previousMode !== undefined) {
+        this.epubStylesheetModes[file.path] = previousMode;
+      }
+    }
+    this.persistEpubStateCleanup("rename");
+  }
+
+  /** Drop state for a deleted path before that path can be reused. */
+  private dropEpubState(path: string): void {
+    if (
+      this.epubLastLocations[path] === undefined &&
+      this.epubStylesheetModes[path] === undefined
+    ) {
+      return;
+    }
+    delete this.epubLastLocations[path];
+    delete this.epubStylesheetModes[path];
+    this.persistEpubStateCleanup("delete");
+  }
+
+  private persistEpubStateCleanup(event: "rename" | "delete"): void {
+    void this.persistData().catch((error: unknown) => {
+      console.error(
+        `[observation-car] could not persist EPUB state after ${event}`,
+        error,
+      );
+    });
+  }
+
   /**
    * The single writer for plugin data: serialize settings and per-book state
    * while keeping OPDS credentials out of notes, logs, and events. If state
@@ -444,7 +720,11 @@ export default class ObservationCarPlugin extends Plugin {
     while (savedRevision !== this.dataRevision) {
       savedRevision = this.dataRevision;
       await this.saveData(
-        serializePluginData(this.settings, this.epubLastLocations),
+        serializePluginData(
+          this.settings,
+          this.epubLastLocations,
+          this.epubStylesheetModes,
+        ),
       );
     }
   }
@@ -458,4 +738,37 @@ export default class ObservationCarPlugin extends Plugin {
   findOpenEditor(notePath: string): Editor | null {
     return findOpenEditor(this, notePath);
   }
+}
+
+/**
+ * Vault path of the file a main-area leaf is showing, or null.
+ *
+ * The view's own `file` is read structurally rather than through
+ * `instanceof FileView`, so any view that exposes one answers. The view
+ * state is the fallback because a background leaf is deferred
+ * (`WorkspaceLeaf.isDeferred`) and carries a `DeferredView` with no
+ * `file` — the same reason `epubLinkHandler` reads the view state when
+ * matching an already-open book.
+ */
+function leafFilePath(leaf: WorkspaceLeaf): string | null {
+  const view: unknown = leaf.view;
+  if (typeof view === "object" && view !== null && "file" in view) {
+    const file: unknown = view.file;
+    if (typeof file === "object" && file !== null && "path" in file) {
+      if (typeof file.path === "string") return file.path;
+    }
+  }
+  const state: unknown = leaf.getViewState().state;
+  if (typeof state !== "object" || state === null || !("file" in state)) {
+    return null;
+  }
+  return typeof state.file === "string" ? state.file : null;
+}
+
+/** True for a path the plugin's own reader view owns. */
+function isBookPath(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  if (dot === -1) return false;
+  const extension = path.slice(dot + 1).toLowerCase();
+  return READER_EXTENSIONS.includes(extension);
 }

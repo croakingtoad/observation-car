@@ -148,6 +148,7 @@ const makeFile = (path: string) =>
   ({ path, basename: path.split("/").pop() ?? path }) as TFile;
 
 const makeHost = (overrides: Partial<EpubViewHost> = {}): EpubViewHost => {
+  const stylesheetModes: Record<string, "theme" | "book"> = {};
   const host: EpubViewHost = {
     settings: { ...DEFAULT_SETTINGS },
     updateSettings: async (patch) => {
@@ -155,6 +156,11 @@ const makeHost = (overrides: Partial<EpubViewHost> = {}): EpubViewHost => {
     },
     getLastEpubLocation: () => null,
     rememberEpubLocation: async () => undefined,
+    getEpubStylesheetMode: (path) => stylesheetModes[path] ?? "theme",
+    setEpubStylesheetMode: async (path, mode) => {
+      if (mode === "theme") delete stylesheetModes[path];
+      else stylesheetModes[path] = mode;
+    },
     ...overrides,
   };
   return host;
