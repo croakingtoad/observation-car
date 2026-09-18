@@ -2,7 +2,7 @@
 
 An Obsidian plugin for reading EPUBs and PDFs alongside your own notes. The book opens on the left; an ordinary markdown note opens on the right, and each note section is anchored to a location in the book — so as you turn pages, the note scrolls to whatever you wrote about that passage. Close the book and the same file reads as a clean, gap-free set of reading notes.
 
-**Status:** The book-note model, anchor utilities, settings, and an in-plugin EPUB view are in (F1.2–F1.4, F2.1). Scroll-sync, PDF integration, Booklore, and mobile support land in the follow-up milestones (PRD §9).
+**Status:** The book-note model, anchor utilities, settings, in-plugin EPUB view, scroll-sync, focus mode, and section-sorting are in. PDF integration, Booklore, and mobile support land in the follow-up milestones (PRD §9).
 
 ## Storage format
 
@@ -118,7 +118,7 @@ Parsing is strict on purpose: anything outside this grammar is not a position. T
 
 ### Ordering
 
-A section's position in the book lives in its anchor; **the order sections appear in the file is not authoritative**. Sync will resolve each section by its parsed position, not its line in the file, so hand-reordering, splitting, or merging sections in the note will be tolerated and keep working. The intended workflow keeps the file tidy for you — new sections insert at their book-sorted position, and a "Sort sections by book position" command re-sorts an existing note (both per PRD §5.2, not yet shipped as of this writing).
+A section's position in the book lives in its anchor; **the order sections appear in the file is not authoritative**. Sync resolves each section by its parsed position, not its line in the file, so hand-reordering, splitting, or merging sections in the note is tolerated and keeps working. The intended workflow keeps the file tidy for you — new sections insert at their book-sorted position, and a "Sort sections by book position" command re-sorts an existing note (both per PRD §5.2).
 
 Positions compare in book order: EPUB by spine item, then path, then character offset (epub.js `EpubCFI.compare`; range CFIs by their start); PDF by page, then selection rectangle, with a bare `page=N` before any selection on that page. Bare spine-item href anchors currently order lexicographically by href in code-unit order (`chapter-10.xhtml` sorts before `chapter-2.xhtml`); resolving them to true spine order needs the book and is not yet shipped.
 
@@ -129,7 +129,7 @@ Focus mode groups sections by the chapter of their anchor. Chapter membership is
 - **EPUB** — the chapter is inside the anchor itself: the CFI chapter component is of the form `/X/N!`, where epub.js encodes the spine item as `N = (itemIndex + 1) × 2`, so the 0-based spine item index is `N / 2 − 1` (in the example above, `/6/8!` → spine item 3 (0-based), `/6/14!` → spine item 6 (0-based)). No book file is needed.
 - **PDF** — the fragment carries no chapter. The chapter is the nearest outline/bookmark entry at or before the page, or — when the PDF has no outline — a configurable `±N` page window around the page (`pdfChapterWindowPages`, default 10).
 
-The focus-mode behaviour itself (folding sections outside the current chapter) is planned (PRD F4.5) and not yet shipped.
+The focus-mode behaviour itself (folding sections outside the current chapter, PRD F4.5) is shipped.
 
 ### No hidden state
 
