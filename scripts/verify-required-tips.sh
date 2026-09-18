@@ -19,7 +19,13 @@ fi
 failed=0
 checked=0
 while IFS= read -r line || [[ -n "$line" ]]; do
-  [[ -z "$line" || "$line" == \#* ]] && continue
+  [[ -z "$line" ]] && continue
+  if [[ "$line" =~ ^#+[[:space:]]*[[:punct:]]*[[:space:]]*[0-9a-f]{40} ]]; then
+    echo "error: commented-out required tip declares nothing: $line" >&2
+    failed=1
+    continue
+  fi
+  [[ "$line" == \#* ]] && continue
   if [[ ! "$line" =~ ^([0-9a-f]{40})([[:space:]]|$) ]]; then
     echo "error: invalid required-tip entry: $line" >&2
     failed=1
