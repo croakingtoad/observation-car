@@ -29,6 +29,10 @@ const FRAGMENT_OPEN_TIMEOUT_MS = 5_000;
 
 export const EPUB_DISPLAY_TIMEOUT_MS = 5000;
 
+function usableCfi(cfi: string | null | undefined): string | null {
+  return typeof cfi === "string" && cfi.length > 0 ? cfi : null;
+}
+
 /**
  * A LocationChanged event (F2.5): PRD §8's Location plus the file the
  * location belongs to, so the sync layer never needs to look it up.
@@ -553,10 +557,10 @@ export class EpubView extends FileView {
   /** Persist the rendition's immediate position, including a debounced turn. */
   private persistRenderedLocation(): Promise<void> {
     const file = this.renderedFile;
-    const cfi = this.rendition?.location?.start?.cfi;
+    const cfi = usableCfi(this.rendition?.location?.start?.cfi);
     if (
       file === null ||
-      cfi === undefined ||
+      cfi === null ||
       this.persistPendingLocation === false ||
       this.restoringFile === file
     ) {
@@ -619,7 +623,7 @@ export class EpubView extends FileView {
     if (file === null || this.rendition === null || previousMode === null || previousMode === mode) {
       return;
     }
-    const cfi = this.rendition.location?.start?.cfi ?? null;
+    const cfi = usableCfi(this.rendition.location?.start?.cfi);
     const change = this.applyFlowMode(file, mode, previousMode, cfi);
     this.readerChange = change;
     try {
@@ -650,7 +654,7 @@ export class EpubView extends FileView {
     }
     const mode: EpubStylesheetMode =
       previousMode === "theme" ? "book" : "theme";
-    const cfi = this.rendition.location?.start?.cfi ?? null;
+    const cfi = usableCfi(this.rendition.location?.start?.cfi);
     const change = this.applyStylesheetMode(
       file,
       mode,
