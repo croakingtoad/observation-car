@@ -20,7 +20,7 @@ failed=0
 checked=0
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
-  if [[ "$line" =~ ^#+[[:space:]]*[[:punct:]]*[[:space:]]*[0-9a-f]{40} ]]; then
+  if [[ "$line" =~ ^#[[:space:]]*[0-9a-f]{40} ]]; then
     echo "error: commented-out required tip declares nothing: $line" >&2
     failed=1
     continue
