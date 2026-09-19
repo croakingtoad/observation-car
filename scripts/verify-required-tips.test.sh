@@ -7,7 +7,6 @@ original_working_dir="$(pwd)"
 VERIFY_REQUIRED_TIPS="${VERIFY_REQUIRED_TIPS:-}"
 fixture_dir=""
 scratch_repo=""
-fixture_dir=""
 repo_working_dir=""
 
 cleanup() {
@@ -29,22 +28,6 @@ if [[ -z "$VERIFY_REQUIRED_TIPS" ]]; then
   VERIFY_REQUIRED_TIPS="$SCRIPT_DIR/verify-required-tips.sh"
 fi
 
-shipped_tips=()
-while IFS= read -r tip_line; do
-  [[ -z "$tip_line" ]] && continue
-  [[ "$tip_line" == \#* ]] && continue
-  if [[ ! "$tip_line" =~ ^[0-9a-f]{40}([[:space:]]|$) ]]; then
-    printf 'FAIL: invalid required-tip entry in required-tips.txt: %s\n' "$tip_line" >&2
-    exit 1
-  fi
-  shipped_tips+=("$tip_line")
-done < "$SCRIPT_DIR/required-tips.txt"
-
-if (( ${#shipped_tips[@]} == 0 )); then
-  printf 'FAIL: no tips declared in required-tips.txt\n' >&2
-  exit 1
-fi
-shipped_tips_fixture="$(printf '%s\n' "${shipped_tips[@]}")"
 absent_sha="1111111111111111111111111111111111111111"
 
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify-required-tips.XXXXXX")"
@@ -226,7 +209,7 @@ run_case "real tip plus non-ancestor" 1 "required tip is missing from harness-c:
 repo_working_dir="$original_working_dir"
 cd -- "$original_working_dir"
 run_case "shipped tips versus main" 0 "All required tips are ancestors of origin/main" \
-  "$(write_fixture shipped-tips "${shipped_tips_fixture}")" origin/main
+  "$SCRIPT_DIR/required-tips.txt" origin/main
 
 if (( tests_run != 36 )); then
   printf 'FAIL: expected 36 test cases, ran %s\n' "$tests_run" >&2
