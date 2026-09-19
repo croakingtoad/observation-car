@@ -7,6 +7,7 @@ original_working_dir="$(pwd)"
 VERIFY_REQUIRED_TIPS="${VERIFY_REQUIRED_TIPS:-}"
 fixture_dir=""
 scratch_repo=""
+fixture_dir=""
 repo_working_dir=""
 
 cleanup() {
@@ -31,6 +32,7 @@ fi
 
 shipped_tips=()
 while IFS= read -r tip_line; do
+  tip_line="${tip_line#"${tip_line%%[![:space:]]*}"}"
   [[ -z "$tip_line" ]] && continue
   [[ "$tip_line" == \#* ]] && continue
   tip_token="${tip_line%%[[:space:]]*}"
