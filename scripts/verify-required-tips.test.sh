@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 original_working_dir="$(pwd)"
 VERIFY_REQUIRED_TIPS="${VERIFY_REQUIRED_TIPS:-}"
 scratch_repo=""
+fixture_dir=""
 repo_working_dir=""
 
 cleanup() {
@@ -30,6 +31,7 @@ fi
 
 shipped_tips=()
 while IFS= read -r tip_line; do
+  tip_line="${tip_line#"${tip_line%%[![:space:]]*}"}"
   [[ -z "$tip_line" ]] && continue
   [[ "$tip_line" == \#* ]] && continue
   shipped_tips+=("${tip_line%%[[:space:]]*}")
@@ -107,24 +109,24 @@ git config user.email "test@example.invalid"
 git config user.name "Required Tips Harness"
 printf 'one\n' > file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "A"
+git -c commit.gpgsign=false commit --quiet -m "A"
 git tag harness-a
 printf 'two\n' >> file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "B"
+git -c commit.gpgsign=false commit --quiet -m "B"
 git tag harness-b
 printf 'three\n' >> file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "C"
+git -c commit.gpgsign=false commit --quiet -m "C"
 git tag harness-c
 git checkout --quiet -B harness-d harness-a
 printf 'diverged\n' > file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "D"
+git -c commit.gpgsign=false commit --quiet -m "D"
 git checkout --quiet -B harness-e harness-a
 printf 'also diverged\n' > file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "E"
+git -c commit.gpgsign=false commit --quiet -m "E"
 git checkout --quiet harness-d
 ancestor_sha="$(git rev-parse harness-a)"
 another_ancestor_sha="$(git rev-parse harness-b)"
@@ -213,7 +215,7 @@ run_case "non-ancestor with zero verified" 1 "required tip is missing from harne
 run_case "real tip plus non-ancestor" 1 "required tip is missing from harness-c: $non_ancestor_sha" \
   "$(write_fixture partial-verified "$ancestor_sha\n$non_ancestor_sha\n")" harness-c
 
-# Integration: the two shipped tips against the checkout's main.
+# Integration: all declared tips against the checkout's main.
 repo_working_dir="$original_working_dir"
 cd -- "$original_working_dir"
 run_case "shipped tips versus main" 0 "All required tips are ancestors of origin/main" \
