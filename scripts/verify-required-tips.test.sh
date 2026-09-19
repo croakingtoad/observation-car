@@ -12,6 +12,9 @@ cleanup() {
   if [[ -n "$scratch_repo" ]]; then
     rm -rf -- "$scratch_repo"
   fi
+  if [[ -n "$fixture_dir" ]]; then
+    rm -rf -- "$fixture_dir"
+  fi
 }
 trap cleanup EXIT
 
@@ -20,17 +23,14 @@ if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ -z "$VERIFY_REQUIRED_TIPS" ]] && git rev-parse --show-toplevel >/dev/null 2>&1; then
+if [[ -z "$VERIFY_REQUIRED_TIPS" ]] ; then
   VERIFY_REQUIRED_TIPS="$SCRIPT_DIR/verify-required-tips.sh"
 fi
 
-if [[ -z "$VERIFY_REQUIRED_TIPS" ]]; then
-  printf 'FAIL: no verify-required-tips script to test\n' >&2
-  exit 1
-fi
 
-shipped_ancestor_sha="0ecae4bca2bc70692356cacac9770c25945f3762"
-shipped_another_ancestor_sha="c535ce975e82aba9481a85bb714f65eab2c2a603"
+mapfile -t shipped_tips < <(grep -oE '^[0-9a-f]{40}' "$SCRIPT_DIR/required-tips.txt")
+shipped_ancestor_sha="${shipped_tips[0]}"
+shipped_another_ancestor_sha="${shipped_tips[1]}"
 absent_sha="1111111111111111111111111111111111111111"
 
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify-required-tips.XXXXXX")"
@@ -51,6 +51,12 @@ run_case() {
   local target="$VERIFY_REQUIRED_TIPS"
 
   tests_run=$((tests_run + 1))
+
+  if [[ "$expected_status" -ne 0 && -z "$expected_output" ]]; then
+    printf 'FAIL: %s: nonzero exit requires non-empty expected_output\n' "$name" >&2
+    failures=$((failures + 1))
+    return
+  fi
 
   set +e
   output="$(cd -- "$case_dir" && REQUIRED_TIPS_FILE="$fixture" "$target" "$head_ref" 2>&1)"
@@ -81,7 +87,7 @@ write_fixture() {
   local name="$1"
   shift
   local fixture="$fixture_dir/$name"
-  printf -- "$@" > "$fixture"
+  printf '%b' "$1" > "$fixture"
   printf '%s' "$fixture"
 }
 
@@ -92,27 +98,24 @@ git config user.email "test@example.invalid"
 git config user.name "Required Tips Harness"
 printf 'one\n' > file.txt
 git add file.txt
-git commit --quiet -m "A"
+git -c commit.gpgsign=false commit --quiet -m "A"
 git tag harness-a
 printf 'two\n' >> file.txt
 git add file.txt
-git commit --quiet -m "B"
+git -c commit.gpgsign=false commit --quiet -m "B"
 git tag harness-b
 printf 'three\n' >> file.txt
 git add file.txt
-git commit --quiet -m "C"
+git -c commit.gpgsign=false commit --quiet -m "C"
 git tag harness-c
 git checkout --quiet -B harness-d harness-a
 printf 'diverged\n' > file.txt
 git add file.txt
-git commit --quiet -m "D"
-git tag harness-d-new
+git -c commit.gpgsign=false commit --quiet -m "D"
 git checkout --quiet -B harness-e harness-a
 printf 'also diverged\n' > file.txt
 git add file.txt
-git commit --quiet -m "E"
-git tag harness-e-new
-git checkout --quiet -B harness-main harness-c
+git -c commit.gpgsign=false commit --quiet -m "E"
 git checkout --quiet harness-d
 ancestor_sha="$(git rev-parse harness-a)"
 another_ancestor_sha="$(git rev-parse harness-b)"
