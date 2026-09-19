@@ -29,7 +29,6 @@ if [[ -z "$VERIFY_REQUIRED_TIPS" ]]; then
   VERIFY_REQUIRED_TIPS="$SCRIPT_DIR/verify-required-tips.sh"
 fi
 
-
 shipped_tips=()
 while IFS= read -r tip_line; do
   tip_line="${tip_line#"${tip_line%%[![:space:]]*}"}"
@@ -69,7 +68,9 @@ run_case() {
 
   tests_run=$((tests_run + 1))
 
-  if [[ "$expected_status" -ne 0 && -z "$expected_output" ]]; then
+  local trimmed_expected_output="${expected_output#"${expected_output%%[![:space:]]*}"}"
+  trimmed_expected_output="${trimmed_expected_output%"${trimmed_expected_output##*[![:space:]]}"}"
+  if [[ "$expected_status" -ne 0 && -z "$trimmed_expected_output" ]]; then
     printf 'FAIL: %s: nonzero exit requires non-empty expected_output\n' "$name" >&2
     failures=$((failures + 1))
     return
