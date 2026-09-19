@@ -16,6 +16,7 @@ fi
 ancestor_sha="0ecae4bca2bc70692356cacac9770c25945f3762"
 another_ancestor_sha="c535ce975e82aba9481a85bb714f65eab2c2a603"
 non_ancestor_sha="aa504070ac607d058d99b41f94b251547b80fae2"
+diverged_sha="0c1996c7712dbb502880dbca578dcc5f5094f222"
 root_sha="ed8f5ba869ec27ca7e8e0b785d0d2d20eac29101"
 absent_sha="1111111111111111111111111111111111111111"
 
@@ -131,6 +132,8 @@ run_case "absent object" 2 "cannot verify — object not present" \
   "$(write_fixture absent "$absent_sha\n")" HEAD
 
 # Precedence, from LOCO-1194/1196.
+run_case "all tips genuinely missing" 1 "required tip is missing from $diverged_sha" \
+  "$(write_fixture all-tips-missing "$ancestor_sha\n$another_ancestor_sha\n")" "$diverged_sha"
 run_case "non-ancestor before absent object" 1 "required tip is missing from HEAD: $non_ancestor_sha" \
   "$(write_fixture missing-before-absent "$non_ancestor_sha\n$absent_sha\n")" HEAD
 run_case "absent object before non-ancestor" 1 "required tip is missing from HEAD: $non_ancestor_sha" \
@@ -148,9 +151,9 @@ run_case "non-ancestor with zero verified" 1 "required tip is missing from HEAD:
 run_case "real tip plus non-ancestor" 1 "required tip is missing from HEAD: $non_ancestor_sha" \
   "$(write_fixture partial-verified "$ancestor_sha\n$non_ancestor_sha\n")" HEAD
 
-if (( tests_run != 33 )); then
-  printf 'FAIL: expected 33 test cases, ran %s\n' "$tests_run" >&2
+if (( tests_run != 34 )); then
+  printf 'FAIL: expected 34 test cases, ran %s\n' "$tests_run" >&2
   exit 1
 fi
 
-printf 'PASS: 33 required-tips verification cases\n'
+printf 'PASS: 34 required-tips verification cases\n'
