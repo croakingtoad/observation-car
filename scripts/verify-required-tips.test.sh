@@ -31,15 +31,13 @@ fi
 
 shipped_tips=()
 while IFS= read -r tip_line; do
-  tip_line="${tip_line#"${tip_line%%[![:space:]]*}"}"
   [[ -z "$tip_line" ]] && continue
   [[ "$tip_line" == \#* ]] && continue
-  tip_token="${tip_line%%[[:space:]]*}"
-  if [[ -z "$tip_token" ]]; then
+  if [[ ! "$tip_line" =~ ^[0-9a-f]{40}([[:space:]]|$) ]]; then
     printf 'FAIL: invalid required-tip entry in required-tips.txt: %s\n' "$tip_line" >&2
     exit 1
   fi
-  shipped_tips+=("$tip_token")
+  shipped_tips+=("$tip_line")
 done < "$SCRIPT_DIR/required-tips.txt"
 
 if (( ${#shipped_tips[@]} == 0 )); then
