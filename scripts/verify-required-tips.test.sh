@@ -51,8 +51,8 @@ run_case() {
 
   local trimmed_expected_output="${expected_output#"${expected_output%%[![:space:]]*}"}"
   trimmed_expected_output="${trimmed_expected_output%"${trimmed_expected_output##*[![:space:]]}"}"
-  if [[ "$expected_status" -ne 0 && -z "$trimmed_expected_output" ]]; then
-    printf 'FAIL: %s: nonzero exit requires non-empty expected_output\n' "$name" >&2
+  if [[ -z "$trimmed_expected_output" ]]; then
+    printf 'FAIL: %s: every case requires a non-empty expected_output\n' "$name" >&2
     failures=$((failures + 1))
     return
   fi
@@ -122,7 +122,7 @@ non_ancestor_sha="$(git rev-parse refs/heads/harness-d)"
 second_non_ancestor_sha="$(git rev-parse refs/heads/harness-e)"
 
 # Parser: accepted forms, from LOCO-1192/1194.
-run_case "bare SHA" 0 "" \
+run_case "bare SHA" 0 "All required tips are ancestors" \
   "$(write_fixture bare "$(git rev-parse harness-a)\n")" harness-c
 run_case "SHA with comment" 0 "All required tips are ancestors" \
   "$(write_fixture comment "$(git rev-parse harness-a) # verified\n")" harness-c
