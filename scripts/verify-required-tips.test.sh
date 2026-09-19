@@ -61,6 +61,12 @@ run_case() {
 
   tests_run=$((tests_run + 1))
 
+  if [[ "$expected_status" -ne 0 && -z "$expected_output" ]]; then
+    printf 'FAIL: %s: nonzero exit requires non-empty expected_output\n' "$name" >&2
+    failures=$((failures + 1))
+    return
+  fi
+
   set +e
   output="$(cd -- "$case_dir" && REQUIRED_TIPS_FILE="$fixture" "$target" "$head_ref" 2>&1)"
   status=$?
@@ -101,24 +107,24 @@ git config user.email "test@example.invalid"
 git config user.name "Required Tips Harness"
 printf 'one\n' > file.txt
 git add file.txt
-git commit --quiet -m "A"
+  git -c commit.gpgsign=false commit --quiet -m "A"
 git tag harness-a
 printf 'two\n' >> file.txt
 git add file.txt
-git commit --quiet -m "B"
+  git -c commit.gpgsign=false commit --quiet -m "B"
 git tag harness-b
 printf 'three\n' >> file.txt
 git add file.txt
-git commit --quiet -m "C"
+  git -c commit.gpgsign=false commit --quiet -m "C"
 git tag harness-c
 git checkout --quiet -B harness-d harness-a
 printf 'diverged\n' > file.txt
 git add file.txt
-git commit --quiet -m "D"
+  git -c commit.gpgsign=false commit --quiet -m "D"
 git checkout --quiet -B harness-e harness-a
 printf 'also diverged\n' > file.txt
 git add file.txt
-git commit --quiet -m "E"
+  git -c commit.gpgsign=false commit --quiet -m "E"
 git checkout --quiet harness-d
 ancestor_sha="$(git rev-parse harness-a)"
 another_ancestor_sha="$(git rev-parse harness-b)"
