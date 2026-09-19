@@ -42,7 +42,10 @@ import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 const EPUBCFI_WRAPPER = "epubcfi(";
 const LOCATION_CHARACTERS_PER_BREAK = 1_000;
 const COPY_FEEDBACK_DURATION_MS = 1_000;
-const PAGE_KEY_RELOCATION_WAIT_MS = 100;
+// Provisional, unmeasured device budget for epub.js to emit `relocated`
+// after display() resolves. Replace it with the slowest observed p99 on the
+// release iPad and Pixel Fold before the mobile milestone ships.
+export const PAGE_KEY_RELOCATION_WAIT_MS = 100;
 const UNTITLED_BOOK_TITLE = "Untitled";
 
 type EpubMetadata = Omit<PackagingMetadataObject, "title"> & {
@@ -84,6 +87,15 @@ interface EpubRenderedView {
   document: Document;
   iframe?: unknown;
   window: Window;
+}
+
+interface PendingPageKeyNavigation {
+  index: number;
+  location: string;
+  displaySucceeded: boolean;
+  matchingRelocation: boolean;
+  settled: Promise<void>;
+  settle: () => void;
 }
 
 type EpubFrameElement = Element & Pick<HTMLIFrameElement, "contentDocument">;
@@ -675,15 +687,11 @@ export class EpubNavigationTools {
   private locations: Promise<EpubLocations> | null = null;
   private currentLocation: Location | null = null;
   private pageKeyPosition: number | null = null;
-  private pendingPageKeyNavigation: {
-    index: number;
-    location: string;
-    displaySucceeded: boolean;
-    matchingRelocation: boolean;
-    settled: Promise<void>;
-    settle: () => void;
-  } | null = null;
-  private readonly expectedLatePageKeyRelocations = new Map<string, number>();
+  private pendingPageKeyNavigation: PendingPageKeyNavigation | null = null;
+  private readonly expectedLatePageKeyRelocations = new Map<
+    PendingPageKeyNavigation,
+    number
+  >();
   private pageKeyQueue: Promise<void> = Promise.resolve();
   private needsCorrection = false;
   private destroyed = false;
@@ -705,16 +713,16 @@ export class EpubNavigationTools {
   private readonly onRelocated = (loc: Location): void => {
     const relocatedLocation = this.navigationLocation(loc.start.href);
     const pendingNavigation = this.pendingPageKeyNavigation;
-    if (this.consumeExpectedLatePageKeyRelocation(relocatedLocation)) {
-      // A timed-out display already committed this cursor and released
-      // the queue.
-    } else if (
+    if (
       pendingNavigation !== null &&
       relocatedLocation.length > 0 &&
       relocatedLocation === pendingNavigation.location
     ) {
       pendingNavigation.matchingRelocation = true;
       this.commitPageKeyPosition(pendingNavigation);
+    } else if (this.consumeExpectedLatePageKeyRelocation(relocatedLocation)) {
+      // This originating navigation already committed its cursor and
+      // released the queue after timing out.
     } else {
       this.invalidatePageKeyPosition();
     }
@@ -911,7 +919,7 @@ export class EpubNavigationTools {
     const pendingNavigation = this.pendingPageKeyNavigation;
     this.pageKeyPosition = null;
     this.pendingPageKeyNavigation = null;
-    this.expectedLatePageKeyRelocations.clear();
+    this.clearExpectedLatePageKeyRelocations();
     pendingNavigation?.settle();
   }
 
@@ -1121,28 +1129,42 @@ export class EpubNavigationTools {
     ) {
       return;
     }
-    this.rememberExpectedLatePageKeyRelocation(pendingNavigation.location);
+    this.rememberExpectedLatePageKeyRelocation(pendingNavigation);
     this.pageKeyPosition = pendingNavigation.index;
     this.pendingPageKeyNavigation = null;
     pendingNavigation.settle();
   }
 
-  private rememberExpectedLatePageKeyRelocation(location: string): void {
-    const pendingCount = this.expectedLatePageKeyRelocations.get(location) ?? 0;
-    this.expectedLatePageKeyRelocations.set(location, pendingCount + 1);
+  private rememberExpectedLatePageKeyRelocation(
+    pendingNavigation: PendingPageKeyNavigation,
+  ): void {
+    const expiryId = window.setTimeout(() => {
+      if (
+        this.expectedLatePageKeyRelocations.get(pendingNavigation) === expiryId
+      ) {
+        this.expectedLatePageKeyRelocations.delete(pendingNavigation);
+      }
+    }, PAGE_KEY_RELOCATION_WAIT_MS);
+    this.expectedLatePageKeyRelocations.set(pendingNavigation, expiryId);
   }
 
   private consumeExpectedLatePageKeyRelocation(location: string): boolean {
-    const pendingCount = this.expectedLatePageKeyRelocations.get(location) ?? 0;
-    if (pendingCount === 0) {
-      return false;
+    for (const [pendingNavigation, expiryId] of
+      this.expectedLatePageKeyRelocations) {
+      if (pendingNavigation.location === location) {
+        window.clearTimeout(expiryId);
+        this.expectedLatePageKeyRelocations.delete(pendingNavigation);
+        return true;
+      }
     }
-    if (pendingCount === 1) {
-      this.expectedLatePageKeyRelocations.delete(location);
-    } else {
-      this.expectedLatePageKeyRelocations.set(location, pendingCount - 1);
+    return false;
+  }
+
+  private clearExpectedLatePageKeyRelocations(): void {
+    for (const expiryId of this.expectedLatePageKeyRelocations.values()) {
+      window.clearTimeout(expiryId);
     }
-    return true;
+    this.expectedLatePageKeyRelocations.clear();
   }
 
   private findPageKeyTargetIndex(

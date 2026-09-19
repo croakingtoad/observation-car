@@ -9,6 +9,7 @@ import type { NavItem } from "epubjs/types/navigation";
 import {
   EpubNavigationTools,
   EpubSelectionTracker,
+  PAGE_KEY_RELOCATION_WAIT_MS,
   flattenToc,
 } from "./epubNavigationTools";
 
@@ -188,6 +189,7 @@ const openDrawer = (viewerEl: HTMLElement): void => {
 };
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.innerHTML = "";
 });
 
@@ -412,6 +414,11 @@ describe("TOC drawer", () => {
 });
 
 describe("chapter navigation", () => {
+  it("keeps the relocation wait inside its provisional device budget", () => {
+    expect(PAGE_KEY_RELOCATION_WAIT_MS).toBeGreaterThanOrEqual(50);
+    expect(PAGE_KEY_RELOCATION_WAIT_MS).toBeLessThanOrEqual(200);
+  });
+
   it("PageUp passes the raw target href to display(), byte-identical", async () => {
     const rawHref = "chapitres/%C3%A9t%C3%A9.xhtml#r%C3%A9sum%C3%A9";
     const { displayCalls, setLocation, renderContents } = await buildViewer([
@@ -657,6 +664,81 @@ describe("chapter navigation", () => {
         "ch1.xhtml#section-b",
       ]);
     });
+  });
+
+  it("expires a missing late relocation before an independent relocation", async () => {
+    const { displayCalls, setLocation, relocate, renderContents } = await buildViewer(
+      [
+        tocItem("ch1.xhtml", "Chapter One"),
+        tocItem("ch1.xhtml#section-a", "Section A"),
+        tocItem("ch1.xhtml#section-b", "Section B"),
+      ],
+      () => Promise.resolve(),
+    );
+    const contentsDocument = renderContents();
+    vi.useFakeTimers();
+    const pressPageUp = (): void => {
+      contentsDocument.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }),
+      );
+    };
+
+    setLocation("ch1.xhtml");
+    pressPageUp();
+    await vi.advanceTimersByTimeAsync(PAGE_KEY_RELOCATION_WAIT_MS * 2);
+    relocate("ch1.xhtml");
+    pressPageUp();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(displayCalls).toEqual([
+      "ch1.xhtml#section-a",
+      "ch1.xhtml#section-a",
+    ]);
+  });
+
+  it("lets a live same-location navigation claim its own relocation", async () => {
+    let resolveSecondDisplay = (): void => undefined;
+    const secondDisplay = new Promise<void>((resolve) => {
+      resolveSecondDisplay = resolve;
+    });
+    let displayCount = 0;
+    const { tools, displayCalls, setLocation, relocate, renderContents } =
+      await buildViewer(
+        [
+          tocItem("ch1.xhtml", "Chapter One"),
+          tocItem("ch1.xhtml#section-a", "Section A"),
+          tocItem("ch1.xhtml#section-b", "Section B"),
+        ],
+        () => {
+          displayCount += 1;
+          return displayCount === 1 ? Promise.resolve() : secondDisplay;
+        },
+      );
+    const contentsDocument = renderContents();
+    vi.useFakeTimers();
+    const press = (key: "PageUp" | "PageDown"): void => {
+      contentsDocument.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+    };
+    const internals = tools as unknown as {
+      pageKeyPosition: number | null;
+      pendingPageKeyNavigation: unknown;
+    };
+
+    setLocation("ch1.xhtml");
+    press("PageUp");
+    await vi.advanceTimersByTimeAsync(PAGE_KEY_RELOCATION_WAIT_MS);
+    press("PageDown");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(displayCalls).toEqual(["ch1.xhtml#section-a", "ch1.xhtml"]);
+
+    relocate("ch1.xhtml");
+    resolveSecondDisplay();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(internals.pageKeyPosition).toBe(0);
+    expect(internals.pendingPageKeyNavigation).toBeNull();
   });
 
   it("PageDown symmetrically retreats one anchored flattened entry per press", async () => {
