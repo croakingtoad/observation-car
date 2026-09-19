@@ -174,6 +174,7 @@ export class EpubView extends FileView {
 
   /** Open this EPUB at a CFI or spine-item fragment. */
   async openAtFragment(fragment: string): Promise<void> {
+    this.navigationTools?.invalidatePageKeyPosition();
     try {
       const position = parseFragment(fragment);
       const book = this.book;

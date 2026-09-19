@@ -27,6 +27,10 @@ const epubStylesDouble = vi.hoisted(() => {
   };
 });
 
+const navigationToolsDouble = vi.hoisted(() => ({
+  invalidatePageKeyPosition: vi.fn(),
+}));
+
 vi.mock("./epubStyles", () => ({
   EpubStyles: class {
     destroy: () => void;
@@ -140,6 +144,7 @@ vi.mock("epubjs", () => ({
 
 vi.mock("./epubNavigationTools", () => ({
   EpubNavigationTools: class {
+    invalidatePageKeyPosition = navigationToolsDouble.invalidatePageKeyPosition;
     destroy(): void {}
   },
   EpubSelectionTracker: class {},
@@ -183,6 +188,7 @@ const makeHost = (overrides: Partial<EpubViewHost> = {}): EpubViewHost => {
 beforeEach(() => {
   epub.reset();
   epubStylesDouble.reset();
+  navigationToolsDouble.invalidatePageKeyPosition.mockReset();
   // Obsidian extends HTMLElement with createDiv/empty; jsdom does not.
   const proto = HTMLElement.prototype as unknown as {
     createDiv?: ((info?: { cls?: string }) => HTMLDivElement) | undefined;
@@ -383,6 +389,7 @@ describe("EpubView location events (F2.5)", () => {
     await vi.advanceTimersByTimeAsync(150);
     await view.onClose();
 
+    expect(navigationToolsDouble.invalidatePageKeyPosition).toHaveBeenCalledOnce();
     expect(storedLocation).toBe("#epubcfi(/6/8!/4/2/1:0)");
     consoleError.mockRestore();
   });

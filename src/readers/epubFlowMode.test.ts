@@ -135,6 +135,7 @@ vi.mock("epubjs", async (importOriginal) => {
 });
 vi.mock("./epubNavigationTools", () => ({
   EpubNavigationTools: class {
+    invalidatePageKeyPosition(): void {}
     destroy(): void {}
   },
   EpubSelectionTracker: class {
