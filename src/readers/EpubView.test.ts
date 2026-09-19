@@ -844,9 +844,7 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     displayGate.resolve();
     await openA;
 
-    expect(renditionA.listenerCount("relocated")).toBe(
-      listenersBeforeTeardown - 2,
-    );
+    expect(renditionA.listenerCount("relocated")).toBe(0);
   });
 
   it("onClose during an in-flight render retires the render", async () => {
@@ -1314,12 +1312,9 @@ describe("EpubView location events (F2.5)", () => {
     await view.onLoadFile(file("Books/Test.epub"));
     await vi.advanceTimersByTimeAsync(0);
     const rendition = FakeRendition.instances[0];
-    const listenersBeforeClose = rendition.listenerCount("relocated");
     await view.onClose();
 
-    expect(rendition.listenerCount("relocated")).toBe(
-      listenersBeforeClose - 2,
-    );
+    expect(rendition.listenerCount("relocated")).toBe(0);
   });
 
   it("adds no listeners to document or window", async () => {
