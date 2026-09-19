@@ -3,7 +3,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+original_working_dir="$(pwd)"
 VERIFY_REQUIRED_TIPS="${VERIFY_REQUIRED_TIPS:-}"
+scratch_repo=""
+repo_working_dir=""
+
+cleanup() {
+  if [[ -n "$scratch_repo" ]]; then
+    rm -rf -- "$scratch_repo"
+  fi
+}
+trap cleanup EXIT
+
+if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  printf 'FAIL: this harness requires one integration case inside the repository checkout\n' >&2
+  exit 1
+fi
+
 if [[ -z "$VERIFY_REQUIRED_TIPS" ]] && git rev-parse --show-toplevel >/dev/null 2>&1; then
   VERIFY_REQUIRED_TIPS="$SCRIPT_DIR/verify-required-tips.sh"
 fi
@@ -13,17 +29,15 @@ if [[ -z "$VERIFY_REQUIRED_TIPS" ]]; then
   exit 1
 fi
 
-ancestor_sha="0ecae4bca2bc70692356cacac9770c25945f3762"
-another_ancestor_sha="c535ce975e82aba9481a85bb714f65eab2c2a603"
-non_ancestor_sha="aa504070ac607d058d99b41f94b251547b80fae2"
-diverged_sha="0c1996c7712dbb502880dbca578dcc5f5094f222"
-root_sha="ed8f5ba869ec27ca7e8e0b785d0d2d20eac29101"
+shipped_ancestor_sha="0ecae4bca2bc70692356cacac9770c25945f3762"
+shipped_another_ancestor_sha="c535ce975e82aba9481a85bb714f65eab2c2a603"
 absent_sha="1111111111111111111111111111111111111111"
 
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify-required-tips.XXXXXX")"
-trap 'rm -rf -- "$fixture_dir"' EXIT
+scratch_repo="$(mktemp -d "${TMPDIR:-/tmp}/verify-required-tips-repo.XXXXXX")"
 
 tests_run=0
+failures=0
 
 run_case() {
   local name="$1"
@@ -33,11 +47,13 @@ run_case() {
   local head_ref="$5"
   local status
   local output
+  local case_dir="$repo_working_dir"
+  local target="$VERIFY_REQUIRED_TIPS"
 
   tests_run=$((tests_run + 1))
 
   set +e
-  output="$(REQUIRED_TIPS_FILE="$fixture" "$VERIFY_REQUIRED_TIPS" "$head_ref" 2>&1)"
+  output="$(cd -- "$case_dir" && REQUIRED_TIPS_FILE="$fixture" "$target" "$head_ref" 2>&1)"
   status=$?
   set -e
 
@@ -46,18 +62,18 @@ run_case() {
     if [[ -n "$output" ]]; then
       printf 'output:\n%s\n' "$output" >&2
     fi
-    exit 1
+    failures=$((failures + 1))
   fi
 
   if [[ "$expected_status" -ne 0 && "$output" == *"All required tips are ancestors"* ]]; then
     printf 'FAIL: %s: success line printed with nonzero exit\n' "$name" >&2
-    exit 1
+    failures=$((failures + 1))
   fi
 
   if [[ -n "$expected_output" && "$output" != *"$expected_output"* ]]; then
     printf 'FAIL: %s: expected output substring: %s\n' "$name" "$expected_output" >&2
     printf 'actual output:\n%s\n' "$output" >&2
-    exit 1
+    failures=$((failures + 1))
   fi
 }
 
@@ -69,91 +85,135 @@ write_fixture() {
   printf '%s' "$fixture"
 }
 
+git init --quiet "$scratch_repo"
+repo_working_dir="$scratch_repo"
+cd -- "$scratch_repo"
+git config user.email "test@example.invalid"
+git config user.name "Required Tips Harness"
+printf 'one\n' > file.txt
+git add file.txt
+git commit --quiet -m "A"
+git tag harness-a
+printf 'two\n' >> file.txt
+git add file.txt
+git commit --quiet -m "B"
+git tag harness-b
+printf 'three\n' >> file.txt
+git add file.txt
+git commit --quiet -m "C"
+git tag harness-c
+git checkout --quiet -B harness-d harness-a
+printf 'diverged\n' > file.txt
+git add file.txt
+git commit --quiet -m "D"
+git tag harness-d-new
+git checkout --quiet -B harness-e harness-a
+printf 'also diverged\n' > file.txt
+git add file.txt
+git commit --quiet -m "E"
+git tag harness-e-new
+git checkout --quiet -B harness-main harness-c
+git checkout --quiet harness-d
+ancestor_sha="$(git rev-parse harness-a)"
+another_ancestor_sha="$(git rev-parse harness-b)"
+non_ancestor_sha="$(git rev-parse refs/heads/harness-d)"
+second_non_ancestor_sha="$(git rev-parse refs/heads/harness-e)"
+
 # Parser: accepted forms, from LOCO-1192/1194.
 run_case "bare SHA" 0 "" \
-  "$(write_fixture bare "$ancestor_sha\n")" HEAD
+  "$(write_fixture bare "$(git rev-parse harness-a)\n")" harness-c
 run_case "SHA with comment" 0 "All required tips are ancestors" \
-  "$(write_fixture comment "$ancestor_sha # verified\n")" HEAD
+  "$(write_fixture comment "$(git rev-parse harness-a) # verified\n")" harness-c
 run_case "SHA with tab comment" 0 "All required tips are ancestors" \
-  "$(write_fixture tab-comment "$ancestor_sha\t# verified\n")" HEAD
+  "$(write_fixture tab-comment "$(git rev-parse harness-a)\t# verified\n")" harness-c
 run_case "trailing whitespace" 0 "All required tips are ancestors" \
-  "$(write_fixture trailing "$ancestor_sha   \n")" HEAD
+  "$(write_fixture trailing "$(git rev-parse harness-a)   \n")" harness-c
 run_case "no final newline" 0 "All required tips are ancestors" \
-  "$(write_fixture no-newline "$ancestor_sha")" HEAD
+  "$(write_fixture no-newline "$(git rev-parse harness-a)")" harness-c
 run_case "CRLF" 0 "All required tips are ancestors" \
-  "$(write_fixture crlf "$ancestor_sha\r\n")" HEAD
+  "$(write_fixture crlf "$(git rev-parse harness-a)\r\n")" harness-c
 run_case "ordinary comment" 0 "All required tips are ancestors" \
-  "$(write_fixture ordinary "# prose with cafe0123\n$ancestor_sha\n")" HEAD
+  "$(write_fixture ordinary "# prose with cafe0123\n$(git rev-parse harness-a)\n")" harness-c
 run_case "disabled comment" 0 "All required tips are ancestors" \
-  "$(write_fixture disabled "# disabled: $non_ancestor_sha\n$ancestor_sha\n")" HEAD
+  "$(write_fixture disabled "# disabled: $(git rev-parse harness-c)\n$(git rev-parse harness-a)\n")" harness-c
 
 # Parser: rejected forms, from LOCO-1192/1194.
 run_case "39-hex" 1 "invalid required-tip entry" \
-  "$(write_fixture short "${ancestor_sha:0:39}\n")" HEAD
+  "$(write_fixture short "${ancestor_sha:0:39}\n")" harness-c
 run_case "41-hex" 1 "invalid required-tip entry" \
-  "$(write_fixture long "${ancestor_sha}f\n")" HEAD
+  "$(write_fixture long "${ancestor_sha}f\n")" harness-c
 run_case "uppercase" 1 "invalid required-tip entry" \
-  "$(write_fixture uppercase "${ancestor_sha^^}\n")" HEAD
+  "$(write_fixture uppercase "${ancestor_sha^^}\n")" harness-c
 run_case "no-space comment" 1 "invalid required-tip entry" \
-  "$(write_fixture no-space "$ancestor_sha#verified\n")" HEAD
+  "$(write_fixture no-space "$ancestor_sha#verified\n")" harness-c
 run_case "plain garbage" 1 "invalid required-tip entry" \
-  "$(write_fixture garbage "$ancestor_sha garbage\n")" HEAD
+  "$(write_fixture garbage "$ancestor_sha garbage\n")" harness-c
 run_case "two SHAs" 1 "invalid required-tip entry" \
-  "$(write_fixture two-shas "$ancestor_sha $another_ancestor_sha\n")" HEAD
+  "$(write_fixture two-shas "$ancestor_sha $another_ancestor_sha\n")" harness-c
 run_case "whitespace-only" 1 "invalid required-tip entry" \
-  "$(write_fixture whitespace "   \n")" HEAD
+  "$(write_fixture whitespace "   \n")" harness-c
 
 # Comment trap, from LOCO-1194/1196.
 run_case "single-hash comment" 1 "commented-out required tip declares nothing" \
-  "$(write_fixture single-hash "# $non_ancestor_sha\n")" HEAD
+  "$(write_fixture single-hash "# $ancestor_sha\n")" harness-c
 run_case "double-hash comment" 1 "commented-out required tip declares nothing" \
-  "$(write_fixture double-hash "## $non_ancestor_sha\n")" HEAD
+  "$(write_fixture double-hash "## $ancestor_sha\n")" harness-c
 run_case "hash punctuation comment" 1 "commented-out required tip declares nothing" \
-  "$(write_fixture punctuation "#- $non_ancestor_sha\n")" HEAD
+  "$(write_fixture punctuation "#- $ancestor_sha\n")" harness-c
 run_case "unterminated single-hash comment" 1 "commented-out required tip declares nothing" \
-  "$(write_fixture unterminated-single "# $non_ancestor_sha")" HEAD
+  "$(write_fixture unterminated-single "# $ancestor_sha")" harness-c
 run_case "unterminated double-hash comment" 1 "commented-out required tip declares nothing" \
-  "$(write_fixture unterminated-double "## $non_ancestor_sha")" HEAD
+  "$(write_fixture unterminated-double "## $ancestor_sha")" harness-c
 
 # Empty declarations, from LOCO-1192/1194.
 run_case "empty file" 2 "no required tips declared" \
-  "$(write_fixture empty "")" HEAD
+  "$(write_fixture empty "")" harness-c
 run_case "ordinary comments only" 2 "no required tips declared" \
-  "$(write_fixture comments-only "# one\n# two with cafe0123\n")" HEAD
+  "$(write_fixture comments-only "# one\n# two with cafe0123\n")" harness-c
 run_case "39-hex comment only" 2 "no required tips declared" \
-  "$(write_fixture short-comment "# ${ancestor_sha:0:39}\n")" HEAD
+  "$(write_fixture short-comment "# ${ancestor_sha:0:39}\n")" harness-c
 
 # Environment and object failures, from LOCO-1192/1196.
 run_case "missing file" 2 "required-tips file not found" \
-  "$fixture_dir/does-not-exist" HEAD
+  "$fixture_dir/does-not-exist" harness-c
 run_case "missing head" 2 "cannot verify — head not present" \
   "$(write_fixture valid "$ancestor_sha\n")" not-a-real-ref
 run_case "absent object" 2 "cannot verify — object not present" \
-  "$(write_fixture absent "$absent_sha\n")" HEAD
+  "$(write_fixture absent "$absent_sha\n")" harness-c
 
 # Precedence, from LOCO-1194/1196.
-run_case "all tips genuinely missing" 1 "required tip is missing from $diverged_sha" \
-  "$(write_fixture all-tips-missing "$ancestor_sha\n$another_ancestor_sha\n")" "$diverged_sha"
-run_case "non-ancestor before absent object" 1 "required tip is missing from HEAD: $non_ancestor_sha" \
-  "$(write_fixture missing-before-absent "$non_ancestor_sha\n$absent_sha\n")" HEAD
-run_case "absent object before non-ancestor" 1 "required tip is missing from HEAD: $non_ancestor_sha" \
-  "$(write_fixture absent-before-missing "$absent_sha\n$non_ancestor_sha\n")" HEAD
+run_case "all tips genuinely missing" 1 "required tip is missing from harness-c" \
+  "$(write_fixture all-tips-missing "$non_ancestor_sha\n$second_non_ancestor_sha\n")" harness-c
+run_case "non-ancestor before absent object" 1 "required tip is missing from harness-c: $non_ancestor_sha" \
+  "$(write_fixture missing-before-absent "$non_ancestor_sha\n$absent_sha\n")" harness-c
+run_case "absent object before non-ancestor" 1 "required tip is missing from harness-c: $non_ancestor_sha" \
+  "$(write_fixture absent-before-missing "$absent_sha\n$non_ancestor_sha\n")" harness-c
 run_case "malformed plus non-ancestor" 1 "invalid required-tip entry" \
-  "$(write_fixture malformed-missing "garbage\n$non_ancestor_sha\n")" HEAD
-run_case "commented SHA plus non-ancestor" 1 "required tip is missing from HEAD: $non_ancestor_sha" \
-  "$(write_fixture commented-missing "# $another_ancestor_sha\n$non_ancestor_sha\n")" HEAD
-run_case "both tips versus root" 1 "required tip is missing from $root_sha: $another_ancestor_sha" \
-  "$(write_fixture root-misses "$ancestor_sha\n$another_ancestor_sha\n")" "$root_sha"
+  "$(write_fixture malformed-missing "garbage\n$non_ancestor_sha\n")" harness-c
+run_case "commented SHA plus non-ancestor" 1 "required tip is missing from harness-c: $non_ancestor_sha" \
+  "$(write_fixture commented-missing "# $another_ancestor_sha\n$non_ancestor_sha\n")" harness-c
+run_case "both tips versus root" 1 "required tip is missing from harness-a: $another_ancestor_sha" \
+  "$(write_fixture root-misses "$ancestor_sha\n$another_ancestor_sha\n")" harness-a
 
 # Governing property across all verification counts, from LOCO-1196.
-run_case "non-ancestor with zero verified" 1 "required tip is missing from HEAD: $non_ancestor_sha" \
-  "$(write_fixture zero-verified "$non_ancestor_sha\n")" HEAD
-run_case "real tip plus non-ancestor" 1 "required tip is missing from HEAD: $non_ancestor_sha" \
-  "$(write_fixture partial-verified "$ancestor_sha\n$non_ancestor_sha\n")" HEAD
+run_case "non-ancestor with zero verified" 1 "required tip is missing from harness-c: $non_ancestor_sha" \
+  "$(write_fixture zero-verified "$non_ancestor_sha\n")" harness-c
+run_case "real tip plus non-ancestor" 1 "required tip is missing from harness-c: $non_ancestor_sha" \
+  "$(write_fixture partial-verified "$ancestor_sha\n$non_ancestor_sha\n")" harness-c
 
-if (( tests_run != 34 )); then
-  printf 'FAIL: expected 34 test cases, ran %s\n' "$tests_run" >&2
+# Integration: the two shipped tips against the checkout's main.
+repo_working_dir="$original_working_dir"
+cd -- "$original_working_dir"
+run_case "shipped tips versus main" 0 "All required tips are ancestors of origin/main" \
+  "$(write_fixture shipped-tips "$shipped_ancestor_sha\n$shipped_another_ancestor_sha\n")" origin/main
+
+if (( tests_run != 35 )); then
+  printf 'FAIL: expected 35 test cases, ran %s\n' "$tests_run" >&2
   exit 1
 fi
 
-printf 'PASS: 34 required-tips verification cases\n'
+if (( failures )); then
+  exit 1
+fi
+
+printf 'PASS: %s required-tips verification cases\n' "$tests_run"
