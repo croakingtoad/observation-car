@@ -55,6 +55,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "$REQUIRED_TIPS_FILE"
 
 if (( failed )); then
+  if (( checked == 0 )); then
+    echo "error: no required tips declared in $REQUIRED_TIPS_FILE" >&2
+    exit 2
+  fi
   exit "$failed"
 fi
 
