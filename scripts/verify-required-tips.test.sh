@@ -34,8 +34,12 @@ while IFS= read -r tip_line; do
   [[ "$tip_line" == \#* ]] && continue
   shipped_tips+=("${tip_line%%[[:space:]]*}")
 done < "$SCRIPT_DIR/required-tips.txt"
-shipped_ancestor_sha="${shipped_tips[0]}"
-shipped_another_ancestor_sha="${shipped_tips[1]}"
+
+if (( ${#shipped_tips[@]} == 0 )); then
+  printf 'FAIL: no tips declared in required-tips.txt\n' >&2
+  exit 1
+fi
+shipped_tips_fixture="$(printf '%s\n' "${shipped_tips[@]}")"
 absent_sha="1111111111111111111111111111111111111111"
 
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify-required-tips.XXXXXX")"
@@ -207,7 +211,7 @@ run_case "real tip plus non-ancestor" 1 "required tip is missing from harness-c:
 repo_working_dir="$original_working_dir"
 cd -- "$original_working_dir"
 run_case "shipped tips versus main" 0 "All required tips are ancestors of origin/main" \
-  "$(write_fixture shipped-tips "$shipped_ancestor_sha\n$shipped_another_ancestor_sha\n")" origin/main
+  "$(write_fixture shipped-tips "${shipped_tips_fixture}")" origin/main
 
 if (( tests_run != 35 )); then
   printf 'FAIL: expected 35 test cases, ran %s\n' "$tests_run" >&2
