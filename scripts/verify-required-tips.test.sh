@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 original_working_dir="$(pwd)"
 VERIFY_REQUIRED_TIPS="${VERIFY_REQUIRED_TIPS:-}"
+fixture_dir=""
 scratch_repo=""
 repo_working_dir=""
 
@@ -32,7 +33,12 @@ shipped_tips=()
 while IFS= read -r tip_line; do
   [[ -z "$tip_line" ]] && continue
   [[ "$tip_line" == \#* ]] && continue
-  shipped_tips+=("${tip_line%%[[:space:]]*}")
+  tip_token="${tip_line%%[[:space:]]*}"
+  if [[ -z "$tip_token" ]]; then
+    printf 'FAIL: invalid required-tip entry in required-tips.txt: %s\n' "$tip_line" >&2
+    exit 1
+  fi
+  shipped_tips+=("$tip_token")
 done < "$SCRIPT_DIR/required-tips.txt"
 
 if (( ${#shipped_tips[@]} == 0 )); then
@@ -107,24 +113,24 @@ git config user.email "test@example.invalid"
 git config user.name "Required Tips Harness"
 printf 'one\n' > file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "A"
+git -c commit.gpgsign=false commit --quiet -m "A"
 git tag harness-a
 printf 'two\n' >> file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "B"
+git -c commit.gpgsign=false commit --quiet -m "B"
 git tag harness-b
 printf 'three\n' >> file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "C"
+git -c commit.gpgsign=false commit --quiet -m "C"
 git tag harness-c
 git checkout --quiet -B harness-d harness-a
 printf 'diverged\n' > file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "D"
+git -c commit.gpgsign=false commit --quiet -m "D"
 git checkout --quiet -B harness-e harness-a
 printf 'also diverged\n' > file.txt
 git add file.txt
-  git -c commit.gpgsign=false commit --quiet -m "E"
+git -c commit.gpgsign=false commit --quiet -m "E"
 git checkout --quiet harness-d
 ancestor_sha="$(git rev-parse harness-a)"
 another_ancestor_sha="$(git rev-parse harness-b)"
@@ -164,6 +170,8 @@ run_case "two SHAs" 1 "invalid required-tip entry" \
   "$(write_fixture two-shas "$ancestor_sha $another_ancestor_sha\n")" harness-c
 run_case "whitespace-only" 1 "invalid required-tip entry" \
   "$(write_fixture whitespace "   \n")" harness-c
+run_case "indented entry" 1 "invalid required-tip entry" \
+  "$(write_fixture indented "    $non_ancestor_sha\n")" harness-c
 
 # Comment trap, from LOCO-1194/1196.
 run_case "single-hash comment" 1 "commented-out required tip declares nothing" \
@@ -213,14 +221,14 @@ run_case "non-ancestor with zero verified" 1 "required tip is missing from harne
 run_case "real tip plus non-ancestor" 1 "required tip is missing from harness-c: $non_ancestor_sha" \
   "$(write_fixture partial-verified "$ancestor_sha\n$non_ancestor_sha\n")" harness-c
 
-# Integration: the two shipped tips against the checkout's main.
+# Integration: the shipped tips declared in required-tips.txt.
 repo_working_dir="$original_working_dir"
 cd -- "$original_working_dir"
 run_case "shipped tips versus main" 0 "All required tips are ancestors of origin/main" \
   "$(write_fixture shipped-tips "${shipped_tips_fixture}")" origin/main
 
-if (( tests_run != 35 )); then
-  printf 'FAIL: expected 35 test cases, ran %s\n' "$tests_run" >&2
+if (( tests_run != 36 )); then
+  printf 'FAIL: expected 36 test cases, ran %s\n' "$tests_run" >&2
   exit 1
 fi
 
