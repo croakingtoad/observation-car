@@ -10,6 +10,7 @@ import {
   EpubNavigationTools,
   EpubSelectionTracker,
   PAGE_KEY_RELOCATION_WAIT_MS,
+  PAGE_KEY_DISPLAY_DEADLINE_MS,
   flattenToc,
 } from "./epubNavigationTools";
 
@@ -119,6 +120,9 @@ async function buildViewer(
     prev: () => Promise.resolve(),
     next: () => Promise.resolve(),
     themes: { override: () => undefined },
+    currentLocation: () => Promise.resolve(
+      locationState.start === undefined ? undefined : { start: locationState.start },
+    ),
     display: (target?: unknown) => {
       const href = typeof target === "string" ? target : "";
       displayCalls.push(href);
@@ -179,6 +183,12 @@ async function buildViewer(
 async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 const entryLabels = (viewerEl: HTMLElement): HTMLElement[] =>
@@ -508,6 +518,23 @@ describe("chapter navigation", () => {
     expect(displayCalls).toEqual(["ch2.xhtml"]);
   });
 
+  it("keeps fallback and target indexes aligned when a heading precedes the current entry", async () => {
+    const { displayCalls, setLocation, renderContents } = await buildViewer([
+      hreflessTocItem("Part heading"),
+      tocItem("ch1.xhtml", "Chapter One"),
+      tocItem("ch2.xhtml", "Chapter Two"),
+    ]);
+    const contentsDocument = renderContents();
+    setLocation("ch1.xhtml");
+
+    contentsDocument.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }),
+    );
+    await flush();
+
+    expect(displayCalls).toEqual(["ch2.xhtml"]);
+  });
+
   it("does not display from a location absent from the TOC", async () => {
     const { displayCalls, setLocation, renderContents } = await buildViewer([
       tocItem("part1.xhtml", "Part I", [tocItem("ch1.xhtml", "Chapter One")]),
@@ -633,6 +660,36 @@ describe("chapter navigation", () => {
         "ch1.xhtml#section-b",
       ]);
     });
+  });
+
+  it("does not advance the fallback cursor when display stays at the previous location", async () => {
+    const { tools, displayCalls, setLocation, renderContents } = await buildViewer(
+      [tocItem("ch1.xhtml", "Chapter One"), tocItem("ch2.xhtml", "Chapter Two")],
+      () => Promise.resolve(),
+    );
+    const contentsDocument = renderContents();
+    const internals = tools as unknown as {
+      pageKeyPosition: number | null;
+      pendingPageKeyNavigation: unknown;
+    };
+    const pressPageUp = (): void => {
+      contentsDocument.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }),
+      );
+    };
+    vi.useFakeTimers();
+
+    setLocation("ch1.xhtml");
+    pressPageUp();
+    await vi.advanceTimersByTimeAsync(PAGE_KEY_RELOCATION_WAIT_MS);
+
+    expect(internals.pageKeyPosition).toBeNull();
+    expect(internals.pendingPageKeyNavigation).toBeNull();
+
+    pressPageUp();
+    await vi.advanceTimersByTimeAsync(PAGE_KEY_RELOCATION_WAIT_MS);
+
+    expect(displayCalls).toEqual(["ch2.xhtml", "ch2.xhtml"]);
   });
 
   it("preserves the fallback cursor when its relocation arrives late", async () => {
@@ -890,6 +947,28 @@ describe("chapter navigation", () => {
     expect(internals.pageKeyPosition).toBeNull();
   });
 
+  it("releases a jammed Page-key queue during reader teardown", async () => {
+    const { tools, displayCalls, setLocation, renderContents } = await buildViewer(
+      [tocItem("ch1.xhtml", "Chapter One"), tocItem("ch2.xhtml", "Chapter Two")],
+      () => new Promise<void>(() => undefined),
+    );
+    const contentsDocument = renderContents();
+    setLocation("ch1.xhtml");
+
+    contentsDocument.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() => expect(displayCalls).toHaveLength(1));
+
+    const queueReleased = vi.fn();
+    const queue = (tools as unknown as { pageKeyQueue: Promise<void> }).pageKeyQueue;
+    void queue.then(queueReleased);
+    tools.destroy();
+    await flushMicrotasks();
+
+    expect(queueReleased).toHaveBeenCalledOnce();
+  });
+
   it("rejects a remembered entry when the current rendered file no longer matches", async () => {
     const { displayCalls, setLocation, renderContents } = await buildViewer([
       tocItem("ch1.xhtml", "Chapter One"),
@@ -1057,6 +1136,125 @@ describe("chapter navigation", () => {
     }
   });
 
+  it("recovers after a Page-key display never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      let attempt = 0;
+      const { tools, displayCalls, setLocation, renderContents } = await buildViewer(
+        [
+          tocItem("ch1.xhtml", "Chapter One"),
+          tocItem("ch1.xhtml#section-a", "Section A"),
+          tocItem("ch2.xhtml", "Chapter Two"),
+        ],
+        async (target, relocate) => {
+          attempt += 1;
+          if (attempt === 1) {
+            await new Promise<void>(() => undefined);
+            return;
+          }
+          window.setTimeout(() => relocate(target.split("#", 1)[0] ?? target), 0);
+        },
+      );
+      const contentsDocument = renderContents();
+      const pressPageUp = (): void => {
+        contentsDocument.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "PageUp",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      };
+      setLocation("ch1.xhtml");
+
+      pressPageUp();
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(PAGE_KEY_DISPLAY_DEADLINE_MS);
+      expect(
+        (tools as unknown as { pendingPageKeyNavigation: unknown })
+          .pendingPageKeyNavigation,
+      ).toBeNull();
+      pressPageUp();
+      await vi.advanceTimersByTimeAsync(0);
+      pressPageUp();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(displayCalls).toEqual([
+        "ch1.xhtml#section-a",
+        "ch1.xhtml#section-a",
+        "ch2.xhtml",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not commit a timed-out target when its relocation arrives late", async () => {
+    vi.useFakeTimers();
+    try {
+      let attempt = 0;
+      let resolveSecondDisplay = (): void => undefined;
+      const secondDisplay = new Promise<void>((resolve) => {
+        resolveSecondDisplay = resolve;
+      });
+      const { tools, displayCalls, setLocation, relocate, renderContents } =
+        await buildViewer(
+          [
+            tocItem("ch1.xhtml", "Chapter One"),
+            tocItem("ch1.xhtml#section-a", "Section A"),
+            tocItem("ch2.xhtml", "Chapter Two"),
+          ],
+          async () => {
+            attempt += 1;
+            if (attempt === 1) {
+              await new Promise<void>(() => undefined);
+            }
+            if (attempt === 2) {
+              await secondDisplay;
+            }
+          },
+        );
+      const contentsDocument = renderContents();
+      const internals = tools as unknown as {
+        pageKeyPosition: number | null;
+        pendingPageKeyNavigation: unknown;
+      };
+      const pressPageUp = (): void => {
+        contentsDocument.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "PageUp",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      };
+      setLocation("ch1.xhtml");
+
+      pressPageUp();
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(PAGE_KEY_DISPLAY_DEADLINE_MS);
+      expect(internals.pageKeyPosition).toBeNull();
+
+      pressPageUp();
+      await flushMicrotasks();
+      expect(displayCalls).toHaveLength(2);
+      relocate("ch1.xhtml");
+      expect(internals.pageKeyPosition).toBeNull();
+      expect(internals.pendingPageKeyNavigation).not.toBeNull();
+
+      resolveSecondDisplay();
+      await flushMicrotasks();
+      expect(internals.pageKeyPosition).toBeNull();
+      expect(internals.pendingPageKeyNavigation).not.toBeNull();
+      relocate("ch1.xhtml");
+      await flushMicrotasks();
+
+      expect(internals.pageKeyPosition).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not commit a pending Page-key target after a mismatching relocation", async () => {
     let resolveDisplay = (): void => undefined;
     const displayGate = new Promise<void>((resolve) => {
@@ -1123,6 +1321,36 @@ describe("chapter navigation", () => {
       expect(internals.pageKeyPosition).toBeNull();
       expect(internals.pendingPageKeyNavigation).toBeNull();
       expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not commit when a matching relocation precedes display rejection", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { tools, setLocation, renderContents } = await buildViewer(
+        [
+          tocItem("ch1.xhtml", "Chapter One"),
+          tocItem("ch1.xhtml#section-a", "Section A"),
+          tocItem("ch2.xhtml", "Chapter Two"),
+        ],
+        async (target, relocate) => {
+          relocate(target.split("#", 1)[0] ?? target);
+          throw new Error("display failed after matching relocation");
+        },
+      );
+      const contentsDocument = renderContents();
+      setLocation("ch1.xhtml");
+
+      contentsDocument.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }),
+      );
+      await flush();
+
+      expect(
+        (tools as unknown as { pageKeyPosition: number | null }).pageKeyPosition,
+      ).toBeNull();
     } finally {
       warn.mockRestore();
     }

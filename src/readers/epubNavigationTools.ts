@@ -46,6 +46,7 @@ const COPY_FEEDBACK_DURATION_MS = 1_000;
 // after display() resolves. Replace it with the slowest observed p99 on the
 // release iPad and Pixel Fold before the mobile milestone ships.
 export const PAGE_KEY_RELOCATION_WAIT_MS = 100;
+export const PAGE_KEY_DISPLAY_DEADLINE_MS = 5_000;
 const UNTITLED_BOOK_TITLE = "Untitled";
 
 type EpubMetadata = Omit<PackagingMetadataObject, "title"> & {
@@ -97,6 +98,10 @@ interface PendingPageKeyNavigation {
   settled: Promise<void>;
   settle: () => void;
 }
+
+type PageKeyOperationResult<T> =
+  | { status: "completed"; value: T }
+  | { status: "deadline" | "teardown" };
 
 type EpubFrameElement = Element & Pick<HTMLIFrameElement, "contentDocument">;
 type RenderedContents = EpubRenderedView;
@@ -692,7 +697,12 @@ export class EpubNavigationTools {
     PendingPageKeyNavigation,
     number
   >();
+  private readonly timedOutPageKeyRelocations = new Map<string, Set<number>>();
   private pageKeyQueue: Promise<void> = Promise.resolve();
+  private releasePageKeyTeardown = (): void => undefined;
+  private readonly pageKeyTeardown = new Promise<void>((resolve) => {
+    this.releasePageKeyTeardown = resolve;
+  });
   private needsCorrection = false;
   private destroyed = false;
   private readonly keyBridge: EpubKeyBridge;
@@ -713,17 +723,26 @@ export class EpubNavigationTools {
   private readonly onRelocated = (loc: Location): void => {
     const relocatedLocation = this.navigationLocation(loc.start.href);
     const pendingNavigation = this.pendingPageKeyNavigation;
-    if (
+    const matchesPendingNavigation =
       pendingNavigation !== null &&
       relocatedLocation.length > 0 &&
-      relocatedLocation === pendingNavigation.location
-    ) {
-      pendingNavigation.matchingRelocation = true;
-      this.commitPageKeyPosition(pendingNavigation);
+      relocatedLocation === pendingNavigation.location;
+    if (matchesPendingNavigation && pendingNavigation !== null) {
+      if (pendingNavigation.displaySucceeded) {
+        this.consumeTimedOutPageKeyRelocation(relocatedLocation);
+        pendingNavigation.matchingRelocation = true;
+        this.commitPageKeyPosition(pendingNavigation);
+      } else if (!this.consumeTimedOutPageKeyRelocation(relocatedLocation)) {
+        pendingNavigation.matchingRelocation = true;
+        this.commitPageKeyPosition(pendingNavigation);
+      }
     } else if (this.consumeExpectedLatePageKeyRelocation(relocatedLocation)) {
       // This originating navigation already committed its cursor and
       // released the queue after timing out.
+    } else if (this.consumeTimedOutPageKeyRelocation(relocatedLocation)) {
+      // The expired jump no longer owns cursor state or a queue slot.
     } else {
+      this.clearTimedOutPageKeyRelocations();
       this.invalidatePageKeyPosition();
     }
 
@@ -886,6 +905,8 @@ export class EpubNavigationTools {
       return;
     }
     this.destroyed = true;
+    this.releasePageKeyTeardown();
+    this.clearTimedOutPageKeyRelocations();
     this.invalidatePageKeyPosition();
     this.fontSizeStepper.destroy();
     this.keyBridge.destroy();
@@ -1019,7 +1040,7 @@ export class EpubNavigationTools {
     this.pageKeyQueue = new Promise<void>((resolve) => {
       releaseQueue = resolve;
     });
-    await previousJump;
+    await Promise.race([previousJump, this.pageKeyTeardown]);
     try {
       if (!this.destroyed) {
         await this.performPageKeyJump(key);
@@ -1080,7 +1101,18 @@ export class EpubNavigationTools {
     };
     this.pendingPageKeyNavigation = pendingNavigation;
     try {
-      await this.rendition.display(targetEntry.href);
+      const displayResult = await this.waitForPageKeyOperation(
+        this.rendition.display(targetEntry.href),
+      );
+      if (displayResult.status !== "completed") {
+        if (this.pendingPageKeyNavigation === pendingNavigation) {
+          if (displayResult.status === "deadline") {
+            this.rememberTimedOutPageKeyRelocation(pendingNavigation.location);
+          }
+          this.invalidatePageKeyPosition();
+        }
+        return;
+      }
     } catch (error) {
       if (this.pendingPageKeyNavigation === pendingNavigation) {
         this.invalidatePageKeyPosition();
@@ -1094,7 +1126,7 @@ export class EpubNavigationTools {
         // Hidden or collapsed views can resolve display() without ever
         // reporting a relocation.
         const fallbackId = window.setTimeout(() => {
-          this.commitPageKeyPositionAfterRelocationTimeout(pendingNavigation);
+          void this.commitPageKeyPositionAfterRelocationTimeout(pendingNavigation);
         }, PAGE_KEY_RELOCATION_WAIT_MS);
         try {
           await pendingNavigation.settled;
@@ -1103,6 +1135,76 @@ export class EpubNavigationTools {
         }
       }
     }
+  }
+
+  private async waitForPageKeyOperation<T>(
+    operation: Promise<T>,
+  ): Promise<PageKeyOperationResult<T>> {
+    let timeoutId = 0;
+    const deadline = new Promise<PageKeyOperationResult<T>>((resolve) => {
+      timeoutId = window.setTimeout(
+        () => resolve({ status: "deadline" }),
+        PAGE_KEY_DISPLAY_DEADLINE_MS,
+      );
+    });
+    try {
+      return await Promise.race([
+        this.completePageKeyOperation(operation),
+        deadline,
+        this.awaitPageKeyTeardown(),
+      ]);
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  private async completePageKeyOperation<T>(
+    operation: Promise<T>,
+  ): Promise<PageKeyOperationResult<T>> {
+    return { status: "completed", value: await operation };
+  }
+
+  private async awaitPageKeyTeardown(): Promise<{ status: "teardown" }> {
+    await this.pageKeyTeardown;
+    return { status: "teardown" };
+  }
+
+  private rememberTimedOutPageKeyRelocation(location: string): void {
+    if (location.length === 0) {
+      return;
+    }
+    const timeoutIds = this.timedOutPageKeyRelocations.get(location) ?? new Set();
+    const timeoutId = window.setTimeout(() => {
+      timeoutIds.delete(timeoutId);
+      if (timeoutIds.size === 0) {
+        this.timedOutPageKeyRelocations.delete(location);
+      }
+    }, PAGE_KEY_DISPLAY_DEADLINE_MS);
+    timeoutIds.add(timeoutId);
+    this.timedOutPageKeyRelocations.set(location, timeoutIds);
+  }
+
+  private consumeTimedOutPageKeyRelocation(location: string): boolean {
+    const timeoutIds = this.timedOutPageKeyRelocations.get(location);
+    const timeoutId = timeoutIds?.values().next().value;
+    if (timeoutIds === undefined || timeoutId === undefined) {
+      return false;
+    }
+    window.clearTimeout(timeoutId);
+    timeoutIds.delete(timeoutId);
+    if (timeoutIds.size === 0) {
+      this.timedOutPageKeyRelocations.delete(location);
+    }
+    return true;
+  }
+
+  private clearTimedOutPageKeyRelocations(): void {
+    for (const timeoutIds of this.timedOutPageKeyRelocations.values()) {
+      for (const timeoutId of timeoutIds) {
+        window.clearTimeout(timeoutId);
+      }
+    }
+    this.timedOutPageKeyRelocations.clear();
   }
 
   private commitPageKeyPosition(
@@ -1120,19 +1222,56 @@ export class EpubNavigationTools {
     pendingNavigation.settle();
   }
 
-  private commitPageKeyPositionAfterRelocationTimeout(
+  private async commitPageKeyPositionAfterRelocationTimeout(
     pendingNavigation: NonNullable<EpubNavigationTools["pendingPageKeyNavigation"]>,
-  ): void {
+  ): Promise<void> {
     if (
       this.pendingPageKeyNavigation !== pendingNavigation ||
       !pendingNavigation.displaySucceeded
     ) {
       return;
     }
+
+    try {
+      const currentLocation = await this.waitForPageKeyOperation(
+        Promise.resolve(this.rendition.currentLocation()),
+      );
+      if (this.pendingPageKeyNavigation !== pendingNavigation) {
+        return;
+      }
+      if (
+        currentLocation.status !== "completed" ||
+        !this.matchesPageKeyLocation(currentLocation.value, pendingNavigation.location)
+      ) {
+        this.invalidatePageKeyPosition();
+        return;
+      }
+    } catch {
+      if (this.pendingPageKeyNavigation === pendingNavigation) {
+        this.invalidatePageKeyPosition();
+      }
+      return;
+    }
+
     this.rememberExpectedLatePageKeyRelocation(pendingNavigation);
     this.pageKeyPosition = pendingNavigation.index;
     this.pendingPageKeyNavigation = null;
     pendingNavigation.settle();
+  }
+
+  private matchesPageKeyLocation(location: unknown, target: string): boolean {
+    if (
+      typeof location !== "object" ||
+      location === null ||
+      !("start" in location) ||
+      typeof location.start !== "object" ||
+      location.start === null ||
+      !("href" in location.start) ||
+      typeof location.start.href !== "string"
+    ) {
+      return false;
+    }
+    return this.navigationLocation(location.start.href) === target;
   }
 
   private rememberExpectedLatePageKeyRelocation(
