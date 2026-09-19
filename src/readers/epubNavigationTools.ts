@@ -232,7 +232,7 @@ export class EpubKeyBridge {
     private readonly pageKeyJump: (
       key: "PageUp" | "PageDown",
     ) => void | Promise<void>,
-    private readonly beforeForward: () => void = () => undefined,
+    private readonly beforeForward: () => void,
   ) {
     this.rendition.on("rendered", this.onRendered);
   }
@@ -865,9 +865,9 @@ export class EpubNavigationTools {
     private readonly book: EpubNavigationBook,
     private readonly rendition: Rendition,
     private readonly selectionTracker: EpubSelectionTracker,
-    private readonly flow?: EpubFlowControls,
-    private readonly actions?: EpubReaderActions,
-    activateView: () => void = () => undefined,
+    private readonly flow: EpubFlowControls | undefined,
+    private readonly actions: EpubReaderActions | undefined,
+    activateView: () => void,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
     this.fontSizeStepper = new EpubFontSizeStepper(viewerEl, bookPath, rendition);

@@ -147,6 +147,9 @@ async function buildViewer(
     book,
     rendition,
     new EpubSelectionTracker(),
+    undefined,
+    undefined,
+    vi.fn(),
   );
 
   await vi.waitFor(() => {

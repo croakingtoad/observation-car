@@ -68,6 +68,12 @@ function stylesheetKey(path: string): string {
   return `observation-car-book-${encodeURIComponent(path)}`;
 }
 
+function isUsableStylesheetValue(
+  value: string | null | undefined,
+): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
 export class EpubStyles {
   private destroyed = false;
   private readonly stylesheetHrefsBySection = new Map<
@@ -99,7 +105,7 @@ export class EpubStyles {
     const hrefs = new Map<number, string>();
     for (const [index, link] of stylesheetLinks(document).entries()) {
       const originalHref = link.getAttribute("href") ?? existingHrefs?.get(index);
-      if (originalHref === undefined) {
+      if (!isUsableStylesheetValue(originalHref)) {
         continue;
       }
       hrefs.set(index, originalHref);
@@ -121,12 +127,14 @@ export class EpubStyles {
 
     for (const link of stylesheetLinks(contents.document)) {
       const rawIndex = link.getAttribute(HREF_INDEX_ATTRIBUTE);
-      const index = rawIndex === null ? Number.NaN : Number(rawIndex);
+      const index = isUsableStylesheetValue(rawIndex)
+        ? Number(rawIndex)
+        : Number.NaN;
       const href =
         (Number.isInteger(index) && index >= 0
           ? sectionHrefs?.get(index)
           : undefined) ?? link.getAttribute("href");
-      if (href === null || href === undefined) {
+      if (!isUsableStylesheetValue(href)) {
         console.error(
           `Failed to inline EPUB stylesheet in section ${section.url}: missing original href for ${rawIndex ?? "untagged link"}`,
         );
