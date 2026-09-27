@@ -183,7 +183,7 @@ describe("EpubKeyBridge", () => {
   it("forwards an equivalent non-paging key event to the host document", () => {
     const { host, iframe } = documents();
     const rendition = new FakeRendition();
-    const bridge = new EpubKeyBridge(rendition, host, vi.fn());
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), vi.fn());
     rendition.render(iframe);
 
     const forwarded: KeyboardEvent[] = [];
@@ -314,7 +314,7 @@ describe("EpubKeyBridge", () => {
   ] as const)("consumes %s for reader paging", (key, method) => {
     const { host, iframe } = documents();
     const rendition = new FakeRendition();
-    const bridge = new EpubKeyBridge(rendition, host, vi.fn());
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), vi.fn());
     rendition.render(iframe);
     const hostHandler = vi.fn();
     host.addEventListener("keydown", hostHandler);
@@ -336,7 +336,7 @@ describe("EpubKeyBridge", () => {
   it("leaves the iframe copy default active exactly once", () => {
     const { host, iframe } = documents();
     const rendition = new FakeRendition();
-    const bridge = new EpubKeyBridge(rendition, host, vi.fn());
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), vi.fn());
     rendition.render(iframe);
     const hostHandler = vi.fn();
     host.addEventListener("keydown", hostHandler);
@@ -369,7 +369,7 @@ describe("EpubKeyBridge", () => {
   it("does not forward a key already handled by the EPUB document", () => {
     const { host, iframe } = documents();
     const rendition = new FakeRendition();
-    const bridge = new EpubKeyBridge(rendition, host, vi.fn());
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), vi.fn());
     const consumeInBook = (event: KeyboardEvent): void =>
       event.preventDefault();
     iframe.addEventListener("keydown", consumeInBook);
@@ -393,7 +393,7 @@ describe("EpubKeyBridge", () => {
   it("does not forward its own synthetic event if it returns to the iframe", () => {
     const { host, iframe } = documents();
     const rendition = new FakeRendition();
-    const bridge = new EpubKeyBridge(rendition, host, vi.fn());
+    const bridge = new EpubKeyBridge(rendition, host, vi.fn(), vi.fn());
     rendition.render(iframe);
     const forwarded: KeyboardEvent[] = [];
     host.addEventListener("keydown", (event) => forwarded.push(event));
@@ -417,7 +417,7 @@ describe("EpubKeyBridge", () => {
     const { host, iframe: oldDocument } = documents();
     const replacementDocument = childDocument(host);
     const oldRendition = new FakeRendition();
-    const oldBridge = new EpubKeyBridge(oldRendition, host, vi.fn());
+    const oldBridge = new EpubKeyBridge(oldRendition, host, vi.fn(), vi.fn());
     oldRendition.render(oldDocument);
     oldBridge.destroy();
 
@@ -425,6 +425,7 @@ describe("EpubKeyBridge", () => {
     const replacementBridge = new EpubKeyBridge(
       replacementRendition,
       host,
+      vi.fn(),
       vi.fn(),
     );
     replacementRendition.render(replacementDocument);
@@ -452,7 +453,7 @@ describe("EpubKeyBridge", () => {
 
   it("detaches its rendered handler only once across double destroy", () => {
     const rendition = makeRendition();
-    const bridge = new EpubKeyBridge(rendition, document, vi.fn());
+    const bridge = new EpubKeyBridge(rendition, document, vi.fn(), vi.fn());
     const renderedHandler = rendition.handlers.get("rendered")?.[0];
     if (renderedHandler === undefined) {
       throw new Error("test rendition has no rendered handler");
@@ -465,6 +466,61 @@ describe("EpubKeyBridge", () => {
       "rendered",
       renderedHandler,
     );
+  });
+});
+
+describe("EpubNavigationTools forwarded-key callback wiring", () => {
+  it("runs beforeForward for a chord forwarded from a rendered book frame", () => {
+    const hostFrame = document.createElement("iframe");
+    document.body.append(hostFrame);
+    const hostDocument = hostFrame.contentDocument;
+    if (hostDocument === null) {
+      throw new Error("test host frame has no document");
+    }
+    const viewerEl = hostDocument.createElement("div");
+    hostDocument.body.append(viewerEl);
+    const readerFrame = hostDocument.createElement("iframe");
+    hostDocument.body.append(readerFrame);
+    const bookDocument = readerFrame.contentDocument;
+    if (bookDocument === null) {
+      throw new Error("test book frame has no document");
+    }
+    const rendition = makeRendition();
+    const invocationOrder: string[] = [];
+    const beforeForward = vi.fn(() => invocationOrder.push("beforeForward"));
+    hostDocument.addEventListener("keydown", () => {
+      invocationOrder.push("forwarded");
+    });
+
+    const tools = new EpubNavigationTools(
+      viewerEl,
+      "library/book.epub",
+      makeBook() as unknown as Book,
+      rendition as unknown as Rendition,
+      new EpubSelectionTracker(),
+      undefined,
+      undefined,
+      beforeForward,
+    );
+    const renderedHandler = rendition.handlers.get("rendered")?.[0];
+    if (renderedHandler === undefined) {
+      throw new Error("test rendition has no rendered handler");
+    }
+    renderedHandler({}, {
+      contents: {},
+      document: bookDocument,
+      iframe: readerFrame,
+      window: readerFrame.contentWindow,
+    });
+    bookDocument.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "j",
+      code: "KeyJ",
+      bubbles: true,
+      cancelable: true,
+    }));
+
+    expect(invocationOrder).toEqual(["beforeForward", "forwarded"]);
+    tools.destroy();
   });
 });
 
@@ -517,6 +573,7 @@ function makeTools(
     new EpubSelectionTracker(),
     overrides.flow,
     onNewNote === undefined ? undefined : { onNewNote },
+    vi.fn(),
   );
   return {
     viewerEl,

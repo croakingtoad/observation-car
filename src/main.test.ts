@@ -994,6 +994,7 @@ describe("plugin wiring (substituted obsidian module)", () => {
         onNewNote: () =>
           plugin.newNoteHereFromReader(readerLeaf as unknown as WorkspaceLeaf),
       },
+      vi.fn(),
     );
     const bridge = vi.spyOn(plugin, "newNoteHereFromReader");
 

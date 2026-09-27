@@ -42,6 +42,11 @@ import { TAP_SLOP_PX, decidePagingAction } from "./pagingGestures";
 const EPUBCFI_WRAPPER = "epubcfi(";
 const LOCATION_CHARACTERS_PER_BREAK = 1_000;
 const COPY_FEEDBACK_DURATION_MS = 1_000;
+// Provisional, unmeasured device budget for epub.js to emit `relocated`
+// after display() resolves. Replace it with the slowest observed p99 on the
+// release iPad and Pixel Fold before the mobile milestone ships.
+export const PAGE_KEY_RELOCATION_WAIT_MS = 100;
+export const PAGE_KEY_DISPLAY_DEADLINE_MS = 5_000;
 const UNTITLED_BOOK_TITLE = "Untitled";
 
 type EpubMetadata = Omit<PackagingMetadataObject, "title"> & {
@@ -84,6 +89,19 @@ interface EpubRenderedView {
   iframe?: unknown;
   window: Window;
 }
+
+interface PendingPageKeyNavigation {
+  index: number;
+  location: string;
+  displaySucceeded: boolean;
+  matchingRelocation: boolean;
+  settled: Promise<void>;
+  settle: () => void;
+}
+
+type PageKeyOperationResult<T> =
+  | { status: "completed"; value: T }
+  | { status: "deadline" | "teardown" };
 
 type EpubFrameElement = Element & Pick<HTMLIFrameElement, "contentDocument">;
 type RenderedContents = EpubRenderedView;
@@ -214,7 +232,7 @@ export class EpubKeyBridge {
     private readonly pageKeyJump: (
       key: "PageUp" | "PageDown",
     ) => void | Promise<void>,
-    private readonly beforeForward: () => void = () => undefined,
+    private readonly beforeForward: () => void,
   ) {
     this.rendition.on("rendered", this.onRendered);
   }
@@ -673,6 +691,18 @@ export class EpubNavigationTools {
   private readonly copyPanel: HTMLDivElement;
   private locations: Promise<EpubLocations> | null = null;
   private currentLocation: Location | null = null;
+  private pageKeyPosition: number | null = null;
+  private pendingPageKeyNavigation: PendingPageKeyNavigation | null = null;
+  private readonly expectedLatePageKeyRelocations = new Map<
+    PendingPageKeyNavigation,
+    number
+  >();
+  private readonly timedOutPageKeyRelocations = new Map<string, Set<number>>();
+  private pageKeyQueue: Promise<void> = Promise.resolve();
+  private releasePageKeyTeardown = (): void => undefined;
+  private readonly pageKeyTeardown = new Promise<void>((resolve) => {
+    this.releasePageKeyTeardown = resolve;
+  });
   private needsCorrection = false;
   private destroyed = false;
   private readonly keyBridge: EpubKeyBridge;
@@ -691,6 +721,31 @@ export class EpubNavigationTools {
   private readonly pagingListeners = new Set<PagingListeners>();
 
   private readonly onRelocated = (loc: Location): void => {
+    const relocatedLocation = this.navigationLocation(loc.start.href);
+    const pendingNavigation = this.pendingPageKeyNavigation;
+    const matchesPendingNavigation =
+      pendingNavigation !== null &&
+      relocatedLocation.length > 0 &&
+      relocatedLocation === pendingNavigation.location;
+    if (matchesPendingNavigation && pendingNavigation !== null) {
+      if (pendingNavigation.displaySucceeded) {
+        this.consumeTimedOutPageKeyRelocation(relocatedLocation);
+        pendingNavigation.matchingRelocation = true;
+        this.commitPageKeyPosition(pendingNavigation);
+      } else if (!this.consumeTimedOutPageKeyRelocation(relocatedLocation)) {
+        pendingNavigation.matchingRelocation = true;
+        this.commitPageKeyPosition(pendingNavigation);
+      }
+    } else if (this.consumeExpectedLatePageKeyRelocation(relocatedLocation)) {
+      // This originating navigation already committed its cursor and
+      // released the queue after timing out.
+    } else if (this.consumeTimedOutPageKeyRelocation(relocatedLocation)) {
+      // The expired jump no longer owns cursor state or a queue slot.
+    } else {
+      this.clearTimedOutPageKeyRelocations();
+      this.invalidatePageKeyPosition();
+    }
+
     // The selection's section may no longer be on screen (page
     // turn); a same-section relocation (scroll) keeps it.
     this.selectionTracker.clearUnlessInLocation(loc.start.cfi);
@@ -810,9 +865,9 @@ export class EpubNavigationTools {
     private readonly book: EpubNavigationBook,
     private readonly rendition: Rendition,
     private readonly selectionTracker: EpubSelectionTracker,
-    private readonly flow?: EpubFlowControls,
-    private readonly actions?: EpubReaderActions,
-    activateView: () => void = () => undefined,
+    private readonly flow: EpubFlowControls | undefined,
+    private readonly actions: EpubReaderActions | undefined,
+    activateView: () => void,
   ) {
     this.copyPanel = this.createCopyPanel(viewerEl);
     this.fontSizeStepper = new EpubFontSizeStepper(viewerEl, bookPath, rendition);
@@ -850,6 +905,9 @@ export class EpubNavigationTools {
       return;
     }
     this.destroyed = true;
+    this.releasePageKeyTeardown();
+    this.clearTimedOutPageKeyRelocations();
+    this.invalidatePageKeyPosition();
     this.fontSizeStepper.destroy();
     this.keyBridge.destroy();
     for (const { target, type, listener } of this.hostKeyListeners) {
@@ -875,6 +933,15 @@ export class EpubNavigationTools {
       pagingListener.remove();
     }
     this.pagingListeners.clear();
+  }
+
+  /** Forget the flattened TOC entry last reached by a Page key. */
+  invalidatePageKeyPosition(): void {
+    const pendingNavigation = this.pendingPageKeyNavigation;
+    this.pageKeyPosition = null;
+    this.pendingPageKeyNavigation = null;
+    this.clearExpectedLatePageKeyRelocations();
+    pendingNavigation?.settle();
   }
 
   private addDocumentListener(
@@ -966,34 +1033,304 @@ export class EpubNavigationTools {
     viewerEl.appendChild(button);
   }
 
-  /** Chapter-level jump: PageUp = next chapter, PageDown = previous. */
-  private async pageKeyJump(key: string): Promise<void> {
+  /** Flattened TOC jump: PageUp = next entry, PageDown = previous. */
+  private async pageKeyJump(key: "PageUp" | "PageDown"): Promise<void> {
+    const previousJump = this.pageKeyQueue;
+    let releaseQueue = (): void => undefined;
+    this.pageKeyQueue = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    await Promise.race([previousJump, this.pageKeyTeardown]);
+    try {
+      if (!this.destroyed) {
+        await this.performPageKeyJump(key);
+      }
+    } finally {
+      releaseQueue();
+    }
+  }
+
+  private async performPageKeyJump(key: "PageUp" | "PageDown"): Promise<void> {
     const toc = await this.book.loaded.navigation;
     const currentHref = this.rendition.location?.start?.href;
     const currentLocation = this.navigationLocation(currentHref);
     if (currentLocation.length === 0) {
       return;
     }
-    const tocItems = flattenToc(toc.toc).filter((item) =>
-      isUsableTocHref(item.href),
-    );
-    const idx = tocItems.findIndex((item) => this.navigationLocation(item.href) === currentLocation);
-    let targetIdx = -1;
-    if (key === "PageUp" && idx !== -1 && idx < tocItems.length - 1) {
-      targetIdx = idx + 1;
-    } else if (key === "PageDown" && idx > 0) {
-      targetIdx = idx - 1;
+    const tocItems = flattenToc(toc.toc);
+    let currentIndex = this.pageKeyPosition;
+    const rememberedEntry = currentIndex === null ? undefined : tocItems[currentIndex];
+    if (
+      rememberedEntry === undefined ||
+      this.navigationLocation(rememberedEntry.href) !== currentLocation
+    ) {
+      this.invalidatePageKeyPosition();
+      currentIndex = tocItems.findIndex(
+        (item) => this.navigationLocation(item.href) === currentLocation,
+      );
     }
-    if (targetIdx !== -1) {
-      const targetEntry = tocItems[targetIdx];
-      if (
-        targetEntry === undefined ||
-        !isUsableTocHref(targetEntry.href)
-      ) {
+
+    if (currentIndex === null || currentIndex === -1) {
+      return;
+    }
+    const targetIndex = this.findPageKeyTargetIndex(
+      tocItems,
+      currentIndex,
+      key === "PageUp" ? 1 : -1,
+    );
+    const targetEntry = tocItems[targetIndex];
+    if (
+      targetIndex === -1 ||
+      targetEntry === undefined ||
+      !isUsableTocHref(targetEntry.href)
+    ) {
+      return;
+    }
+
+    let settleNavigation = (): void => undefined;
+    const settled = new Promise<void>((resolve) => {
+      settleNavigation = resolve;
+    });
+    const pendingNavigation = {
+      index: targetIndex,
+      location: this.navigationLocation(targetEntry.href),
+      displaySucceeded: false,
+      matchingRelocation: false,
+      settled,
+      settle: settleNavigation,
+    };
+    this.pendingPageKeyNavigation = pendingNavigation;
+    try {
+      const displayResult = await this.waitForPageKeyOperation(
+        this.rendition.display(targetEntry.href),
+      );
+      if (displayResult.status !== "completed") {
+        if (this.pendingPageKeyNavigation === pendingNavigation) {
+          if (displayResult.status === "deadline") {
+            this.rememberTimedOutPageKeyRelocation(pendingNavigation.location);
+          }
+          this.invalidatePageKeyPosition();
+        }
         return;
       }
-      await this.rendition.display(targetEntry.href);
+    } catch (error) {
+      if (this.pendingPageKeyNavigation === pendingNavigation) {
+        this.invalidatePageKeyPosition();
+      }
+      throw error;
     }
+    if (this.pendingPageKeyNavigation === pendingNavigation) {
+      pendingNavigation.displaySucceeded = true;
+      this.commitPageKeyPosition(pendingNavigation);
+      if (this.pendingPageKeyNavigation === pendingNavigation) {
+        // Hidden or collapsed views can resolve display() without ever
+        // reporting a relocation.
+        const fallbackId = window.setTimeout(() => {
+          void this.commitPageKeyPositionAfterRelocationTimeout(pendingNavigation);
+        }, PAGE_KEY_RELOCATION_WAIT_MS);
+        try {
+          await pendingNavigation.settled;
+        } finally {
+          window.clearTimeout(fallbackId);
+        }
+      }
+    }
+  }
+
+  private async waitForPageKeyOperation<T>(
+    operation: Promise<T>,
+  ): Promise<PageKeyOperationResult<T>> {
+    let timeoutId = 0;
+    const deadline = new Promise<PageKeyOperationResult<T>>((resolve) => {
+      timeoutId = window.setTimeout(
+        () => resolve({ status: "deadline" }),
+        PAGE_KEY_DISPLAY_DEADLINE_MS,
+      );
+    });
+    try {
+      return await Promise.race([
+        this.completePageKeyOperation(operation),
+        deadline,
+        this.awaitPageKeyTeardown(),
+      ]);
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  private async completePageKeyOperation<T>(
+    operation: Promise<T>,
+  ): Promise<PageKeyOperationResult<T>> {
+    return { status: "completed", value: await operation };
+  }
+
+  private async awaitPageKeyTeardown(): Promise<{ status: "teardown" }> {
+    await this.pageKeyTeardown;
+    return { status: "teardown" };
+  }
+
+  private rememberTimedOutPageKeyRelocation(location: string): void {
+    if (location.length === 0) {
+      return;
+    }
+    const timeoutIds = this.timedOutPageKeyRelocations.get(location) ?? new Set();
+    const timeoutId = window.setTimeout(() => {
+      timeoutIds.delete(timeoutId);
+      if (timeoutIds.size === 0) {
+        this.timedOutPageKeyRelocations.delete(location);
+      }
+    }, PAGE_KEY_DISPLAY_DEADLINE_MS);
+    timeoutIds.add(timeoutId);
+    this.timedOutPageKeyRelocations.set(location, timeoutIds);
+  }
+
+  private consumeTimedOutPageKeyRelocation(location: string): boolean {
+    const timeoutIds = this.timedOutPageKeyRelocations.get(location);
+    const timeoutId = timeoutIds?.values().next().value;
+    if (timeoutIds === undefined || timeoutId === undefined) {
+      return false;
+    }
+    window.clearTimeout(timeoutId);
+    timeoutIds.delete(timeoutId);
+    if (timeoutIds.size === 0) {
+      this.timedOutPageKeyRelocations.delete(location);
+    }
+    return true;
+  }
+
+  private clearTimedOutPageKeyRelocations(): void {
+    for (const timeoutIds of this.timedOutPageKeyRelocations.values()) {
+      for (const timeoutId of timeoutIds) {
+        window.clearTimeout(timeoutId);
+      }
+    }
+    this.timedOutPageKeyRelocations.clear();
+  }
+
+  private commitPageKeyPosition(
+    pendingNavigation: NonNullable<EpubNavigationTools["pendingPageKeyNavigation"]>,
+  ): void {
+    if (
+      this.pendingPageKeyNavigation !== pendingNavigation ||
+      !pendingNavigation.displaySucceeded ||
+      !pendingNavigation.matchingRelocation
+    ) {
+      return;
+    }
+    this.pageKeyPosition = pendingNavigation.index;
+    this.pendingPageKeyNavigation = null;
+    pendingNavigation.settle();
+  }
+
+  private async commitPageKeyPositionAfterRelocationTimeout(
+    pendingNavigation: NonNullable<EpubNavigationTools["pendingPageKeyNavigation"]>,
+  ): Promise<void> {
+    if (
+      this.pendingPageKeyNavigation !== pendingNavigation ||
+      !pendingNavigation.displaySucceeded
+    ) {
+      return;
+    }
+
+    try {
+      const currentLocation = await this.waitForPageKeyOperation(
+        Promise.resolve(this.rendition.currentLocation()),
+      );
+      if (this.pendingPageKeyNavigation !== pendingNavigation) {
+        return;
+      }
+      if (
+        currentLocation.status !== "completed" ||
+        !this.matchesPageKeyLocation(currentLocation.value, pendingNavigation.location)
+      ) {
+        this.invalidatePageKeyPosition();
+        return;
+      }
+    } catch {
+      if (this.pendingPageKeyNavigation === pendingNavigation) {
+        this.invalidatePageKeyPosition();
+      }
+      return;
+    }
+
+    this.rememberExpectedLatePageKeyRelocation(pendingNavigation);
+    this.pageKeyPosition = pendingNavigation.index;
+    this.pendingPageKeyNavigation = null;
+    pendingNavigation.settle();
+  }
+
+  private matchesPageKeyLocation(location: unknown, target: string): boolean {
+    if (
+      typeof location !== "object" ||
+      location === null ||
+      !("start" in location) ||
+      typeof location.start !== "object" ||
+      location.start === null ||
+      !("href" in location.start) ||
+      typeof location.start.href !== "string"
+    ) {
+      return false;
+    }
+    return this.navigationLocation(location.start.href) === target;
+  }
+
+  private rememberExpectedLatePageKeyRelocation(
+    pendingNavigation: PendingPageKeyNavigation,
+  ): void {
+    const expiryId = window.setTimeout(() => {
+      if (
+        this.expectedLatePageKeyRelocations.get(pendingNavigation) === expiryId
+      ) {
+        this.expectedLatePageKeyRelocations.delete(pendingNavigation);
+      }
+    }, PAGE_KEY_RELOCATION_WAIT_MS);
+    this.expectedLatePageKeyRelocations.set(pendingNavigation, expiryId);
+  }
+
+  private consumeExpectedLatePageKeyRelocation(location: string): boolean {
+    for (const [pendingNavigation, expiryId] of
+      this.expectedLatePageKeyRelocations) {
+      if (pendingNavigation.location === location) {
+        window.clearTimeout(expiryId);
+        this.expectedLatePageKeyRelocations.delete(pendingNavigation);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private clearExpectedLatePageKeyRelocations(): void {
+    for (const expiryId of this.expectedLatePageKeyRelocations.values()) {
+      window.clearTimeout(expiryId);
+    }
+    this.expectedLatePageKeyRelocations.clear();
+  }
+
+  private findPageKeyTargetIndex(
+    tocItems: readonly TocEntry[],
+    currentIndex: number,
+    step: 1 | -1,
+  ): number {
+    const currentEntry = tocItems[currentIndex];
+    if (currentEntry === undefined) {
+      return -1;
+    }
+    for (
+      let candidateIndex = currentIndex + step;
+      candidateIndex >= 0 && candidateIndex < tocItems.length;
+      candidateIndex += step
+    ) {
+      const candidate = tocItems[candidateIndex];
+      if (candidate !== undefined && this.isPageKeyStop(candidate, currentEntry)) {
+        return candidateIndex;
+      }
+    }
+    return -1;
+  }
+
+  /** Product seam: reading A visits every usable flattened entry. */
+  private isPageKeyStop(candidate: TocEntry, _current: TocEntry): boolean {
+    return isUsableTocHref(candidate.href);
   }
 
   private navigationLocation(href: string | null | undefined): string {
@@ -1188,6 +1525,7 @@ export class EpubNavigationTools {
       if (!isUsableTocHref(entry.href)) {
         return;
       }
+      this.invalidatePageKeyPosition();
       await this.rendition.display(entry.href);
       this.toggleTocVisibility(false);
     } catch (error) {

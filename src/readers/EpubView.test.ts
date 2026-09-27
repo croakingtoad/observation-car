@@ -15,6 +15,7 @@ import {
   EPUB_DISPLAY_TIMEOUT_MS,
   type EpubLocationEvent,
   type EpubViewHost,
+  usableCfi,
 } from "./EpubView";
 
 /**
@@ -266,6 +267,14 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("usableCfi", () => {
+  it("returns only non-empty string CFIs", () => {
+    expect(usableCfi("")).toBeNull();
+    expect(Reflect.apply(usableCfi, undefined, [42])).toBeNull();
+    expect(usableCfi("epubcfi(/6/4!/4/2)")).toBe("epubcfi(/6/4!/4/2)");
+  });
 });
 
 describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
@@ -1000,7 +1009,6 @@ describe("EpubView re-entrancy (Tier 2 finding 1)", () => {
     await view.onClose();
     vi.useRealTimers();
   });
-
 });
 
 describe("EpubView forwarded-keystroke leaf attribution", () => {

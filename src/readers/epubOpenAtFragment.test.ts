@@ -246,6 +246,20 @@ describe("EpubView.openAtFragment", () => {
     expect(rendition.location).toBe(SECOND_LOCATION);
   });
 
+  it("invalidates Page-key position before routed link navigation", async () => {
+    const { view, rendition } = harness();
+    const invalidatePageKeyPosition = vi.fn();
+    const internals = view as unknown as {
+      navigationTools: { invalidatePageKeyPosition(): void } | null;
+    };
+    internals.navigationTools = { invalidatePageKeyPosition };
+    rendition.initialRelocationQueue = [SECOND_LOCATION];
+
+    await view.openAtFragment(`#${CHAPTER_TWO_CFI}`);
+
+    expect(invalidatePageKeyPosition).toHaveBeenCalledOnce();
+  });
+
   it("accepts a stabilizing current location exactly at the CFI target", async () => {
     vi.useFakeTimers();
     const { view, rendition } = harness();
